@@ -1,0 +1,83 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  /* Serif de lecture (vibe Anthropic/Claude) pour le contenu rendu. */
+  --font-serif: "Source Serif 4", Charter, "Iowan Old Style", Georgia,
+    "Times New Roman", serif;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-sans);
+}
+
+.font-sans {
+  font-family: var(--font-sans);
+}
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Mode Automatique (niveau 0) : on n'affiche que le bloc Ansible */
+.doc-body[data-level="0"] > :not(.automatic-block) {
+  display: none;
+}
+.doc-body:not([data-level="0"]) .automatic-block {
+  display: none;
+}
+
+/* ── Typo de lecture : le contenu rendu en serif (vibe Claude) ──
+   On garde le sans-serif pour toute l'UI (hors .doc-body) et le
+   monospace pour le code et les pastilles de variables. */
+.doc-body {
+  font-family: var(--font-serif);
+}
+.doc-body h1,
+.doc-body h2,
+.doc-body h3 {
+  font-family: var(--font-serif);
+  letter-spacing: -0.01em;
+}
+.doc-body p,
+.doc-body li {
+  font-size: 16px;
+  line-height: 1.7;
+}
+.doc-body code,
+.doc-body pre,
+.doc-body .font-mono,
+.doc-body [class*="font-mono"] {
+  font-family: var(--font-mono);
+}
+
+/* Page sans mode automatique : message au lieu d'un écran vide au niveau 0. */
+.doc-body[data-level="0"]:not(:has(.automatic-block)) {
+  position: relative;
+}
+.doc-body[data-level="0"]:not(:has(.automatic-block))::before {
+  content: "Ce tuto n'a pas de mode automatique — choisis Express, Détaillé ou Exhaustif en haut à droite.";
+  display: block;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: #64748b;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+  padding: 16px 18px;
+}
