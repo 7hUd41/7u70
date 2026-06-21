@@ -1,0 +1,153 @@
+---
+author: Thomas
+date:
+  created: 2025-11-13
+  edited: 2026-01-30
+slug: vps-phase-1
+difficulty: intermédiaire
+tags: [vps, ovh, baseline, sécurité]
+vars: [USERNAME]
+---
+
+# 🔒 PHASE 1 — Baseline System Setup
+
+Install a new Virtual Private Server and configure it to address a classic use case *(to define)* and prevent classic known threats. This example shows an in-depth configuration and security model. We use OVH as the VPS provider — some early steps can change, but the Linux configuration should be the same for all UNIX-based distros.
+
+<Automatic>
+
+```bash
+# Baseline OVH/Debian — update, tooling, time. Run as the default user.
+sudo apt update && sudo apt full-upgrade -y
+sudo apt install -y vim curl wget htop git ufw ca-certificates gnupg lsb-release net-tools dnsutils software-properties-common tar unzip jq tcpdump python3 python3-venv
+sudo apt install -y wireguard nftables caddy
+sudo timedatectl set-timezone Europe/Paris
+sudo timedatectl set-ntp true
+```
+
+</Automatic>
+
+## 1. Goal & Threat Model
+
+This phase ensures the VPS is:
+
+<Checklist>
+  <Task>equipped with minimal safe tooling</Task>
+  <Task>using correct time, locale, and secure defaults</Task>
+  <Task>fully patched against known vulnerabilities</Task>
+  <Task>verified for OVH-specific quirks (network, kernel)</Task>
+</Checklist>
+
+<Detailed>Threat model addressed: outdated packages, broken time sync (critical for TLS), kernel vulnerabilities, misconfigured hostname/network, unexpected services running, and weak entropy.</Detailed>
+
+## 2. Plan
+
+<Checklist>
+  <Task>Update and upgrade system</Task>
+  <Task>Install essential admin/security tools</Task>
+  <Task>Verify OS, kernel, virtualization, OVH network config</Task>
+  <Task>Set timezone, locale, NTP sync</Task>
+  <Task>Disable unnecessary services</Task>
+  <Task>Prepare the machine for user creation and SSH hardening (Phase 2)</Task>
+</Checklist>
+
+## 3. Commands
+
+<Note>Run these as the current user `debian` (the default OVH user).</Note>
+
+### 3.1 Update package index + upgrade
+
+```bash
+sudo apt update
+sudo apt full-upgrade -y
+```
+
+### 3.2 Install foundational admin tools
+
+<Detailed>Minimal and safe — no bloat.</Detailed>
+
+```bash
+sudo apt install -y \
+    vim curl wget htop git ufw \
+    ca-certificates gnupg lsb-release \
+    net-tools dnsutils software-properties-common \
+    tar unzip jq tcpdump \
+    python3 python3-venv
+```
+
+### 3.3 Install tools we will need later
+
+```bash
+sudo apt install -y \
+    wireguard \
+    nftables \
+    caddy
+```
+
+<Note>No services are exposed yet — the firewall isn't configured, but Caddy and WireGuard won't break anything at this stage. On stock Debian, `caddy` may need its official repo first (see the Caddy tutorial).</Note>
+
+### 3.4 Set timezone
+
+<Detailed>Pick the zone you prefer, or Europe/Paris as a default for a French-based user.</Detailed>
+
+```bash
+sudo timedatectl set-timezone Europe/Paris
+```
+
+<Check id="p1-timezone" cmd="timedatectl" expect="Time zone: Europe/Paris" />
+
+### 3.5 Ensure NTP sync is active
+
+<Detailed>Time must be perfectly accurate for VPN + TLS.</Detailed>
+
+```bash
+sudo timedatectl set-ntp true
+```
+
+<Check id="p1-ntp" cmd="timedatectl" expect={"System clock synchronized: yes\nNTP service: active"} />
+
+### 3.6 Verify virtualization & kernel
+
+<Detailed>Good for audit. Expected: KVM (OVH Cloud virtualization).</Detailed>
+
+```bash
+systemd-detect-virt
+uname -a
+```
+
+<Check id="p1-virt" cmd="systemd-detect-virt" expect="kvm" />
+
+### 3.7 List running services (baseline snapshot)
+
+<Detailed>Important to capture before disabling anything in later phases.</Detailed>
+
+```bash
+systemctl --type=service --state=running
+```
+
+### 3.8 Check for unexpected listening ports
+
+<Detailed>We want a clean baseline — only SSH should be listening.</Detailed>
+
+```bash
+sudo ss -tulpen
+```
+
+<Note>Only SSH (port 22) should appear — nothing else, especially no web or mail daemon.</Note>
+
+## 4. Verification Steps
+
+<Check id="p1-updated" cmd="dpkg -l | grep '^ii'" expect="(list of installed packages, no leftover rc state)" />
+
+<Check id="p1-clock" cmd="timedatectl | grep -E 'synchronized|NTP service'" expect={"System clock synchronized: yes\nNTP service: active"} />
+
+<Check id="p1-only-ssh" cmd="sudo ss -tulpen" expect={"tcp  LISTEN 0 128 0.0.0.0:22\ntcp6 LISTEN 0 128 [::]:22"} />
+
+## 5. Caution & Rollback
+
+<Warn>If `apt full-upgrade` fails, run `sudo dpkg --configure -a` then retry. If an unexpected daemon is listening, don't stop anything yet — note what you see and assess first. No dangerous operation has been done; everything is revertible.</Warn>
+
+## ✅ Next: Phase 2 — Users & SSH Hardening
+
+<Full>Phase 2 creates the admin user, installs your SSH key, and locks down SSH (password auth off, root login off), then starts preparing WireGuard-only access.</Full>
+
+Pick your admin username in the config panel on the left — <V name="USERNAME" /> — then move on to Phase 2.

@@ -1,0 +1,113 @@
+---
+author: Thomas
+date:
+  created: 2025-12-10
+  edited: 2026-01-20
+slug: wireguard
+difficulty: avancé
+tags: [wireguard, vpn, réseau]
+vars: [SERVER_IP]
+---
+
+# Monter un VPN WireGuard
+
+WireGuard est le VPN moderne : un tunnel chiffré rapide, une config minuscule. On monte le serveur, on déclare un pair client, on ouvre le port. Tes valeurs à gauche.
+
+<Diagram name="wireguard" />
+
+<Automatic>
+
+```bash
+# Installe WireGuard, génère les clés serveur et active le forwarding.
+sudo apt install -y wireguard
+wg genkey | sudo tee /etc/wireguard/private.key | wg pubkey | sudo tee /etc/wireguard/public.key
+echo 'net.ipv4.ip_forward=1' | sudo tee /etc/sysctl.d/99-wireguard.conf
+sudo sysctl -p /etc/sysctl.d/99-wireguard.conf
+sudo ufw allow 51820/udp
+```
+
+</Automatic>
+
+## 00 — Le plan
+
+<Detailed>Le serveur reçoit une adresse interne (10.8.0.1), écoute en UDP sur 51820, et chaque client est un « pair » avec sa propre adresse (10.8.0.2, .3, …).</Detailed>
+
+<Full>WireGuard ne fait pas de gestion d'utilisateurs : chaque appareil possède une paire de clés, et serveur et client se déclarent mutuellement leur clé publique. C'est ce qui rend la config si courte.</Full>
+
+## 01 — Installer WireGuard
+
+```bash
+sudo apt install -y wireguard
+```
+
+<Check id="wg-installed" cmd="wg --version" expect="wireguard-tools v1." />
+
+## 02 — Générer les clés du serveur
+
+<Detailed>On crée la clé privée et la clé publique du serveur, lisibles par root uniquement.</Detailed>
+
+```bash
+wg genkey | sudo tee /etc/wireguard/private.key | wg pubkey | sudo tee /etc/wireguard/public.key
+```
+
+```bash
+sudo chmod 600 /etc/wireguard/private.key
+```
+
+<Check id="wg-keys" cmd="sudo cat /etc/wireguard/public.key" expect="(une chaîne base64 de 44 caractères)" />
+
+## 03 — Configurer l'interface
+
+<Detailed>On décrit l'interface `wg0` dans `/etc/wireguard/wg0.conf`. Colle la clé privée du serveur et la clé publique de ton client.</Detailed>
+
+```ini
+[Interface]
+Address = 10.8.0.1/24
+ListenPort = 51820
+PrivateKey = CLE_PRIVEE_SERVEUR
+
+[Peer]
+PublicKey = CLE_PUBLIQUE_CLIENT
+AllowedIPs = 10.8.0.2/32
+```
+
+## 04 — Routage et pare-feu
+
+<Detailed>On active le routage IP et on ouvre le port WireGuard.</Detailed>
+
+```bash
+echo 'net.ipv4.ip_forward=1' | sudo tee /etc/sysctl.d/99-wireguard.conf
+sudo sysctl -p /etc/sysctl.d/99-wireguard.conf
+```
+
+```bash
+sudo ufw allow 51820/udp
+```
+
+<Check id="wg-forward" cmd="sysctl net.ipv4.ip_forward" expect="net.ipv4.ip_forward = 1" />
+
+## 05 — Démarrer le tunnel
+
+```bash
+sudo systemctl enable --now wg-quick@wg0
+```
+
+<Check id="wg-up" cmd="sudo wg show" expect="interface: wg0" />
+
+## 06 — Côté client
+
+<Full>Sur le client, installe WireGuard, génère sa propre paire de clés, et crée un fichier de conf qui pointe vers `${SERVER_IP}:51820`. Déclare la clé publique du client dans le bloc `[Peer]` du serveur (étape 03), et la clé publique du serveur dans le `[Peer]` du client.</Full>
+
+```ini
+[Interface]
+Address = 10.8.0.2/24
+PrivateKey = CLE_PRIVEE_CLIENT
+
+[Peer]
+PublicKey = CLE_PUBLIQUE_SERVEUR
+Endpoint = ${SERVER_IP}:51820
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25
+```
+
+<Note>`AllowedIPs = 0.0.0.0/0` fait passer tout le trafic du client par le VPN. Limite-le à `10.8.0.0/24` si tu veux seulement joindre le réseau interne.</Note>

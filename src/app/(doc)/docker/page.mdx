@@ -1,0 +1,118 @@
+---
+author: Thomas
+date:
+  created: 2025-12-05
+  edited: 2026-02-01
+slug: docker
+difficulty: débutant
+tags: [docker, compose, conteneurs]
+vars: [USERNAME]
+---
+
+# Installer Docker et Docker Compose
+
+La méthode officielle : le dépôt apt de Docker, qui te donne la dernière version stable du moteur **et** du plugin Compose v2 (`docker compose`, avec une espace). Choisis ta distribution à gauche — les commandes s'adaptent.
+
+<Diagram name="docker" />
+
+<Automatic>
+
+```bash
+# Dépôt officiel + moteur + Compose v2, puis ajout de ton utilisateur au groupe docker.
+sudo apt-get update && sudo apt-get install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update && sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo usermod -aG docker ${USERNAME}
+```
+
+</Automatic>
+
+## 00 — Pourquoi le dépôt officiel
+
+<Detailed>Les paquets `docker.io` des distributions sont souvent en retard. Le dépôt de Docker fournit le moteur récent et le plugin Compose v2 intégré.</Detailed>
+
+<Full>Compose v1 (le binaire `docker-compose` avec tiret) est mort. La v2 est un plugin de la CLI Docker qu'on appelle avec `docker compose` (avec une espace). C'est ce que tu veux aujourd'hui.</Full>
+
+## 01 — Préparer le dépôt apt
+
+<Detailed>On installe les prérequis puis on ajoute la clé GPG de Docker.</Detailed>
+
+```bash
+sudo apt-get update && sudo apt-get install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+```
+
+<When is="OS" equals="ubuntu">
+
+```bash
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+```
+
+</When>
+
+<When is="OS" equals="debian">
+
+```bash
+sudo curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+```
+
+</When>
+
+## 02 — Installer le moteur et Compose
+
+```bash
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+```
+
+<Check id="docker-version" cmd="docker --version" expect="Docker version 27." />
+
+<Check id="compose-version" cmd="docker compose version" expect="Docker Compose version v2." />
+
+## 03 — Utiliser Docker sans sudo
+
+<Detailed>On ajoute ton utilisateur au groupe `docker` pour ne pas taper `sudo` à chaque commande.</Detailed>
+
+```bash
+sudo usermod -aG docker ${USERNAME}
+```
+
+<Warn>Déconnecte-toi puis reconnecte-toi (ou `newgrp docker`) pour que le nouveau groupe prenne effet.</Warn>
+
+<Check id="docker-group" cmd="groups ${USERNAME}" expect="${USERNAME} : ${USERNAME} sudo docker" />
+
+## 04 — Premier test
+
+```bash
+docker run --rm hello-world
+```
+
+<Check id="docker-hello" cmd="docker run --rm hello-world" expect="Hello from Docker!" />
+
+## 05 — Un service avec Compose
+
+<Detailed>Crée un fichier `compose.yml` et lance ton premier service détaché.</Detailed>
+
+```yaml
+services:
+  web:
+    image: nginx:latest
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+```
+
+```bash
+docker compose up -d
+```
+
+<Check id="compose-up" cmd="docker compose ps" expect="web   running" />
+
+<Full>Ton Nginx répond maintenant sur le port 8080. Combine-le avec le tuto Caddy pour l'exposer en HTTPS sur ton domaine.</Full>
