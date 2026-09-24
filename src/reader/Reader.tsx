@@ -7,7 +7,7 @@ import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import type { Locale, TutoContract } from "@/engine";
-import { ContextPanel } from "./ContextPanel";
+import { StackPanel, ValuesPanel } from "./ContextPanel";
 import { Header } from "./Header";
 import { Outline } from "./Outline";
 import { ReaderProvider, useReader } from "./store";
@@ -116,10 +116,12 @@ function Frame(props: ReaderProps) {
             </nav>
           )}
         </main>
-        <aside className="order-first lg:order-none">
+        <aside>
+          {/* Reading order: what is the path → which path is mine → my values. */}
           <div className="space-y-8 lg:sticky lg:top-16 lg:max-h-[calc(100vh-5rem)] lg:overflow-y-auto lg:pr-1">
-            <ContextPanel />
             <Outline />
+            <StackPanel />
+            <ValuesPanel />
           </div>
         </aside>
       </div>

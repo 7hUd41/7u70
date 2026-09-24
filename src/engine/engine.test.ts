@@ -152,6 +152,12 @@ describe("contract", () => {
     expect(() => TutoContract.parse({ ...base, choices: [{ ...base.choices[0], default: "caddy" }] })).toThrow(/not an option/);
   });
 
+  it("accepts `when` on groups and variables, rejects unknown choices in it", () => {
+    const ok = { ...base, groups: [{ ...base.groups[0], when: { flag: "LDAP" } }], vars: [{ ...base.vars[0], when: { is: "WEB", equals: "nginx" } }] };
+    expect(TutoContract.parse(ok).groups[0].when).toEqual({ flag: "LDAP" });
+    expect(() => TutoContract.parse({ ...base, groups: [{ ...base.groups[0], when: { flag: "NOPE" } }] })).toThrow(/unknown choice/);
+  });
+
   it("rejects lowercase keys", () => {
     expect(() => TutoContract.parse({ ...base, vars: [{ ...base.vars[0], key: "host" }] })).toThrow();
   });

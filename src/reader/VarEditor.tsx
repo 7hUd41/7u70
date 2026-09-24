@@ -21,7 +21,8 @@ export function VarEditor() {
       <div className="fixed inset-0 z-40" onClick={closeEdit} />
       <div role="dialog" className="ui fixed z-50 w-72 rounded-md border border-line bg-paper p-3 shadow-soft" style={{ top, left }}>
         <div className="mb-0.5 text-[13px] font-bold text-ink">{spec.label[locale]}</div>
-        {spec.hint && <p className="mb-2 text-[12px] leading-snug text-ink-3">{spec.hint[locale]}</p>}
+        {spec.hint && <p className="mb-1 text-[12px] leading-snug text-ink-3">{spec.hint[locale]}</p>}
+        {spec.impact && <p className="mb-2 text-[12px] leading-snug text-ink-2">{spec.impact[locale]}</p>}
         <input
           autoFocus
           value={value}

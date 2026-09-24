@@ -22,6 +22,18 @@ export const Localized = z.object({ en: z.string().min(1), fr: z.string().min(1)
 export type Localized = z.infer<typeof Localized>;
 
 const Key = z.string().regex(/^[A-Z][A-Z0-9_]*$/, "keys are UPPER_SNAKE_CASE");
+
+/** Same shape as <When> in prose: show only when the choice matches. */
+export const ConditionSpec = z
+  .object({
+    flag: Key.optional(),
+    notFlag: Key.optional(),
+    is: Key.optional(),
+    equals: z.string().optional(),
+    oneOf: z.array(z.string()).optional(),
+  })
+  .strict();
+export type ConditionSpec = z.infer<typeof ConditionSpec>;
 const Slug = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "slugs are kebab-case");
 
 export const VarSpec = z.object({
@@ -35,6 +47,8 @@ export const VarSpec = z.object({
   hint: Localized.optional(),
   /** Consequences of getting it wrong / where it is reused (deep). */
   impact: Localized.optional(),
+  /** Only relevant when this condition holds; hidden otherwise. */
+  when: ConditionSpec.optional(),
 });
 export type VarSpec = z.infer<typeof VarSpec>;
 
@@ -61,6 +75,8 @@ export const GroupSpec = z.object({
   id: z.string().min(1),
   label: Localized,
   desc: Localized.optional(),
+  /** Only relevant when this condition holds; hidden otherwise. */
+  when: ConditionSpec.optional(),
 });
 
 export const Difficulty = z.enum(["beginner", "intermediate", "advanced"]);
@@ -97,6 +113,14 @@ export const TutoContract = z
       if (c.type === "select" && c.default !== undefined && !c.options.some((o) => o.value === c.default))
         ctx.addIssue({ code: "custom", message: `choice ${c.key}: default "${c.default}" is not an option`, path: ["choices"] });
     }
+    const choiceKeys = new Set(t.choices.map((c) => c.key));
+    const checkWhen = (owner: string, when: ConditionSpec | undefined, path: string) => {
+      if (!when) return;
+      const ref = when.flag ?? when.notFlag ?? when.is;
+      if (ref && !choiceKeys.has(ref)) ctx.addIssue({ code: "custom", message: `${owner}: "when" references unknown choice "${ref}"`, path: [path] });
+    };
+    for (const g of t.groups) checkWhen(`group ${g.id}`, g.when, "groups");
+    for (const v of t.vars) checkWhen(`variable ${v.key}`, v.when, "vars");
   });
 export type TutoContract = z.infer<typeof TutoContract>;
 

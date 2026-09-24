@@ -1,11 +1,58 @@
 "use client";
 
-/* The one place the reader describes their situation. Variables are
-   grouped as the contract declares; choices (stack) come last. */
+/* The margin, in reading order:
+   1. StackPanel   — choices that shape the path (they change the outline)
+   2. ValuesPanel  — the reader's values, consulted lazily, explained fully on hover
+   Groups and variables can declare `when` and disappear when irrelevant. */
 
-import { RotateCcw } from "lucide-react";
-import { atLeast, validate, type ChoiceSpec, type VarSpec } from "@/engine";
+import { useId, useState } from "react";
+import { HelpCircle, RotateCcw } from "lucide-react";
+import { atLeast, evaluate, validate, type ChoiceSpec, type VarSpec } from "@/engine";
 import { useReader } from "./store";
+
+/* Full, level-independent explanation of a variable: what it is, why it
+   matters, what a value looks like. Opens on hover or keyboard focus. */
+function Help({ spec }: { spec: VarSpec }) {
+  const { locale, t } = useReader();
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return (
+    <span className="relative inline-flex" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+      <button
+        type="button"
+        aria-label={t.help.about(spec.label[locale])}
+        aria-describedby={open ? id : undefined}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        className="rounded text-ink-3 hover:text-ink"
+      >
+        <HelpCircle className="h-3.5 w-3.5" />
+      </button>
+      {open && (
+        <span
+          id={id}
+          role="tooltip"
+          className="ui absolute right-0 top-full z-40 mt-1.5 w-72 rounded-md border border-line bg-paper p-3 text-left text-[12.5px] leading-snug text-ink shadow-soft"
+        >
+          <span className="mb-1 block font-bold">{spec.label[locale]}</span>
+          {spec.hint && <span className="block">{spec.hint[locale]}</span>}
+          {spec.impact && (
+            <span className="mt-2 block">
+              <span className="label block">{t.help.impact}</span>
+              {spec.impact[locale]}
+            </span>
+          )}
+          {spec.default && (
+            <span className="mt-2 block">
+              <span className="label block">{t.help.example}</span>
+              <code className="text-[12px]">{spec.default}</code>
+            </span>
+          )}
+        </span>
+      )}
+    </span>
+  );
+}
 
 function Field({ spec }: { spec: VarSpec }) {
   const { vars, setVar, highlight, setHighlight, level, locale, t } = useReader();
@@ -15,14 +62,18 @@ function Field({ spec }: { spec: VarSpec }) {
   const showHint = atLeast(level, "quick") && spec.hint;
   const showImpact = atLeast(level, "deep") && spec.impact;
   return (
-    <label className="block" onMouseEnter={() => setHighlight(spec.key)} onMouseLeave={() => setHighlight(null)}>
-      <span className="ui mb-1 block text-[12.5px] text-ink-2">{spec.label[locale]}</span>
+    <div onMouseEnter={() => setHighlight(spec.key)} onMouseLeave={() => setHighlight(null)}>
+      <label className="ui mb-1 flex items-center justify-between gap-2 text-[12.5px] text-ink-2">
+        <span>{spec.label[locale]}</span>
+        {(spec.hint || spec.impact) && <Help spec={spec} />}
+      </label>
       <input
         value={value}
         onChange={(e) => setVar(spec.key, e.target.value)}
         placeholder={spec.default}
         spellCheck={false}
         autoComplete="off"
+        aria-label={spec.label[locale]}
         type={spec.kind === "secret" ? "password" : "text"}
         aria-invalid={err ? true : undefined}
         className={
@@ -36,7 +87,7 @@ function Field({ spec }: { spec: VarSpec }) {
         showHint && <span className="ui mt-1 block text-[12px] leading-snug text-ink-3">{spec.hint![locale]}</span>
       )}
       {showImpact && <span className="ui mt-1.5 block border-l border-accent/50 pl-2 text-[12px] leading-snug text-ink-2">{spec.impact![locale]}</span>}
-    </label>
+    </div>
   );
 }
 
@@ -87,13 +138,33 @@ function Choice({ spec }: { spec: ChoiceSpec }) {
   );
 }
 
-export function ContextPanel() {
-  const { contract, locale, resetProfile, t } = useReader();
-  const { vars, choices, groups } = contract;
-  if (vars.length === 0 && choices.length === 0) return null;
+export function StackPanel() {
+  const { contract, t } = useReader();
+  if (contract.choices.length === 0) return null;
+  return (
+    <section aria-label={t.context.choices} className="space-y-3">
+      <header>
+        <h2 className="ui text-[15px] font-bold text-ink">{t.context.choices}</h2>
+        <p className="ui text-[12.5px] text-ink-3">{t.context.choicesSubtitle}</p>
+      </header>
+      {contract.choices.map((c) => (
+        <Choice key={c.key} spec={c} />
+      ))}
+    </section>
+  );
+}
 
-  const grouped = groups.map((g) => ({ g, items: vars.filter((v) => v.group === g.id) })).filter((x) => x.items.length > 0);
-  const ungrouped = vars.filter((v) => !v.group || !groups.some((g) => g.id === v.group));
+export function ValuesPanel() {
+  const { contract, choices, locale, resetProfile, t } = useReader();
+  const { groups } = contract;
+  const vars = contract.vars.filter((v) => !v.when || evaluate(v.when, choices));
+  if (vars.length === 0) return null;
+
+  const grouped = groups
+    .filter((g) => !g.when || evaluate(g.when, choices))
+    .map((g) => ({ g, items: vars.filter((v) => v.group === g.id) }))
+    .filter((x) => x.items.length > 0);
+  const ungrouped = vars.filter((v) => !v.group || !grouped.some((x) => x.g.id === v.group));
 
   return (
     <section aria-label={t.context.title} className="space-y-5">
@@ -107,17 +178,8 @@ export function ContextPanel() {
         </button>
       </header>
 
-      {choices.length > 0 && (
-        <div className="space-y-3 border-t border-line pt-4">
-          <span className="label">{t.context.choices}</span>
-          {choices.map((c) => (
-            <Choice key={c.key} spec={c} />
-          ))}
-        </div>
-      )}
-
-      {grouped.map(({ g, items }) => (
-        <div key={g.id} className="space-y-3 border-t border-line pt-4">
+      {grouped.map(({ g, items }, i) => (
+        <div key={g.id} className={"space-y-3 " + (i > 0 ? "border-t border-line pt-4" : "")}>
           <div>
             <span className="label">{g.label[locale]}</span>
             {g.desc && <p className="ui text-[12px] text-ink-3">{g.desc[locale]}</p>}
@@ -129,7 +191,7 @@ export function ContextPanel() {
       ))}
 
       {ungrouped.length > 0 && (
-        <div className="space-y-3 border-t border-line pt-4">
+        <div className={"space-y-3 " + (grouped.length > 0 ? "border-t border-line pt-4" : "")}>
           {ungrouped.map((v) => (
             <Field key={v.key} spec={v} />
           ))}

@@ -17,9 +17,10 @@ const en = {
     deep: { label: "Deep", hint: "Everything, including why and what could go wrong." },
   },
   context: {
-    title: "Your context",
-    subtitle: "Every command below is filled with these values.",
+    title: "Your values",
+    subtitle: "Every command on this page is filled with these. Click a value in a command to change it there.",
     choices: "Your stack",
+    choicesSubtitle: "Your choices decide which steps appear.",
     reset: "Reset to defaults",
     appliesEverywhere: "Applies to the whole page.",
     edit: "Edit",
@@ -51,6 +52,11 @@ const en = {
     complete: "All checks passed",
   },
   toc: "On this page",
+  help: {
+    about: (label: string) => `About ${label}`,
+    impact: "Why it matters",
+    example: "Example",
+  },
   meta: {
     minutes: (m: number) => `~${m} min hands-on`,
     validated: (v: string) => `validated on ${v}`,
@@ -105,9 +111,10 @@ const fr: Dict = {
     deep: { label: "Exhaustif", hint: "Tout, y compris le pourquoi et ce qui peut mal tourner." },
   },
   context: {
-    title: "Ton contexte",
-    subtitle: "Chaque commande ci-dessous est remplie avec ces valeurs.",
+    title: "Tes valeurs",
+    subtitle: "Chaque commande de la page est remplie avec. Clique une valeur dans une commande pour la changer sur place.",
     choices: "Ta stack",
+    choicesSubtitle: "Tes choix décident des étapes qui apparaissent.",
     reset: "Revenir aux valeurs par défaut",
     appliesEverywhere: "S'applique à toute la page.",
     edit: "Modifier",
@@ -139,6 +146,11 @@ const fr: Dict = {
     complete: "Toutes les vérifications passent",
   },
   toc: "Sur cette page",
+  help: {
+    about: (label) => `À propos de ${label}`,
+    impact: "Pourquoi c'est important",
+    example: "Exemple",
+  },
   meta: {
     minutes: (m) => `~${m} min de manipulation`,
     validated: (v) => `validé sur ${v}`,

@@ -26,7 +26,8 @@ groups:
     label: { en: Database, fr: Base de données }
   - id: auth
     label: { en: Directory, fr: Annuaire }
-    desc: { en: Only used when LDAP is enabled., fr: Utilisé seulement si LDAP est activé. }
+    desc: { en: Your LDAP or Active Directory., fr: Ton LDAP ou Active Directory. }
+    when: { flag: LDAP }
 
 vars:
   - key: NETBOX_HOST
@@ -35,60 +36,88 @@ vars:
     default: netbox.example.com
     label: { en: NetBox hostname, fr: Nom d'hôte de NetBox }
     hint:
-      en: The name users type in their browser. Goes into ALLOWED_HOSTS and the web server config.
-      fr: Le nom que les utilisateurs tapent dans le navigateur. Va dans ALLOWED_HOSTS et la config du serveur web.
+      en: The address users will type in their browser to reach NetBox. It must already point to this server in your DNS.
+      fr: L'adresse que les utilisateurs taperont dans le navigateur pour atteindre NetBox. Elle doit déjà pointer vers ce serveur dans ton DNS.
     impact:
-      en: If it does not match the URL actually used, Django answers 400 Bad Request. Add several names separated by commas if needed.
-      fr: S'il ne correspond pas à l'URL réellement utilisée, Django répond 400 Bad Request. Plusieurs noms possibles, séparés par des virgules.
+      en: Written into ALLOWED_HOSTS (Django refuses any other name with a 400 error), into the web server configuration and into the TLS certificate. Several names are possible, separated by commas.
+      fr: Écrit dans ALLOWED_HOSTS (Django refuse tout autre nom avec une erreur 400), dans la configuration du serveur web et dans le certificat TLS. Plusieurs noms sont possibles, séparés par des virgules.
   - key: INSTALL_DIR
     kind: path
     group: host
     default: /opt/netbox
     label: { en: Install directory, fr: Répertoire d'installation }
-    hint: { en: The official docs assume /opt/netbox., fr: La doc officielle suppose /opt/netbox. }
+    hint:
+      en: The folder where NetBox's code and Python environment live. Keep the default unless your organisation has a rule about it.
+      fr: Le dossier où vivent le code de NetBox et son environnement Python. Garde la valeur par défaut sauf règle interne.
     impact:
-      en: The systemd units, the upgrade script and the web server config all reference this path.
-      fr: Les unités systemd, le script d'upgrade et la config du serveur web y font tous référence.
+      en: The systemd units, the upgrade script and the web server configuration shipped with NetBox all assume /opt/netbox. Changing it means editing those files too.
+      fr: Les unités systemd, le script d'upgrade et la configuration du serveur web livrés avec NetBox supposent tous /opt/netbox. Le changer oblige à éditer ces fichiers aussi.
   - key: NETBOX_REF
     kind: text
     group: host
     default: master
-    label: { en: NetBox git ref, fr: Référence git de NetBox }
+    label: { en: NetBox version, fr: Version de NetBox }
     hint:
-      en: master follows the latest stable release; pin a tag like v4.4.0 for reproducible installs.
-      fr: master suit la dernière version stable ; fixe un tag comme v4.4.0 pour une install reproductible.
+      en: Which version of the code to fetch from GitHub. "master" is always the latest stable release; a tag such as v4.4.0 pins one precise version.
+      fr: Quelle version du code récupérer sur GitHub. « master » est toujours la dernière version stable ; un tag comme v4.4.0 fige une version précise.
+    impact:
+      en: Pinning a tag makes the install reproducible and keeps upgrades a deliberate act. With master, a re-run of the clone step may fetch a newer release than the one you tested.
+      fr: Figer un tag rend l'installation reproductible et garde les mises à jour volontaires. Avec master, relancer l'étape de clonage peut récupérer une version plus récente que celle testée.
   - key: ADMIN_EMAIL
     kind: email
     group: host
     default: admin@example.com
     label: { en: Admin email, fr: Email administrateur }
-    hint: { en: Used by Let's Encrypt for expiry notices., fr: Utilisé par Let's Encrypt pour les alertes d'expiration. }
+    hint:
+      en: The address responsible for this server. Let's Encrypt writes to it before a certificate expires.
+      fr: L'adresse responsable de ce serveur. Let's Encrypt lui écrit avant l'expiration d'un certificat.
+    impact:
+      en: Only used when the certificate comes from Let's Encrypt. It is not published and NetBox itself does not send mail with it.
+      fr: Utilisé seulement si le certificat vient de Let's Encrypt. Il n'est pas publié et NetBox n'envoie pas de mail avec.
   - key: DB_PASSWORD
     kind: secret
     group: db
     default: ""
     label: { en: PostgreSQL password, fr: Mot de passe PostgreSQL }
     hint:
-      en: For the netbox database role. Generate a long random one; it only ever lives in configuration.py.
-      fr: Pour le rôle netbox de la base. Génère-en un long et aléatoire ; il ne vit que dans configuration.py.
+      en: The password of the "netbox" database account that NetBox uses to talk to PostgreSQL. Generate a long random one; nobody types it by hand.
+      fr: Le mot de passe du compte de base « netbox » que NetBox utilise pour parler à PostgreSQL. Génère-en un long et aléatoire ; personne ne le tape à la main.
     impact:
-      en: Reused in configuration.py. A mismatch shows up as "password authentication failed" at the first migration.
-      fr: Réutilisé dans configuration.py. Une différence se voit comme « password authentication failed » à la première migration.
+      en: Set once when the database role is created, then copied into configuration.py. If the two differ, the first migration fails with "password authentication failed for user netbox". It never leaves this server.
+      fr: Défini une fois à la création du rôle de base, puis recopié dans configuration.py. Si les deux diffèrent, la première migration échoue avec « password authentication failed for user netbox ». Il ne quitte jamais ce serveur.
   - key: LDAP_URI
     kind: text
     group: auth
     default: ldaps://ad.example.com:636
     label: { en: LDAP server URI, fr: URI du serveur LDAP }
+    hint:
+      en: Address of your directory server, with the protocol. Use ldaps:// (port 636) so credentials travel encrypted.
+      fr: Adresse de ton serveur d'annuaire, avec le protocole. Utilise ldaps:// (port 636) pour que les identifiants circulent chiffrés.
+    impact:
+      en: Every login makes NetBox contact this address. If it is unreachable, nobody can log in except local accounts such as the first administrator.
+      fr: Chaque connexion fait contacter cette adresse par NetBox. Si elle est injoignable, plus personne ne peut se connecter sauf les comptes locaux comme le premier administrateur.
   - key: LDAP_BIND_DN
     kind: text
     group: auth
     default: CN=netbox,OU=Service Accounts,DC=example,DC=com
     label: { en: Bind DN, fr: DN de bind }
+    hint:
+      en: The directory account NetBox uses to search for users before checking their password. A dedicated read-only service account, written as a full distinguished name.
+      fr: Le compte d'annuaire que NetBox utilise pour chercher les utilisateurs avant de vérifier leur mot de passe. Un compte de service dédié en lecture seule, écrit sous forme de DN complet.
+    impact:
+      en: Its password goes into ldap_config.py. Give it read access to the users and groups subtrees only.
+      fr: Son mot de passe va dans ldap_config.py. Donne-lui un accès en lecture aux sous-arbres utilisateurs et groupes uniquement.
   - key: LDAP_BASE_DN
     kind: text
     group: auth
     default: DC=example,DC=com
     label: { en: User search base, fr: Base de recherche utilisateurs }
+    hint:
+      en: Where in the directory tree NetBox looks for people. Usually the domain root, or a narrower OU if only some staff should log in.
+      fr: Où, dans l'arbre de l'annuaire, NetBox cherche les personnes. En général la racine du domaine, ou une OU plus étroite si seule une partie du personnel doit se connecter.
+    impact:
+      en: A user outside this subtree simply cannot log in, with no explicit error. Combine with a group filter for finer control.
+      fr: Un utilisateur hors de ce sous-arbre ne peut simplement pas se connecter, sans erreur explicite. Combine avec un filtre de groupe pour un contrôle plus fin.
 
 choices:
   - key: OS
