@@ -16,7 +16,6 @@ authors: [thudal]
 created: 2026-09-24
 minutes: 10
 validated: Debian 12 · Rocky 9
-tested: { on: "2026-09-24", by: thudal }
 
 groups:
   - id: access

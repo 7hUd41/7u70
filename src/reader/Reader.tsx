@@ -4,14 +4,17 @@
    the top; the reader's context and the outline live in the margin. */
 
 import Link from "next/link";
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight } from "lucide-react";
-import type { Locale, TutoContract } from "@/engine";
+import { LEVELS, type Locale, type TutoContract, type Validation } from "@/engine";
+import { useRouter } from "next/navigation";
+import { ValidatePanel, ValidationLine, useValidations } from "./Validation";
 import { StackPanel, ValuesPanel } from "./ContextPanel";
 import { Header } from "./Header";
 import { Outline, ProgressPill } from "./Outline";
 import { ReaderProvider, useReader } from "./store";
 import { Toolbar } from "./Toolbar";
+import { Tour, TOUR_DONE_KEY } from "./Tour";
 import { VarEditor } from "./VarEditor";
 
 export type PageLink = { href: string; title: string };
@@ -25,6 +28,10 @@ export type ReaderProps = {
   slug: string;
   prev?: PageLink;
   next?: PageLink;
+  validations: Validation[];
+  canValidate: boolean;
+  /** Start the tour on the reader's first visit of this page. */
+  tourOnFirstVisit?: boolean;
   children: ReactNode;
 };
 
@@ -41,39 +48,6 @@ function ReadingLine() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
   return <div className="progress-line fixed inset-x-0 top-0 z-40" style={{ transform: `scaleX(${pct})` }} />;
-}
-
-/* "Is this still good?" answered before the reader invests time. */
-function Freshness() {
-  const { contract, locale, t } = useReader();
-  const tested = contract.tested;
-  // Today's date is read once after mount: the server render must not depend on the clock.
-  const [now, setNow] = useState<number | null>(null);
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- clock is an external system
-    setNow(Date.now());
-  }, []);
-  if (!tested) {
-    return (
-      <p className="ui mt-3 inline-flex items-center gap-2 text-[12.5px] text-ink-3">
-        <span className="h-2 w-2 rounded-full bg-line-2" /> {t.meta.untested}
-      </p>
-    );
-  }
-  const days = now === null ? 0 : Math.max(0, Math.floor((now - new Date(tested.on).getTime()) / 86_400_000));
-  const stale = days > 365;
-  const aging = !stale && days > 180;
-  const date = new Date(tested.on).toLocaleDateString(locale, { year: "numeric", month: "long", day: "numeric" });
-  return (
-    <p className="ui mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-ink-2">
-      <span className={"h-2 w-2 rounded-full " + (stale ? "bg-warn" : aging ? "bg-warn/60" : "bg-ok")} />
-      <span>
-        {t.meta.testedBy(tested.by, date)} {now !== null && <span className="text-ink-3">({t.meta.testedAgo(days)})</span>}
-        {contract.validated && <span className="text-ink-3"> · {contract.validated}</span>}
-      </span>
-      {stale && <span className="basis-full text-warn">{t.meta.stale}</span>}
-    </p>
-  );
 }
 
 function Meta() {
@@ -125,12 +99,15 @@ function Frame(props: ReaderProps) {
   const { level, setLevel, contract, locale, t } = useReader();
   const [outlineOpen, setOutlineOpen] = useState(true);
   const headerHidden = useHideOnScroll();
+  const validations = useValidations(props.validations);
+  const [tourOpen, setTourOpen] = useState(false);
   useEffect(() => {
+    if (!props.tourOnFirstVisit) return;
     try {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration from storage
-      if (localStorage.getItem(OUTLINE_KEY) === "closed") setOutlineOpen(false);
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- first-visit check from storage
+      if (!localStorage.getItem(TOUR_DONE_KEY)) setTourOpen(true);
     } catch {}
-  }, []);
+  }, [props.tourOnFirstVisit]);
   const toggleOutline = () => {
     setOutlineOpen((o) => {
       try {
@@ -139,6 +116,40 @@ function Frame(props: ReaderProps) {
       return !o;
     });
   };
+
+  /* Keyboard shortcuts (ignored while typing): 1–4 levels, [ ] previous/next
+     page, t outline, ? tour. "/" is reserved for search. */
+  const router = useRouter();
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      if (tourOpen) return;
+      const n = Number(e.key);
+      if (n >= 1 && n <= LEVELS.length) return setLevel(LEVELS[n - 1]);
+      if (e.key === "[" && props.prev) return router.push(props.prev.href);
+      if (e.key === "]" && props.next) return router.push(props.next.href);
+      if (e.key === "t") return toggleOutline();
+      if (e.key === "?") return setTourOpen(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tourOpen, props.prev?.href, props.next?.href]);
+
+  const closeTour = useCallback(() => {
+    setTourOpen(false);
+    try {
+      localStorage.setItem(TOUR_DONE_KEY, "1");
+    } catch {}
+  }, []);
+  useEffect(() => {
+    try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration from storage
+      if (localStorage.getItem(OUTLINE_KEY) === "closed") setOutlineOpen(false);
+    } catch {}
+  }, []);
   return (
     <>
       <ReadingLine />
@@ -150,6 +161,7 @@ function Frame(props: ReaderProps) {
         setLevel={setLevel}
         outline={{ open: outlineOpen, toggle: toggleOutline, folded: <ProgressPill /> }}
         hidden={headerHidden}
+        onTour={() => setTourOpen(true)}
       />
       {/* Wide screens: outline left (where am I), content, context right (what is mine).
           Narrower: context column only, outline on top. */}
@@ -170,13 +182,14 @@ function Frame(props: ReaderProps) {
           <h1 className="font-display text-[2.4rem] leading-[1.1] tracking-tight text-ink">{contract.title[locale]}</h1>
           <p className="mt-3 max-w-[68ch] text-[1.1rem] leading-relaxed text-ink-2">{contract.summary[locale]}</p>
           <Meta />
-          <Freshness />
+          <ValidationLine list={validations.list} href={`/${locale}${props.path}/validations`} />
           <div className="mt-6 border-b border-line pb-5">
             <Toolbar title={contract.title[locale]} slug={props.slug} />
           </div>
           <article className="prose doc-body" data-level={level}>
             {props.children}
           </article>
+          <ValidatePanel series={props.id.split("/")[0]} slug={props.slug} onAdded={validations.add} canValidate={props.canValidate} />
           {(props.prev || props.next) && (
             <nav className="ui mt-14 grid gap-3 border-t border-line pt-6 sm:grid-cols-2">
               {props.prev ? (
@@ -211,6 +224,7 @@ function Frame(props: ReaderProps) {
         </aside>
       </div>
       <VarEditor />
+      <Tour open={tourOpen} onClose={closeTour} />
     </>
   );
 }

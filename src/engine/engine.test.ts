@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { atLeast, buildInstallScript, defaultsOf, evaluate, fill, inherit, joinCommands, keysOf, PageContract, scanDangers, segments, SeriesContract, TutoContract, validate } from "./index";
+import { samePath, summarize, Validation, atLeast, buildInstallScript, defaultsOf, evaluate, fill, inherit, joinCommands, keysOf, PageContract, scanDangers, segments, SeriesContract, TutoContract, validate } from "./index";
 
 describe("template", () => {
   const vars = { HOST: "netbox.lan", PORT: "8001" };
@@ -192,5 +192,34 @@ describe("series inheritance", () => {
   it("refuses a page redefining a series key", () => {
     const p3 = PageContract.parse({ ...page, vars: [{ key: "HOST", kind: "text", label: { en: "x", fr: "x" } }] });
     expect(() => inherit(series, p3)).toThrow(/already declared/);
+  });
+});
+
+describe("validations", () => {
+  const v = (at: string, choices: Record<string, string | boolean>) =>
+    Validation.parse({ at, locale: "en", choices, checks: { done: 2, total: 2 } });
+  const list = [v("2026-01-10T10:00:00Z", { OS: "ubuntu", WEB: "nginx" }), v("2026-03-01T10:00:00Z", { OS: "rhel", WEB: "nginx" }), v("2026-02-01T10:00:00Z", { OS: "ubuntu", WEB: "apache" })];
+
+  it("matches a path on every recorded choice", () => {
+    expect(samePath({ OS: "ubuntu" }, { OS: "ubuntu", WEB: "nginx" })).toBe(true);
+    expect(samePath({ OS: "ubuntu", WEB: "apache" }, { OS: "ubuntu", WEB: "nginx" })).toBe(false);
+  });
+
+  it("summarizes totals, last, and the reader's own path", () => {
+    const s = summarize(list, { OS: "ubuntu", WEB: "nginx" }, Date.parse("2026-03-11T00:00:00Z"));
+    expect(s.total).toBe(3);
+    expect(s.last?.at).toBe("2026-03-01T10:00:00Z");
+    expect(s.onMyPath).toBe(1);
+    expect(s.daysSince).toBe(9);
+  });
+
+  it("handles no validation", () => {
+    const s = summarize([], {}, Date.now());
+    expect(s.total).toBe(0);
+    expect(s.daysSince).toBeNull();
+  });
+
+  it("rejects a bad timestamp", () => {
+    expect(() => Validation.parse({ at: "yesterday", locale: "en", checks: { done: 0, total: 0 } })).toThrow();
   });
 });

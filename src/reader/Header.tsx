@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { PanelLeft } from "lucide-react";
+import { Compass, PanelLeft } from "lucide-react";
 import type { Level, Locale } from "@/engine";
 import { dict } from "@/i18n";
 import { LevelSwitch, LocaleSwitch, ThemeToggle } from "./controls";
@@ -15,6 +15,7 @@ export function Header({
   setLevel,
   outline,
   hidden,
+  onTour,
 }: {
   locale: Locale;
   /** Path without the locale prefix, for the language switch. */
@@ -26,6 +27,8 @@ export function Header({
   outline?: { open: boolean; toggle: () => void; folded?: ReactNode };
   /** Slides out of view while the reader scrolls down. */
   hidden?: boolean;
+  /** Starts the guided tour. */
+  onTour?: () => void;
 }) {
   const t = dict(locale);
   return (
@@ -43,6 +46,7 @@ export function Header({
             aria-pressed={outline.open}
             title={outline.open ? t.outline.hide : t.outline.show}
             aria-label={outline.open ? t.outline.hide : t.outline.show}
+            data-tour="outline-toggle"
             className={"hidden rounded p-1 xl:inline-flex " + (outline.open ? "text-ink" : "text-ink-3 hover:text-ink")}
           >
             <PanelLeft className="h-4 w-4" />
@@ -66,6 +70,11 @@ export function Header({
           {level && setLevel && <LevelSwitch level={level} setLevel={setLevel} locale={locale} />}
           <LocaleSwitch locale={locale} path={path} />
           <ThemeToggle locale={locale} />
+          {onTour && (
+            <button type="button" onClick={onTour} title={t.tour.start} aria-label={t.tour.start} className="rounded p-1.5 text-ink-3 hover:text-ink">
+              <Compass className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
     </header>

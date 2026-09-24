@@ -76,7 +76,7 @@ export function Toolbar({ title, slug }: { title: string; slug: string }) {
 
   const btn = "ui inline-flex items-center gap-1.5 rounded border px-2.5 py-1 text-[12.5px] transition";
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div data-tour="toolbar" className="flex flex-wrap items-center gap-2">
       <button type="button" onClick={copy} className={btn + " border-line bg-paper text-ink-2 hover:text-ink"}>
         {copied ? <Check className="h-3.5 w-3.5 text-ok" /> : <Copy className="h-3.5 w-3.5" />}
         {copied ? t.toolbar.copied : run ? t.toolbar.copyRun : t.toolbar.copyAll}

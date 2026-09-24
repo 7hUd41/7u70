@@ -82,7 +82,13 @@ In `page-<locale>.mdx`:
 | `<Annotated>` + `# (1)` markers + a numbered list | code annotations: hidden at Quick, badges at Guided, inline at Deep |
 | `## Heading` | a step: numbered automatically, listed in the outline |
 
-`tuto.yaml` also carries `validated` (platform string) and `tested: { on, by }`, shown under the title so the reader knows a human ran the page and when.
+### Human validation
+
+A page is only as good as the last person who ran it. At the end of every page, "Did everything work?" lets a reader record that they followed it end to end on a real machine: the validation is dated and stores **their stack choices only** (never their values), under a pseudonym or an anonymous tag. The line under the title shows how many validations the page has, the last one, and how many on the reader's own path; `/…/validations` lists them all. Validations live in `validations.yaml` next to the page, append-only. Recording needs the server (author mode); the static copy links to the issue tracker instead.
+
+### Reader shortcuts
+
+`1`–`4` reading depth · `[` `]` previous / next page · `t` fold the outline · `?` guided tour · `/` search (coming). The guided tour starts on the first visit of the Example series and can be replayed from the compass icon.
 
 Shell fences (` ```bash `) get a prompt, a copy button and feed the "Download install.sh" export. Other languages (` ```python `, ` ```yaml `) render as file excerpts.
 

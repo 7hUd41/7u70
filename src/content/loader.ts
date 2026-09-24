@@ -13,10 +13,10 @@
    not a fallback.
    ────────────────────────────────────────────────────────────── */
 
-import { readdir, readFile, stat } from "node:fs/promises";
+import { appendFile, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { parse as parseYaml } from "yaml";
-import { inherit, LOCALES, PageContract, SeriesContract, type TutoContract, type Locale } from "@/engine";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { inherit, LOCALES, PageContract, SeriesContract, Validation, Validations, type TutoContract, type Locale } from "@/engine";
 
 export const CONTENT_DIR = path.join(process.cwd(), "content");
 
@@ -126,4 +126,29 @@ export async function neighbors(page: PageRef): Promise<{ prev?: Page; next?: Pa
   const series = await loadSeries(page.series);
   const i = series.pages.findIndex((p) => p.slug === page.slug);
   return { prev: i > 0 ? series.pages[i - 1] : undefined, next: i >= 0 && i < series.pages.length - 1 ? series.pages[i + 1] : undefined, series };
+}
+
+/* ── Validations: one YAML list per page, append-only ─────────── */
+function validationsPath(page: PageRef): string {
+  return path.join(CONTENT_DIR, page.series, page.slug, "validations.yaml");
+}
+
+export async function readValidations(page: PageRef): Promise<Validation[]> {
+  const file = validationsPath(page);
+  if (!(await exists(file))) return [];
+  const raw = await readFile(file, "utf8");
+  const data = parseYaml(raw);
+  if (data == null) return [];
+  try {
+    return Validations.parse(data);
+  } catch (err) {
+    throw new Error(`Invalid ${path.relative(process.cwd(), file)}:\n${(err as Error).message}`);
+  }
+}
+
+export async function appendValidation(page: PageRef, v: Validation): Promise<void> {
+  const file = validationsPath(page);
+  const entry = stringifyYaml([v]);
+  const head = (await exists(file)) ? "" : "# Human validations of this page, append-only. Choices only, never values.\n";
+  await appendFile(file, head + entry, "utf8");
 }

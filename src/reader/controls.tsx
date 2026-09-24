@@ -10,7 +10,7 @@ import { dict } from "@/i18n";
 export function LevelSwitch({ level, setLevel, locale }: { level: Level; setLevel: (l: Level) => void; locale: Locale }) {
   const t = dict(locale);
   return (
-    <div role="radiogroup" aria-label="Reading depth" className="ui inline-flex rounded-md border border-line bg-paper-2 p-0.5">
+    <div role="radiogroup" aria-label="Reading depth" data-tour="levels" className="ui inline-flex rounded-md border border-line bg-paper-2 p-0.5">
       {LEVELS.map((l) => (
         <button
           key={l}
@@ -58,7 +58,7 @@ export function ThemeToggle({ locale }: { locale: Locale }) {
 /* ── EN / FR, same page ────────────────────────────────────── */
 export function LocaleSwitch({ locale, path }: { locale: Locale; path: string }) {
   return (
-    <nav aria-label="Language" className="ui inline-flex items-center gap-1 text-[12.5px]">
+    <nav aria-label="Language" data-tour="locale" className="ui inline-flex items-center gap-1 text-[12.5px]">
       {LOCALES.map((l, i) => (
         <span key={l} className="inline-flex items-center gap-1">
           {i > 0 && <span className="text-line-2">/</span>}

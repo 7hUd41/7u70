@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { isLocale, LOCALES } from "@/engine";
-import { getPage, listSeries, neighbors, readPageSource } from "@/content/loader";
+import { getPage, listSeries, neighbors, readPageSource, readValidations } from "@/content/loader";
+import { site } from "@/site.config";
 import { compileMdx } from "@/content/mdx";
 import { mdxComponents } from "@/reader/mdx-components";
 import { Reader } from "@/reader/Reader";
@@ -26,7 +27,7 @@ export default async function TutorialPage({ params }: { params: Promise<Params>
   const page = await getPage(series, slug);
   if (!page) notFound();
 
-  const [source, nav] = await Promise.all([readPageSource(page, locale), neighbors(page)]);
+  const [source, nav, validations] = await Promise.all([readPageSource(page, locale), neighbors(page), readValidations(page)]);
   const Content = await compileMdx(source);
   const href = (s: string) => `/${locale}/${series}/${s}`;
 
@@ -40,6 +41,9 @@ export default async function TutorialPage({ params }: { params: Promise<Params>
       slug={slug}
       prev={nav.prev && { href: href(nav.prev.slug), title: nav.prev.contract.title[locale] }}
       next={nav.next && { href: href(nav.next.slug), title: nav.next.contract.title[locale] }}
+      validations={validations}
+      canValidate={site.authorMode}
+      tourOnFirstVisit={series === "example"}
     >
       <Content components={mdxComponents} />
     </Reader>

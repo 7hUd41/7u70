@@ -160,7 +160,7 @@ export function StackPanel() {
   const { contract, t } = useReader();
   if (contract.choices.length === 0) return null;
   return (
-    <section aria-label={t.context.choices} className="space-y-3">
+    <section aria-label={t.context.choices} data-tour="stack" className="space-y-3">
       <header>
         <h2 className="ui text-[15px] font-bold text-ink">{t.context.choices}</h2>
         <p className="ui text-[12.5px] text-ink-3">{t.context.choicesSubtitle}</p>
@@ -187,7 +187,7 @@ export function ValuesPanel() {
   const ungrouped = vars.filter((v) => !v.group || !declared.has(v.group));
 
   return (
-    <section aria-label={t.context.title} className="space-y-5">
+    <section aria-label={t.context.title} data-tour="values" className="space-y-5">
       <header className="flex items-start justify-between gap-2">
         <div>
           <h2 className="ui text-[15px] font-bold text-ink">{t.context.title}</h2>
