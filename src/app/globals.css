@@ -1,83 +1,286 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
+/* ──────────────────────────────────────────────────────────────
+   Design tokens
+   One warm, editorial palette. Two semantic hues only:
+   - accent : "your value" (injected variables, active controls)
+   - warn   : "careful" (destructive commands, warnings)
+   Everything else is ink on paper.
+   ────────────────────────────────────────────────────────────── */
 :root {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    Helvetica, Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
-    "Liberation Mono", monospace;
-  /* Serif de lecture (vibe Anthropic/Claude) pour le contenu rendu. */
-  --font-serif: "Source Serif 4", Charter, "Iowan Old Style", Georgia,
-    "Times New Roman", serif;
+  --paper: #faf8f3;
+  --paper-2: #f1eee6;
+  --paper-3: #e7e3d8;
+  --ink: #1c1a16;
+  --ink-2: #57534a;
+  --ink-3: #8a857a;
+  --line: #d9d4c7;
+  --line-2: #c6c0b0;
+
+  --accent: #9a4a1c;
+  --accent-ink: #7a3812;
+  --accent-soft: #f3e3d6;
+
+  --warn: #9a6a00;
+  --warn-soft: #f6ecc8;
+
+  --ok: #2f6b3a;
+  --ok-soft: #dcebdd;
+
+  --code-bg: #f4f1ea;
+  --code-line: #e2ddd0;
+  --code-ink: #2a2722;
+  --code-muted: #9a958a;
+
+  --shadow: 0 1px 2px rgb(28 26 22 / 0.06), 0 8px 24px -12px rgb(28 26 22 / 0.18);
 }
 
+:root[data-theme="dark"] {
+  --paper: #161513;
+  --paper-2: #1d1c19;
+  --paper-3: #26241f;
+  --ink: #ebe6db;
+  --ink-2: #b3ada0;
+  --ink-3: #7d786d;
+  --line: #2f2d27;
+  --line-2: #3d3a32;
+
+  --accent: #e08a55;
+  --accent-ink: #f0a877;
+  --accent-soft: #3a2519;
+
+  --warn: #e0b64a;
+  --warn-soft: #3a3116;
+
+  --ok: #7fc48c;
+  --ok-soft: #1d3322;
+
+  --code-bg: #0f0e0c;
+  --code-line: #2a2823;
+  --code-ink: #e6e1d6;
+  --code-muted: #6d685e;
+
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px -12px rgb(0 0 0 / 0.6);
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-paper-2: var(--paper-2);
+  --color-paper-3: var(--paper-3);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-code-bg: var(--code-bg);
+  --color-code-line: var(--code-line);
+  --color-code-ink: var(--code-ink);
+  --color-code-muted: var(--code-muted);
+
+  --font-serif: var(--font-serif);
+  --font-display: var(--font-display);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  --shadow-soft: var(--shadow);
+}
+
+/* ── Base ──────────────────────────────────────────────────── */
 html {
-  scroll-behavior: smooth;
+  color-scheme: light;
+}
+html[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 body {
-  font-family: var(--font-sans);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: 17px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "kern", "liga", "onum";
 }
 
-.font-sans {
-  font-family: var(--font-sans);
+::selection {
+  background: var(--accent-soft);
+  color: var(--ink);
 }
+
+/* Code: Fira Code with ligatures on. */
+code,
+kbd,
+pre,
+samp,
 .font-mono {
   font-family: var(--font-mono);
+  font-feature-settings: "liga" 1, "calt" 1;
+  font-variant-ligatures: contextual;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  * {
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-  }
+/* ── Prose (tutorial body) ─────────────────────────────────── */
+.prose {
+  max-width: 68ch;
 }
-
-/* Mode Automatique (niveau 0) : on n'affiche que le bloc Ansible */
-.doc-body[data-level="0"] > :not(.automatic-block) {
-  display: none;
+.prose > * + * {
+  margin-top: 1em;
 }
-.doc-body:not([data-level="0"]) .automatic-block {
-  display: none;
-}
-
-/* ── Typo de lecture : le contenu rendu en serif (vibe Claude) ──
-   On garde le sans-serif pour toute l'UI (hors .doc-body) et le
-   monospace pour le code et les pastilles de variables. */
-.doc-body {
+.prose h2 {
   font-family: var(--font-serif);
+  font-weight: 600;
+  font-size: 1.45rem;
+  line-height: 1.25;
+  letter-spacing: -0.005em;
+  margin-top: 2.6em;
+  margin-bottom: 0.6em;
+  scroll-margin-top: 5rem;
 }
-.doc-body h1,
-.doc-body h2,
-.doc-body h3 {
-  font-family: var(--font-serif);
-  letter-spacing: -0.01em;
+.prose h3 {
+  font-weight: 600;
+  font-size: 1.15rem;
+  margin-top: 1.8em;
+  margin-bottom: 0.4em;
 }
-.doc-body p,
-.doc-body li {
-  font-size: 16px;
-  line-height: 1.7;
+.prose p {
+  text-wrap: pretty;
 }
-.doc-body code,
-.doc-body pre,
-.doc-body .font-mono,
-.doc-body [class*="font-mono"] {
-  font-family: var(--font-mono);
+.prose a {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-decoration-color: var(--line-2);
+  text-underline-offset: 3px;
 }
-
-/* Page sans mode automatique : message au lieu d'un écran vide au niveau 0. */
-.doc-body[data-level="0"]:not(:has(.automatic-block)) {
-  position: relative;
+.prose a:hover {
+  text-decoration-color: var(--accent);
 }
-.doc-body[data-level="0"]:not(:has(.automatic-block))::before {
-  content: "Ce tuto n'a pas de mode automatique — choisis Express, Détaillé ou Exhaustif en haut à droite.";
-  display: block;
+.prose strong {
+  font-weight: 600;
+}
+.prose ul,
+.prose ol {
+  padding-left: 1.4em;
+}
+.prose ul {
+  list-style: disc;
+}
+.prose ol {
+  list-style: decimal;
+}
+.prose li + li {
+  margin-top: 0.3em;
+}
+.prose :not(pre) > code {
+  font-size: 0.86em;
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.08em 0.35em;
+}
+.prose hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 2.5em 0;
+}
+.prose blockquote {
+  border-left: 2px solid var(--line-2);
+  padding-left: 1em;
+  color: var(--ink-2);
+  font-style: italic;
+}
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.94em;
+}
+.prose th,
+.prose td {
+  border-bottom: 1px solid var(--line);
+  padding: 0.45em 0.6em;
+  text-align: left;
+  vertical-align: top;
+}
+.prose th {
   font-family: var(--font-sans);
-  font-size: 14px;
-  color: #64748b;
-  background: #f8fafc;
-  border: 1px dashed #cbd5e1;
-  border-radius: 12px;
-  padding: 16px 18px;
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+}
+
+/* ── Tutorial body ─────────────────────────────────────────── */
+/* Steps are numbered by CSS so hidden (conditional) steps don't count. */
+.doc-body {
+  counter-reset: step;
+}
+.doc-body > h2::before {
+  counter-increment: step;
+  content: counter(step, decimal-leading-zero);
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-weight: 400;
+  font-size: 0.75em;
+  margin-right: 0.7em;
+  font-variant-numeric: tabular-nums;
+}
+/* Run level: only the <Run> block is visible. */
+.doc-body[data-level="run"] > *:not([data-run]) {
+  display: none;
+}
+
+/* ── UI chrome ─────────────────────────────────────────────── */
+.ui {
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+.label {
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+/* Injected variable token: text-only, no pill. */
+.token {
+  color: var(--accent-ink);
+  text-decoration: underline dotted;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 3px;
+  border-radius: 3px;
+  padding: 0 0.1em;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+.token:hover,
+.token[data-lit="true"] {
+  background: var(--accent-soft);
+  text-decoration-style: solid;
+}
+.token[data-flash="true"] {
+  background: var(--accent);
+  color: var(--paper);
+}
+
+/* Thin reading-progress line. */
+.progress-line {
+  height: 2px;
+  background: var(--accent);
+  transform-origin: left;
+}
+
+/* Focus ring, one rule for everything. */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
 }

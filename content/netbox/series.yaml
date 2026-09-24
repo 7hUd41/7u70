@@ -1,0 +1,12 @@
+title:
+  en: NetBox
+  fr: NetBox
+summary:
+  en: >-
+    NetBox is the source of truth for your network: devices, IPs, cables, circuits.
+    This series takes it from a blank server to something you maintain and automate against.
+  fr: >-
+    NetBox est la source de vérité de ton réseau : équipements, IP, câbles, circuits.
+    Cette série part d'un serveur vierge et va jusqu'au maintien et à l'automatisation.
+order:
+  - install-from-scratch

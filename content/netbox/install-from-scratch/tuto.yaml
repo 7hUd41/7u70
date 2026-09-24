@@ -1,0 +1,118 @@
+# Contract for this tutorial: language-independent.
+# Prose lives in page-en.mdx / page-fr.mdx and may only use what is declared here.
+
+title:
+  en: Install NetBox from scratch
+  fr: Installer NetBox de zéro
+summary:
+  en: >-
+    From a fresh Linux server to a NetBox instance behind HTTPS, ready for users.
+    PostgreSQL, Redis, NetBox itself, gunicorn, then the web server you choose.
+  fr: >-
+    D'un serveur Linux vierge à une instance NetBox derrière HTTPS, prête pour les utilisateurs.
+    PostgreSQL, Redis, NetBox lui-même, gunicorn, puis le serveur web de ton choix.
+difficulty: intermediate
+tags: [netbox, postgresql, redis, gunicorn, nginx, apache]
+authors: [thudal]
+created: 2026-09-24
+minutes: 45
+validated: NetBox 4.4 · Ubuntu 24.04
+
+groups:
+  - id: host
+    label: { en: Server, fr: Serveur }
+    desc: { en: Where NetBox runs and how it is reached., fr: Où tourne NetBox et comment on l'atteint. }
+  - id: db
+    label: { en: Database, fr: Base de données }
+  - id: auth
+    label: { en: Directory, fr: Annuaire }
+    desc: { en: Only used when LDAP is enabled., fr: Utilisé seulement si LDAP est activé. }
+
+vars:
+  - key: NETBOX_HOST
+    kind: hostname
+    group: host
+    default: netbox.example.com
+    label: { en: NetBox hostname, fr: Nom d'hôte de NetBox }
+    hint:
+      en: The name users type in their browser. Goes into ALLOWED_HOSTS and the web server config.
+      fr: Le nom que les utilisateurs tapent dans le navigateur. Va dans ALLOWED_HOSTS et la config du serveur web.
+    impact:
+      en: If it does not match the URL actually used, Django answers 400 Bad Request. Add several names separated by commas if needed.
+      fr: S'il ne correspond pas à l'URL réellement utilisée, Django répond 400 Bad Request. Plusieurs noms possibles, séparés par des virgules.
+  - key: INSTALL_DIR
+    kind: path
+    group: host
+    default: /opt/netbox
+    label: { en: Install directory, fr: Répertoire d'installation }
+    hint: { en: The official docs assume /opt/netbox., fr: La doc officielle suppose /opt/netbox. }
+    impact:
+      en: The systemd units, the upgrade script and the web server config all reference this path.
+      fr: Les unités systemd, le script d'upgrade et la config du serveur web y font tous référence.
+  - key: NETBOX_REF
+    kind: text
+    group: host
+    default: master
+    label: { en: NetBox git ref, fr: Référence git de NetBox }
+    hint:
+      en: master follows the latest stable release; pin a tag like v4.4.0 for reproducible installs.
+      fr: master suit la dernière version stable ; fixe un tag comme v4.4.0 pour une install reproductible.
+  - key: ADMIN_EMAIL
+    kind: email
+    group: host
+    default: admin@example.com
+    label: { en: Admin email, fr: Email administrateur }
+    hint: { en: Used by Let's Encrypt for expiry notices., fr: Utilisé par Let's Encrypt pour les alertes d'expiration. }
+  - key: DB_PASSWORD
+    kind: secret
+    group: db
+    default: ""
+    label: { en: PostgreSQL password, fr: Mot de passe PostgreSQL }
+    hint:
+      en: For the netbox database role. Generate a long random one; it only ever lives in configuration.py.
+      fr: Pour le rôle netbox de la base. Génère-en un long et aléatoire ; il ne vit que dans configuration.py.
+    impact:
+      en: Reused in configuration.py. A mismatch shows up as "password authentication failed" at the first migration.
+      fr: Réutilisé dans configuration.py. Une différence se voit comme « password authentication failed » à la première migration.
+  - key: LDAP_URI
+    kind: text
+    group: auth
+    default: ldaps://ad.example.com:636
+    label: { en: LDAP server URI, fr: URI du serveur LDAP }
+  - key: LDAP_BIND_DN
+    kind: text
+    group: auth
+    default: CN=netbox,OU=Service Accounts,DC=example,DC=com
+    label: { en: Bind DN, fr: DN de bind }
+  - key: LDAP_BASE_DN
+    kind: text
+    group: auth
+    default: DC=example,DC=com
+    label: { en: User search base, fr: Base de recherche utilisateurs }
+
+choices:
+  - key: OS
+    type: select
+    label: { en: Distribution, fr: Distribution }
+    default: ubuntu
+    options:
+      - { value: ubuntu, label: { en: Ubuntu 24.04, fr: Ubuntu 24.04 } }
+      - { value: rhel, label: { en: RHEL 9 / Rocky / Alma, fr: RHEL 9 / Rocky / Alma } }
+  - key: WEB
+    type: select
+    label: { en: Web server, fr: Serveur web }
+    default: nginx
+    options:
+      - { value: nginx, label: { en: nginx, fr: nginx } }
+      - { value: apache, label: { en: Apache, fr: Apache } }
+  - key: TLS
+    type: select
+    label: { en: Certificate, fr: Certificat }
+    default: selfsigned
+    options:
+      - { value: selfsigned, label: { en: Self-signed, fr: Auto-signé } }
+      - { value: letsencrypt, label: { en: Let's Encrypt, fr: Let's Encrypt } }
+  - key: LDAP
+    type: boolean
+    label: { en: Authenticate against LDAP / Active Directory, fr: Authentifier via LDAP / Active Directory }
+    default: false

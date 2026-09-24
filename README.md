@@ -1,114 +1,91 @@
-# Doc VPS adaptative (Next.js + MDX)
+# Adaptive tutorials
 
-Une doc technique où chaque commande se remplit avec la config de l'utilisateur,
-avec 3 niveaux de lecture (Express / Détaillé / Exhaustif).
+> Too lazy to read? **Run** the script.
+> It worked? Read **Quick** to see what it did.
+> Didn't get it? Read **Guided**.
+> Want to understand everything? Read **Deep**.
 
-## Lancer
+Technical guides that adapt to the reader. Fill in your context once (hostnames, paths, secrets, which OS, which web server) and every command on the page is rewritten for you. Pick how much you want to read. Export the result as a script.
+
+Working name. English and French are first-class: every tutorial exists in both.
+
+## Status
+
+Foundation, work in progress. First series: **NetBox** (install from scratch). Next: Kubernetes (a real deployment), then a NetDevOps lab (containerlab + NetBox + Nornir + CI).
+
+## Run it
 
 ```bash
 npm install
-npm run dev
+npm run dev        # http://localhost:3000
+npm test           # engine + content integrity
+npm run typecheck
+npm run lint
 ```
 
-Puis http://localhost:3000
+## How it works
 
-## Écrire un tuto
+```
+content/                       tutorials, one folder per page
+  <series>/
+    series.yaml                title, summary, reading order
+    <page>/
+      tuto.yaml                contract: variables, choices, metadata (language-independent)
+      page-en.mdx              prose, English
+      page-fr.mdx              prose, French
+src/
+  engine/                      pure TypeScript, no React: injection, conditions, validation,
+                               script assembly, danger detection, contract schema. Unit-tested.
+  content/                     loads and validates content/, compiles MDX. Integrity-tested.
+  reader/                      the reading UI: state, context panel, code blocks, levels.
+  i18n/                        UI strings (en, fr).
+  app/[locale]/                routes.
+```
 
-Les tutos sont des fichiers MDX dans `src/app/`. `src/app/page.mdx` est la page d'accueil.
-Pour une nouvelle page (ex. `/docker`), crée `src/app/docker/page.mdx`.
+### Writing a page
 
-### Variables injectables
+`tuto.yaml` declares what the reader can change. Prose may only use what is declared; the test suite enforces it.
 
-Dans un **bloc de commande**, écris `${SERVER_IP}`, `${SSH_PORT}`, etc. :
+```yaml
+vars:
+  - key: NETBOX_HOST
+    kind: hostname            # ip | cidr | port | hostname | domain | user | email | secret | path | url | text
+    group: host
+    default: netbox.example.com
+    label: { en: NetBox hostname, fr: Nom d'hôte de NetBox }
+    hint:  { en: …, fr: … }   # shown from Quick
+    impact: { en: …, fr: … }  # shown at Deep
+choices:
+  - key: WEB
+    type: select              # or boolean
+    options: [{ value: nginx, label: {…} }, { value: apache, label: {…} }]
+```
 
-    ```bash
-    ssh -p ${SSH_PORT} ${USERNAME}@${SERVER_IP}
-    ```
+In `page-<locale>.mdx`:
 
-Les valeurs viennent du panneau de config. Le bouton « Copier » copie la commande
-déjà remplie. Pour citer une variable **dans une phrase**, utilise `<V name="DOMAIN" />`.
+| Syntax | Meaning |
+|---|---|
+| `${NETBOX_HOST}` inside a code fence | replaced by the reader's value, copy button copies the filled command |
+| `<V name="NETBOX_HOST" />` | the same, inline in prose |
+| plain markdown | visible from **Quick** |
+| `<Guided>…</Guided>` | visible from **Guided** |
+| `<Deep>…</Deep>` | visible at **Deep** only |
+| `<Note>…</Note>` | aside, from Guided |
+| `<Warn>…</Warn>` | always visible, safety first |
+| `<When is="WEB" equals="nginx">…</When>` | conditional on a choice (`flag=`, `notFlag=`, `oneOf=` too) |
+| `<Run>…</Run>` | the only thing shown at **Run**: a script or playbook |
+| `<Check cmd="…" expect="…" />` | verification step with a checkbox, tracked per tutorial |
+| `## Heading` | a step: numbered automatically, listed in the outline |
 
-Pour ajouter/renommer une variable : édite `FIELDS` et `DEFAULTS` dans
-`src/components/doc-context.tsx`.
+Shell fences (` ```bash `) get a prompt, a copy button and feed the "Download install.sh" export. Other languages (` ```python `, ` ```yaml `) render as file excerpts.
 
-### Niveaux de lecture
+## Stack
 
-- texte normal en Markdown → toujours visible
-- `<Detailed>...</Detailed>` → visible à partir du niveau « Détaillé »
-- `<Full>...</Full>` → visible seulement au niveau « Exhaustif »
-- `<Note>...</Note>` → encadré info (dès « Détaillé »)
-- `<Warn>...</Warn>` → avertissement (toujours visible)
+Next.js 16 (App Router), React 19, MDX 3, Tailwind 4 (tokens only, no preset palette), Zod, Vitest. Fonts self-hosted: Fira Code (ligatures on), Libertinus (the maintained Linux Libertine).
 
-### Langages de bloc
+## Roadmap
 
-- ` ```bash ` → affiche le prompt `$` (commande shell)
-- ` ```ini `, ` ```nginx `, etc. → pas de prompt, montre un extrait de fichier
-
-## Structure
-
-- `src/app/layout.tsx` — enrobe les pages dans `<DocShell>`
-- `src/components/DocShell.tsx` — état (variables + niveau) + en-tête + panneau config
-- `src/components/CodeBlock.tsx` — bloc copiable + injection de variables
-- `src/components/Reading.tsx` — `<Detailed>`, `<Full>`, `<Note>`, `<Warn>`, `<V>`
-- `src/components/doc-context.tsx` — définition des variables et niveaux
-- `src/mdx-components.tsx` — mappe le Markdown vers ces composants
-
-## Nouveautés
-
-### Contenu conditionnel
-Montre/cache des sections selon les choix de l'utilisateur (panneau « Ta stack ») :
-
-    <When flag="HAS_DOMAIN">  ... </When>      <!-- si le toggle est ON -->
-    <When notFlag="HAS_DOMAIN"> ... </When>    <!-- si OFF -->
-    <When is="OS" equals="debian"> ... </When> <!-- si le select = debian -->
-
-Les choix se définissent dans `CHOICES` (`src/components/doc-context.tsx`).
-Mets des **lignes vides** autour du contenu Markdown à l'intérieur de `<When>`.
-
-### Mode Automatique (Ansible)
-Le niveau « Automatique » (avant Express) n'affiche que le bloc `<Automatic>...</Automatic>`,
-qui contient le playbook Ansible (avec injection de variables) + la commande pour le lancer.
-Le reste du tuto est masqué. Bouton « playbook.yml » pour le télécharger rempli.
-
-### Présets de serveurs
-Le panneau permet de créer/renommer/supprimer plusieurs configs (prod, staging, client…),
-de switcher, et d'exporter/importer en JSON. Tout est persisté en `localStorage`.
-
-### Tout copier / install.sh
-La barre d'outils assemble toutes les commandes shell **visibles** (donc en respectant
-tes toggles `<When>`) en un script `install.sh` téléchargeable, ou les copie d'un coup.
-
-### Éditeur dans la page (/editor)
-Va sur `/editor` (ou le bouton « Éditeur » en haut de la doc). Aperçu live à gauche,
-code MDX à droite. Le MDX est compilé **dans le navigateur** : l'aperçu est interactif
-(variables, toggles, niveaux fonctionnent). Le bouton « Télécharger .mdx » sort le fichier
-à déposer dans `src/app/(doc)/` (ou un sous-dossier `src/app/<slug>/page.mdx` pour une route).
-
-Structure des routes :
-- `src/app/(doc)/` — la doc (enveloppée dans `<DocShell>`), `/` = page d'accueil
-- `src/app/editor/` — l'éditeur (hors DocShell)
-
-### Éditeur — confort d'écriture (CodeMirror)
-Le volet code utilise CodeMirror 6 :
-- numéros de ligne
-- coloration de la syntaxe maison (variables ambre, composants violet, attributs vert, code cyan)
-- pliage par blocs logiques via la gouttière : titres `##`, composants `<When>`/`<Automatic>`, blocs ```` ``` ````
-- bouton « Syntaxe » : aide-mémoire ancré sous l'éditeur, couleurs alignées sur la coloration
-
-L'éditeur (`src/components/CodeEditor.tsx`) est chargé en client-only (`next/dynamic`, `ssr:false`).
-Le tokenizer maison et les règles de pliage sont définis dans ce même fichier.
-
-### Panneau de config adaptatif (par niveau de lecture)
-- **Automatique** : panneau latéral brut (champs + playbook).
-- **Express** : panneau latéral + une ligne d'aide (`hint`) sous chaque champ.
-- **Détaillé** : le panneau passe en haut de page, découpé en blocs d'architecture (`GROUPS`).
-- **Exhaustif** : mêmes blocs + l'impact précis de chaque variable (`impact`).
-
-Les `hint`, `impact` et `group` de chaque variable se définissent dans `FIELDS`
-(`src/components/doc-context.tsx`) ; les blocs dans `GROUPS`.
-
-### Édition inline des variables
-Cliquer une valeur surlignée n'importe où dans le tuto ouvre un mini-éditeur qui
-modifie la variable **partout** dans le document. Pratique pour corriger une coquille
-sans remonter au panneau. Le rendu sombre/clair des pastilles est géré par la prop
-`dark` de `Tokenized`.
+- In-place editor: edit a page in the browser, every save is a git commit, history visible in the UI.
+- Profiles: several contexts per tutorial (lab, staging, prod), export/import.
+- NetBox series: configure, maintain, automate.
+- Kubernetes series, NetDevOps lab series.

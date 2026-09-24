@@ -1,0 +1,456 @@
+{/* Première passe — à valider étape par étape contre docs.netbox.dev/installation avant publication. */}
+
+NetBox, c'est quatre pièces : une base PostgreSQL, un cache Redis, l'application Django servie par gunicorn, et un serveur web devant pour le HTTPS. On les installe dans cet ordre, en vérifiant chacune avant de passer à la suivante.
+
+<Run>
+
+Le script ci-dessous fait toutes les étapes de cette page pour **<V name="NETBOX_HOST" />**, avec tes choix appliqués. Lance-le en sudoer sur un serveur vierge, puis ouvre l'URL qu'il affiche.
+
+<When is="OS" equals="ubuntu">
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# NetBox — installation sans intervention sur Ubuntu. Généré pour ${NETBOX_HOST}.
+export DEBIAN_FRONTEND=noninteractive
+sudo apt update && sudo apt install -y postgresql redis-server git \
+  python3 python3-pip python3-venv python3-dev build-essential \
+  libxml2-dev libxslt1-dev libffi-dev libpq-dev libssl-dev zlib1g-dev
+sudo -u postgres psql -c "CREATE DATABASE netbox;"
+sudo -u postgres psql -c "CREATE USER netbox WITH PASSWORD '${DB_PASSWORD}';"
+sudo -u postgres psql -c "ALTER DATABASE netbox OWNER TO netbox;"
+sudo -u postgres psql -d netbox -c "GRANT CREATE ON SCHEMA public TO netbox;"
+sudo mkdir -p ${INSTALL_DIR}
+sudo git clone -b ${NETBOX_REF} --depth 1 https://github.com/netbox-community/netbox.git ${INSTALL_DIR}
+sudo adduser --system --group netbox
+sudo chown --recursive netbox ${INSTALL_DIR}/netbox/media/ ${INSTALL_DIR}/netbox/reports/ ${INSTALL_DIR}/netbox/scripts/
+SECRET_KEY=$(python3 ${INSTALL_DIR}/netbox/generate_secret_key.py)
+sudo tee ${INSTALL_DIR}/netbox/netbox/configuration.py >/dev/null <<EOF
+ALLOWED_HOSTS = ['${NETBOX_HOST}']
+DATABASES = {'default': {'ENGINE': 'django.db.backends.postgresql', 'NAME': 'netbox', 'USER': 'netbox', 'PASSWORD': '${DB_PASSWORD}', 'HOST': 'localhost', 'PORT': '', 'CONN_MAX_AGE': 300}}
+REDIS = {'tasks': {'HOST': 'localhost', 'PORT': 6379, 'PASSWORD': '', 'DATABASE': 0, 'SSL': False},
+         'caching': {'HOST': 'localhost', 'PORT': 6379, 'PASSWORD': '', 'DATABASE': 1, 'SSL': False}}
+SECRET_KEY = '$SECRET_KEY'
+EOF
+sudo ${INSTALL_DIR}/upgrade.sh
+sudo cp ${INSTALL_DIR}/contrib/gunicorn.py ${INSTALL_DIR}/gunicorn.py
+sudo cp -v ${INSTALL_DIR}/contrib/*.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now netbox netbox-rq
+echo "NetBox tourne. Crée le premier admin : sudo ${INSTALL_DIR}/venv/bin/python ${INSTALL_DIR}/netbox/manage.py createsuperuser"
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# NetBox — installation sans intervention sur RHEL 9. Généré pour ${NETBOX_HOST}.
+sudo dnf install -y postgresql-server redis git python3 python3-pip python3-devel gcc \
+  libxml2-devel libxslt-devel libffi-devel libpq-devel openssl-devel redhat-rpm-config
+sudo postgresql-setup --initdb
+sudo systemctl enable --now postgresql redis
+sudo -u postgres psql -c "CREATE DATABASE netbox;"
+sudo -u postgres psql -c "CREATE USER netbox WITH PASSWORD '${DB_PASSWORD}';"
+sudo -u postgres psql -c "ALTER DATABASE netbox OWNER TO netbox;"
+sudo -u postgres psql -d netbox -c "GRANT CREATE ON SCHEMA public TO netbox;"
+sudo mkdir -p ${INSTALL_DIR}
+sudo git clone -b ${NETBOX_REF} --depth 1 https://github.com/netbox-community/netbox.git ${INSTALL_DIR}
+sudo groupadd --system netbox && sudo adduser --system -g netbox netbox
+sudo chown --recursive netbox ${INSTALL_DIR}/netbox/media/ ${INSTALL_DIR}/netbox/reports/ ${INSTALL_DIR}/netbox/scripts/
+SECRET_KEY=$(python3 ${INSTALL_DIR}/netbox/generate_secret_key.py)
+sudo tee ${INSTALL_DIR}/netbox/netbox/configuration.py >/dev/null <<EOF
+ALLOWED_HOSTS = ['${NETBOX_HOST}']
+DATABASES = {'default': {'ENGINE': 'django.db.backends.postgresql', 'NAME': 'netbox', 'USER': 'netbox', 'PASSWORD': '${DB_PASSWORD}', 'HOST': 'localhost', 'PORT': '', 'CONN_MAX_AGE': 300}}
+REDIS = {'tasks': {'HOST': 'localhost', 'PORT': 6379, 'PASSWORD': '', 'DATABASE': 0, 'SSL': False},
+         'caching': {'HOST': 'localhost', 'PORT': 6379, 'PASSWORD': '', 'DATABASE': 1, 'SSL': False}}
+SECRET_KEY = '$SECRET_KEY'
+EOF
+sudo ${INSTALL_DIR}/upgrade.sh
+sudo cp ${INSTALL_DIR}/contrib/gunicorn.py ${INSTALL_DIR}/gunicorn.py
+sudo cp -v ${INSTALL_DIR}/contrib/*.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now netbox netbox-rq
+echo "NetBox tourne. Crée le premier admin : sudo ${INSTALL_DIR}/venv/bin/python ${INSTALL_DIR}/netbox/manage.py createsuperuser"
+```
+
+</When>
+
+<Warn>Le script s'arrête avant le serveur web et le TLS. Ces deux étapes dépendent de ton DNS et de ta situation côté certificat ; fais-les depuis le niveau Express une fois que NetBox répond sur le port 8001.</Warn>
+
+</Run>
+
+## Avant de commencer
+
+<Guided>Il te faut un serveur avec au moins 2 vCPU, 4 Go de RAM et 20 Go de disque, un compte sudo, et le nom **<V name="NETBOX_HOST" />** qui pointe dessus. NetBox 4.x demande Python 3.10 ou plus, PostgreSQL 14 ou plus et Redis 4.0 ou plus ; les paquets ci-dessous conviennent.</Guided>
+
+<Deep>Tout tourne ici sur une seule machine. C'est le bon point de départ : NetBox est peu gourmand, et sortir PostgreSQL ou Redis sur leurs propres hôtes plus tard, c'est deux lignes de `configuration.py`, pas une réinstallation. La seule chose à décider maintenant, c'est le répertoire d'installation, parce que les unités systemd, le script d'upgrade et la configuration du serveur web le codent en dur.</Deep>
+
+<When is="OS" equals="ubuntu">
+
+```bash
+sudo apt update && sudo apt upgrade -y
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+sudo dnf upgrade -y
+```
+
+</When>
+
+## PostgreSQL
+
+<Guided>NetBox stocke tout dans PostgreSQL, et uniquement PostgreSQL : MySQL et MariaDB ne sont pas supportés. On l'installe, on crée une base et un rôle dédiés, et on donne la base au rôle.</Guided>
+
+<When is="OS" equals="ubuntu">
+
+```bash
+sudo apt install -y postgresql
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+sudo dnf install -y postgresql-server
+sudo postgresql-setup --initdb
+sudo systemctl enable --now postgresql
+```
+
+<Note>RHEL livre PostgreSQL avec une authentification `ident` pour les connexions locales. NetBox se connecte en TCP avec un mot de passe : vérifie que `/var/lib/pgsql/data/pg_hba.conf` contient une ligne `host … md5` ou `scram-sha-256` pour `127.0.0.1/32`, puis recharge le service.</Note>
+
+</When>
+
+<Check cmd="psql --version" expect="psql (PostgreSQL) 16.x" />
+
+Crée la base et son propriétaire :
+
+```bash
+sudo -u postgres psql -c "CREATE DATABASE netbox;"
+sudo -u postgres psql -c "CREATE USER netbox WITH PASSWORD '${DB_PASSWORD}';"
+sudo -u postgres psql -c "ALTER DATABASE netbox OWNER TO netbox;"
+sudo -u postgres psql -d netbox -c "GRANT CREATE ON SCHEMA public TO netbox;"
+```
+
+<Deep>Le dernier `GRANT` compte depuis PostgreSQL 15 : le schéma `public` n'est plus inscriptible par tous les rôles, donc sans lui la première migration échoue avec « permission denied for schema public ». Posséder la base ne suffit pas, le schéma est un objet à part.</Deep>
+
+<Check cmd="psql --username netbox --password --host localhost netbox -c '\conninfo'" expect='You are connected to database "netbox" as user "netbox" on host "localhost"' />
+
+## Redis
+
+<Guided>Redis tient deux choses : la file des tâches de fond (webhooks, scripts, rapports) et le cache. Les deux utilisent le même serveur, sur des numéros de base différents.</Guided>
+
+<When is="OS" equals="ubuntu">
+
+```bash
+sudo apt install -y redis-server
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+sudo dnf install -y redis
+sudo systemctl enable --now redis
+```
+
+</When>
+
+<Check cmd="redis-cli ping" expect="PONG" />
+
+<Deep>Redis n'écoute que sur localhost par défaut, sans mot de passe, ce qui convient tant que NetBox est sur le même hôte. Si tu déplaces Redis plus tard, mets un mot de passe et remplis les clés `PASSWORD` du bloc `REDIS` de `configuration.py`.</Deep>
+
+## Installer NetBox
+
+<Guided>NetBox est une application Python. On installe les dépendances de compilation, on récupère le code dans <V name="INSTALL_DIR" />, on crée un utilisateur système pour le faire tourner, et on lui confie les dossiers dans lesquels il écrit.</Guided>
+
+<When is="OS" equals="ubuntu">
+
+```bash
+sudo apt install -y git python3 python3-pip python3-venv python3-dev build-essential \
+  libxml2-dev libxslt1-dev libffi-dev libpq-dev libssl-dev zlib1g-dev
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+sudo dnf install -y git python3 python3-pip python3-devel gcc \
+  libxml2-devel libxslt-devel libffi-devel libpq-devel openssl-devel redhat-rpm-config
+```
+
+</When>
+
+<Check cmd="python3 -V" expect="Python 3.12.x" />
+
+```bash
+sudo mkdir -p ${INSTALL_DIR}
+sudo git clone -b ${NETBOX_REF} --depth 1 https://github.com/netbox-community/netbox.git ${INSTALL_DIR}
+```
+
+<Deep>Cloner plutôt que télécharger une archive de release, c'est ce qui fait qu'une mise à jour tient en un `git checkout`. La branche `master` pointe toujours sur la dernière version stable ; un tag comme `v4.4.0` en fige une. Les deux conviennent, figer est simplement plus reproductible.</Deep>
+
+<When is="OS" equals="ubuntu">
+
+```bash
+sudo adduser --system --group netbox
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+sudo groupadd --system netbox
+sudo adduser --system -g netbox netbox
+```
+
+</When>
+
+```bash
+sudo chown --recursive netbox ${INSTALL_DIR}/netbox/media/ ${INSTALL_DIR}/netbox/reports/ ${INSTALL_DIR}/netbox/scripts/
+```
+
+<Note>Seuls ces trois dossiers doivent être inscriptibles par l'utilisateur `netbox`. Le reste de l'arborescence reste à root, ce qu'on veut pour une application exposée au réseau.</Note>
+
+## Configuration
+
+<Guided>Un seul fichier, <V name="INSTALL_DIR" />`/netbox/netbox/configuration.py`, contient tout ce qui est propre à ton instance. On part de l'exemple et on renseigne les quatre valeurs obligatoires : noms d'hôte autorisés, base de données, Redis, clé secrète.</Guided>
+
+```bash
+sudo cp ${INSTALL_DIR}/netbox/netbox/configuration_example.py ${INSTALL_DIR}/netbox/netbox/configuration.py
+python3 ${INSTALL_DIR}/netbox/generate_secret_key.py
+```
+
+Édite `configuration.py` et renseigne ces valeurs (colle la clé affichée ci-dessus dans `SECRET_KEY`) :
+
+```python
+ALLOWED_HOSTS = ['${NETBOX_HOST}']
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'netbox',
+        'USER': 'netbox',
+        'PASSWORD': '${DB_PASSWORD}',
+        'HOST': 'localhost',
+        'PORT': '',
+        'CONN_MAX_AGE': 300,
+    }
+}
+
+REDIS = {
+    'tasks':   {'HOST': 'localhost', 'PORT': 6379, 'PASSWORD': '', 'DATABASE': 0, 'SSL': False},
+    'caching': {'HOST': 'localhost', 'PORT': 6379, 'PASSWORD': '', 'DATABASE': 1, 'SSL': False},
+}
+
+SECRET_KEY = 'colle-la-cle-generee-ici'
+```
+
+<Deep>`SECRET_KEY` signe les sessions et les jetons de réinitialisation de mot de passe. Elle doit faire au moins 50 caractères, être propre à cette instance, et identique sur chaque nœud si tu en fais tourner plusieurs un jour. Ce n'est *pas* un mot de passe que tu tapes quelque part, et la changer déconnecte tout le monde. `ALLOWED_HOSTS` est la défense de Django contre les attaques par en-tête Host : tout nom absent de la liste reçoit un 400.</Deep>
+
+<When flag="LDAP">
+
+### Authentification LDAP
+
+<Guided>NetBox délègue l'authentification à ton annuaire via `django-auth-ldap`. C'est un paquet supplémentaire, listé dans `local_requirements.txt` pour que les mises à jour le conservent, plus un fichier de configuration dédié.</Guided>
+
+<When is="OS" equals="ubuntu">
+
+```bash
+sudo apt install -y libldap2-dev libsasl2-dev libssl-dev
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+sudo dnf install -y openldap-devel
+```
+
+</When>
+
+```bash
+sudo sh -c "echo 'django-auth-ldap' >> ${INSTALL_DIR}/local_requirements.txt"
+```
+
+Ajoute dans `configuration.py` :
+
+```python
+REMOTE_AUTH_BACKEND = 'netbox.authentication.LDAPBackend'
+```
+
+Puis crée <V name="INSTALL_DIR" />`/netbox/netbox/ldap_config.py` :
+
+```python
+import ldap
+from django_auth_ldap.config import LDAPSearch
+
+AUTH_LDAP_SERVER_URI = '${LDAP_URI}'
+AUTH_LDAP_BIND_DN = '${LDAP_BIND_DN}'
+AUTH_LDAP_BIND_PASSWORD = 'mot-de-passe-du-compte-de-bind'
+AUTH_LDAP_USER_SEARCH = LDAPSearch('${LDAP_BASE_DN}', ldap.SCOPE_SUBTREE, '(sAMAccountName=%(user)s)')
+AUTH_LDAP_USER_ATTR_MAP = {'first_name': 'givenName', 'last_name': 'sn', 'email': 'mail'}
+```
+
+<Deep>Le filtre ci-dessus est celui d'Active Directory. Pour OpenLDAP, utilise `(uid=%(user)s)`. Le mapping groupes → permissions (`AUTH_LDAP_USER_FLAGS_BY_GROUP`) vaut aussi le coup, sinon chaque utilisateur de l'annuaire arrive dans NetBox sans aucun droit ; c'est un tuto ultérieur de cette série.</Deep>
+
+</When>
+
+## Lancer le script d'upgrade
+
+<Guided>`upgrade.sh` est l'installeur de NetBox lui-même : il crée l'environnement virtuel Python, installe les dépendances, applique les migrations de base et collecte les fichiers statiques. Le même script sert à chaque mise à jour future.</Guided>
+
+```bash
+sudo ${INSTALL_DIR}/upgrade.sh
+```
+
+<Check cmd="sudo ${INSTALL_DIR}/venv/bin/python ${INSTALL_DIR}/netbox/manage.py check" expect="System check identified no issues" />
+
+Crée le premier administrateur :
+
+```bash
+sudo ${INSTALL_DIR}/venv/bin/python ${INSTALL_DIR}/netbox/manage.py createsuperuser
+```
+
+<Guided>Planifie la tâche d'entretien, qui purge une fois par jour les anciens enregistrements de changement et les sessions expirées :</Guided>
+
+```bash
+sudo ln -s ${INSTALL_DIR}/contrib/netbox-housekeeping.sh /etc/cron.daily/netbox-housekeeping
+```
+
+## gunicorn et systemd
+
+<Guided>Django ne sert pas le HTTP en production ; c'est gunicorn qui s'en charge, comme service systemd. Un second service, `netbox-rq`, fait tourner les workers de fond.</Guided>
+
+```bash
+sudo cp ${INSTALL_DIR}/contrib/gunicorn.py ${INSTALL_DIR}/gunicorn.py
+sudo cp -v ${INSTALL_DIR}/contrib/*.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now netbox netbox-rq
+```
+
+<Deep>Le `gunicorn.py` livré écoute sur `127.0.0.1:8001` avec cinq workers, ce qui convient pour quelques centaines d'utilisateurs. Si tu as changé le répertoire d'installation, ouvre les deux fichiers d'unité et corrige les chemins : ils supposent `/opt/netbox`.</Deep>
+
+<Check cmd="systemctl is-active netbox netbox-rq" expect="active
+active" />
+
+<Check cmd="curl -sI http://127.0.0.1:8001/ | head -1" expect="HTTP/1.1 200 OK" />
+
+## Serveur web et HTTPS
+
+<Guided>gunicorn n'écoute que sur localhost. Le serveur web prend la connexion HTTPS de l'utilisateur, sert lui-même les fichiers statiques et relaie le reste à gunicorn.</Guided>
+
+<When is="TLS" equals="selfsigned">
+
+```bash
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/ssl/private/netbox.key -out /etc/ssl/certs/netbox.crt \
+  -subj "/CN=${NETBOX_HOST}"
+```
+
+<Note>Un certificat auto-signé suffit pour un lab ; les navigateurs avertiront une fois. Pour tout ce que des utilisateurs touchent, passe le choix Certificat sur Let's Encrypt.</Note>
+
+</When>
+
+<When is="TLS" equals="letsencrypt">
+
+<Guided>Let's Encrypt a besoin du port 80 joignable depuis internet et de <V name="NETBOX_HOST" /> qui pointe vers ce serveur. Certbot s'occupe de l'émission et du renouvellement.</Guided>
+
+<When is="OS" equals="ubuntu">
+
+```bash
+sudo apt install -y certbot
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+sudo dnf install -y certbot
+```
+
+</When>
+
+```bash
+sudo certbot certonly --standalone -d ${NETBOX_HOST} -m ${ADMIN_EMAIL} --agree-tos --non-interactive
+sudo ln -sf /etc/letsencrypt/live/${NETBOX_HOST}/fullchain.pem /etc/ssl/certs/netbox.crt
+sudo ln -sf /etc/letsencrypt/live/${NETBOX_HOST}/privkey.pem /etc/ssl/private/netbox.key
+```
+
+</When>
+
+<When is="WEB" equals="nginx">
+
+<When is="OS" equals="ubuntu">
+
+```bash
+sudo apt install -y nginx
+sudo cp ${INSTALL_DIR}/contrib/nginx.conf /etc/nginx/sites-available/netbox
+sudo sed -i 's/netbox.example.com/${NETBOX_HOST}/' /etc/nginx/sites-available/netbox
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo ln -sf /etc/nginx/sites-available/netbox /etc/nginx/sites-enabled/netbox
+sudo nginx -t && sudo systemctl restart nginx
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+sudo dnf install -y nginx
+sudo cp ${INSTALL_DIR}/contrib/nginx.conf /etc/nginx/conf.d/netbox.conf
+sudo sed -i 's/netbox.example.com/${NETBOX_HOST}/' /etc/nginx/conf.d/netbox.conf
+sudo nginx -t && sudo systemctl enable --now nginx
+```
+
+</When>
+
+<Deep>La configuration livrée redirige HTTP vers HTTPS, sert <V name="INSTALL_DIR" />`/netbox/static/` directement et relaie tout le reste à `127.0.0.1:8001`. Elle fixe aussi `client_max_body_size 25m`, ce qui permet les pièces jointes images.</Deep>
+
+</When>
+
+<When is="WEB" equals="apache">
+
+<When is="OS" equals="ubuntu">
+
+```bash
+sudo apt install -y apache2
+sudo cp ${INSTALL_DIR}/contrib/apache.conf /etc/apache2/sites-available/netbox.conf
+sudo sed -i 's/netbox.example.com/${NETBOX_HOST}/' /etc/apache2/sites-available/netbox.conf
+sudo a2enmod ssl proxy proxy_http headers rewrite
+sudo a2ensite netbox
+sudo systemctl restart apache2
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+sudo dnf install -y httpd mod_ssl
+sudo cp ${INSTALL_DIR}/contrib/apache.conf /etc/httpd/conf.d/netbox.conf
+sudo sed -i 's/netbox.example.com/${NETBOX_HOST}/' /etc/httpd/conf.d/netbox.conf
+sudo systemctl enable --now httpd
+```
+
+</When>
+
+<Deep>La configuration Apache s'appuie sur `mod_proxy` pour gunicorn et `mod_headers` pour transmettre le `Host` d'origine. Sans ce dernier, Django voit `127.0.0.1` comme hôte et rejette la requête avec un 400, puisqu'il n'est pas dans `ALLOWED_HOSTS`.</Deep>
+
+</When>
+
+<Check cmd="curl -skI https://${NETBOX_HOST}/ | head -1" expect="HTTP/2 200" />
+
+## Terminé
+
+Ouvre **https://<V name="NETBOX_HOST" />/** et connecte-toi avec l'administrateur créé. La page suivante de cette série ajoute utilisateurs et permissions, plugins et les réglages que tu voudras avant d'ouvrir NetBox à ton équipe.
