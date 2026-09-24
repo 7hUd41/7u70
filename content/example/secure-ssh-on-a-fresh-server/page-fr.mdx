@@ -1,0 +1,314 @@
+{/* Page de référence. Chaque fonctionnalité d'écriture y apparaît au moins une fois ; à maintenir quand on en ajoute. */}
+
+Un serveur qui sort de chez l'hébergeur répond à `root` avec un mot de passe, sur le port 22, à tout internet. Dans l'heure, des robots essaient des mots de passe. Cette page ferme ces portes en cinq étapes, chacune vérifiée avant la suivante.
+
+<Run>
+
+Le script fait toutes les étapes pour **<V name="SERVER_IP" />**. Lance-le **sur le serveur**, en root, juste après la livraison, ta clé publique déjà dans `/root/.ssh/authorized_keys`.
+
+<When is="OS" equals="debian">
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Sécuriser SSH — ${SERVER_IP} (Debian/Ubuntu)
+adduser --disabled-password --gecos "" ${USERNAME}
+usermod -aG sudo ${USERNAME}
+rsync --archive --chown=${USERNAME}:${USERNAME} ~/.ssh /home/${USERNAME}
+cat > /etc/ssh/sshd_config.d/99-hardening.conf <<EOF
+Port ${SSH_PORT}
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+EOF
+apt-get update && apt-get install -y ufw
+ufw allow ${SSH_PORT}/tcp
+ufw --force enable
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Sécuriser SSH — ${SERVER_IP} (famille RHEL)
+useradd -m ${USERNAME}
+usermod -aG wheel ${USERNAME}
+rsync --archive --chown=${USERNAME}:${USERNAME} ~/.ssh /home/${USERNAME}
+cat > /etc/ssh/sshd_config.d/99-hardening.conf <<EOF
+Port ${SSH_PORT}
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+EOF
+semanage port -a -t ssh_port_t -p tcp ${SSH_PORT} || semanage port -m -t ssh_port_t -p tcp ${SSH_PORT}
+firewall-cmd --permanent --add-port=${SSH_PORT}/tcp
+firewall-cmd --permanent --remove-service=ssh
+firewall-cmd --reload
+```
+
+</When>
+
+<When flag="FAIL2BAN">
+
+<When is="OS" equals="debian">
+
+```bash
+apt-get install -y fail2ban
+printf '[sshd]\nenabled = true\nport = ${SSH_PORT}\nmaxretry = 3\nbantime = 1h\n' > /etc/fail2ban/jail.d/sshd.local
+systemctl enable --now fail2ban
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+dnf install -y epel-release && dnf install -y fail2ban
+printf '[sshd]\nenabled = true\nport = ${SSH_PORT}\nmaxretry = 3\nbantime = 1h\n' > /etc/fail2ban/jail.d/sshd.local
+systemctl enable --now fail2ban
+```
+
+</When>
+
+</When>
+
+```bash
+sshd -t && systemctl restart ssh 2>/dev/null || systemctl restart sshd
+echo "Terminé. Depuis ta machine : ssh -p ${SSH_PORT} ${USERNAME}@${SERVER_IP}"
+```
+
+<Warn>Garde ta session root actuelle ouverte tant que tu ne t'es pas connecté avec le nouvel utilisateur sur le nouveau port depuis un second terminal.</Warn>
+
+</Run>
+
+## Avant de commencer
+
+<Guided>Il te faut l'IP du serveur, l'accès root (mot de passe ou clé, tel que livré), et une paire de clés SSH sur **ta** machine. Si tu n'en as jamais fait :</Guided>
+
+```bash
+ssh-keygen -t ed25519 -C "${USERNAME}@laptop"
+```
+
+<Deep>Les clés Ed25519 sont courtes, rapides et n'ont aucun paramètre faible à mal choisir, c'est pourquoi tous les guides actuels les préfèrent à RSA. Le commentaire après `-C` est du texte libre ; il sert seulement à reconnaître la clé dans `authorized_keys` plus tard.</Deep>
+
+<Check cmd="cat ~/.ssh/id_ed25519.pub" expect="ssh-ed25519 AAAA… ${USERNAME}@laptop" />
+
+| Quoi | Avant | Après cette page |
+|---|---|---|
+| Qui peut se connecter | `root`, quiconque a le mot de passe | <V name="USERNAME" />, avec une clé |
+| Port | 22 | <V name="SSH_PORT" /> |
+| Mots de passe faux | illimités | <When flag="FAIL2BAN">3, puis banni une heure</When><When notFlag="FAIL2BAN">les mots de passe sont refusés de toute façon</When> |
+
+## Créer ton propre utilisateur
+
+<Guided>Travailler en `root` toute la journée, c'est comme ça qu'une faute de frappe efface un serveur. On crée un compte de tous les jours, on lui donne `sudo`, et on copie la clé autorisée de root pour qu'il puisse se connecter tout de suite.</Guided>
+
+<When is="OS" equals="debian">
+
+```bash
+ssh root@${SERVER_IP}
+adduser ${USERNAME}
+usermod -aG sudo ${USERNAME}
+rsync --archive --chown=${USERNAME}:${USERNAME} ~/.ssh /home/${USERNAME}
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+ssh root@${SERVER_IP}
+useradd -m ${USERNAME} && passwd ${USERNAME}
+usermod -aG wheel ${USERNAME}
+rsync --archive --chown=${USERNAME}:${USERNAME} ~/.ssh /home/${USERNAME}
+```
+
+<Note>Dans la famille RHEL, le groupe sudo s'appelle `wheel`, pas `sudo`.</Note>
+
+</When>
+
+<Deep>`rsync --archive --chown` copie `~/.ssh` avec ses permissions intactes et le confie au nouvel utilisateur en une fois. Les permissions comptent : SSH refuse un fichier de clé lisible par d'autres, silencieusement, et tu te demanderais pourquoi la clé « ne marche pas ».</Deep>
+
+<Check cmd="ssh ${USERNAME}@${SERVER_IP} sudo -n true && echo OK" expect="OK" />
+
+<Details summary="Si sudo demande un mot de passe">
+Debian et Ubuntu n'accordent le sudo sans mot de passe à personne par défaut ; `sudo -n` échoue alors. Soit tu tapes le mot de passe (très bien), soit tu autorises le groupe sans mot de passe :
+
+```bash
+echo '%sudo ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/90-sudo-nopasswd
+```
+
+Fais-le seulement si le compte est protégé par une clé, ce que l'étape suivante impose.
+</Details>
+
+## Durcir le démon SSH
+
+<Guided>Trois réglages font l'essentiel du travail : un nouveau port, pas de connexion root, clés uniquement. Ils vont dans un fichier complémentaire, pour que le `sshd_config` de la distribution reste intact lors des mises à jour.</Guided>
+
+<Annotated>
+
+```ini title="/etc/ssh/sshd_config.d/99-hardening.conf" {1-3}
+Port ${SSH_PORT}                       # (1)
+PermitRootLogin no                     # (2)
+PasswordAuthentication no              # (3)
+KbdInteractiveAuthentication no        # (4)
+```
+
+1. Quitter le port 22 ne rend pas SSH plus sûr en soi, mais ça supprime presque toutes les tentatives automatisées, ce qui garde les logs lisibles et fail2ban silencieux.
+2. Root ne peut plus se connecter du tout, même avec une clé. L'élévation passe par `sudo` depuis ton propre compte, ce qui laisse une trace.
+3. Seules les clés sont acceptées. Un mot de passe, aussi long soit-il, se devine ; une clé de 256 bits, non.
+4. Ferme la seconde porte des mots de passe : keyboard-interactive est ce que PAM utilise pour demander un mot de passe même quand `PasswordAuthentication` est désactivé.
+
+</Annotated>
+
+<Deep>Les fichiers de `sshd_config.d/` sont lus **avant** le fichier principal, et dans `sshd_config` la première valeur gagne : c'est pour ça qu'un fichier complémentaire peut surcharger les défauts. Le préfixe `99-` est une convention, pas un ordre : garde un fichier par sujet.</Deep>
+
+<Warn>Ne redémarre pas SSH tout de suite. Le pare-feu doit d'abord accepter le port <V name="SSH_PORT" />, sinon le redémarrage te coupe.</Warn>
+
+<Check cmd="sudo sshd -t && echo syntax OK" expect="syntax OK" />
+
+## Pare-feu
+
+<Guided>Seul le nouveau port SSH reste ouvert. Tout ce que tu hébergeras plus tard (80, 443…) s'ajoute au moment où tu l'héberges.</Guided>
+
+<When is="OS" equals="debian">
+
+```bash
+sudo apt install -y ufw
+sudo ufw allow ${SSH_PORT}/tcp
+sudo ufw enable
+```
+
+<Check cmd="sudo ufw status" expect="Status: active
+${SSH_PORT}/tcp                  ALLOW       Anywhere" />
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+sudo semanage port -a -t ssh_port_t -p tcp ${SSH_PORT}
+sudo firewall-cmd --permanent --add-port=${SSH_PORT}/tcp
+sudo firewall-cmd --permanent --remove-service=ssh
+sudo firewall-cmd --reload
+```
+
+<Deep>SELinux ne laisse `sshd` écouter que sur les ports étiquetés `ssh_port_t` ; sans la ligne `semanage`, le démon démarre, journalise un refus, et continue d'écouter sur 22 seulement. `firewalld` est livré avec le service `ssh` (port 22) autorisé : on le retire puisque 22 va fermer.</Deep>
+
+<Check cmd="sudo firewall-cmd --list-ports" expect="${SSH_PORT}/tcp" />
+
+</When>
+
+Redémarre maintenant SSH et, **depuis un second terminal**, connecte-toi sur le nouveau port :
+
+<When is="OS" equals="debian">
+
+```bash
+sudo systemctl restart ssh
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+sudo systemctl restart sshd
+```
+
+</When>
+
+<Check cmd="ssh -p ${SSH_PORT} ${USERNAME}@${SERVER_IP} echo connected" expect="connected" />
+
+<Details summary="Si la nouvelle connexion échoue">
+Ton premier terminal est toujours connecté : rien n'est perdu. Par ordre de probabilité :
+
+- Le pare-feu ne liste pas <V name="SSH_PORT" /> : refais l'étape pare-feu.
+- `sshd -t` signale une erreur : corrige le fichier complémentaire, redémarre à nouveau.
+- L'hébergeur a son propre pare-feu réseau devant le serveur (courant chez OVH, Hetzner, les clouds) : ouvre le port là aussi.
+- Tu testes depuis le premier terminal par erreur : ouvres-en un nouveau.
+</Details>
+
+<When flag="FAIL2BAN">
+
+## Bannir le brute force
+
+<Guided>Sans mots de passe, deviner ne sert à rien, mais les robots martèlent quand même le port. fail2ban lit le journal et bannit une adresse après quelques échecs, ce qui garde le bruit hors de tes logs et de ton CPU.</Guided>
+
+<When is="OS" equals="debian">
+
+```bash
+sudo apt install -y fail2ban
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+sudo dnf install -y epel-release
+sudo dnf install -y fail2ban
+```
+
+</When>
+
+<Tabs group="fail2ban-files">
+
+<Tab label="jail.d/sshd.local">
+
+```ini title="/etc/fail2ban/jail.d/sshd.local"
+[sshd]
+enabled = true
+port = ${SSH_PORT}
+maxretry = 3
+bantime = 1h
+```
+
+</Tab>
+
+<Tab label="jail.d/defaults.local">
+
+Réglages par défaut, appliqués à toutes les jails :
+
+```ini title="/etc/fail2ban/jail.d/defaults.local" {3}
+[DEFAULT]
+bantime.increment = true
+ignoreip = 127.0.0.1/8 ${SERVER_IP}
+findtime = 10m
+```
+
+</Tab>
+
+</Tabs>
+
+```bash
+sudo systemctl enable --now fail2ban
+```
+
+<Check cmd="sudo fail2ban-client status sshd | head -3" expect="Status for the jail: sshd
+|- Filter
+|  |- Currently failed: 0" />
+
+<Details summary="Si tu te bannis toi-même">
+Trois fautes de frappe d'affilée depuis ta propre adresse et tu es dehors pour une heure. Depuis une autre adresse (partage de connexion du téléphone, console de l'hébergeur), débannis-toi :
+
+```bash
+sudo fail2ban-client set sshd unbanip TON.ADRESSE.IP
+```
+
+Pour ne jamais bannir ton bureau ou ta maison, ajoute `ignoreip = 203.0.113.0/24` à la jail.
+</Details>
+
+</When>
+
+## Terminé
+
+Root est dehors, les mots de passe sont refusés, le port est hors des sentiers battus<When flag="FAIL2BAN">, et les récidivistes sont bannis</When>. Désormais tu te connectes avec :
+
+```bash
+ssh -p ${SSH_PORT} ${USERNAME}@${SERVER_IP}
+```
+
+<Note>Ajoute-le dans `~/.ssh/config` sur ta machine comme entrée `Host` et tu ne taperas plus jamais le port.</Note>

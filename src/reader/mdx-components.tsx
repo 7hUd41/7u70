@@ -1,6 +1,6 @@
 import type { MDXComponents } from "mdx/types";
-import { Pre } from "./CodeBlock";
-import { Check, Deep, Guided, Note, Run, V, Warn, When } from "./blocks";
+import { Annotated, Pre } from "./CodeBlock";
+import { Check, Deep, Details, Guided, Note, Run, Tab, Tabs, V, Warn, When } from "./blocks";
 
 /* Markdown → reader components. Everything not listed renders as plain HTML. */
 export const mdxComponents: MDXComponents = {
@@ -13,4 +13,8 @@ export const mdxComponents: MDXComponents = {
   Run,
   Check,
   V,
+  Details,
+  Annotated,
+  Tabs,
+  Tab,
 };

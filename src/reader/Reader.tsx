@@ -43,11 +43,43 @@ function ReadingLine() {
   return <div className="progress-line fixed inset-x-0 top-0 z-40" style={{ transform: `scaleX(${pct})` }} />;
 }
 
+/* "Is this still good?" answered before the reader invests time. */
+function Freshness() {
+  const { contract, locale, t } = useReader();
+  const tested = contract.tested;
+  // Today's date is read once after mount: the server render must not depend on the clock.
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clock is an external system
+    setNow(Date.now());
+  }, []);
+  if (!tested) {
+    return (
+      <p className="ui mt-3 inline-flex items-center gap-2 text-[12.5px] text-ink-3">
+        <span className="h-2 w-2 rounded-full bg-line-2" /> {t.meta.untested}
+      </p>
+    );
+  }
+  const days = now === null ? 0 : Math.max(0, Math.floor((now - new Date(tested.on).getTime()) / 86_400_000));
+  const stale = days > 365;
+  const aging = !stale && days > 180;
+  const date = new Date(tested.on).toLocaleDateString(locale, { year: "numeric", month: "long", day: "numeric" });
+  return (
+    <p className="ui mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-ink-2">
+      <span className={"h-2 w-2 rounded-full " + (stale ? "bg-warn" : aging ? "bg-warn/60" : "bg-ok")} />
+      <span>
+        {t.meta.testedBy(tested.by, date)} {now !== null && <span className="text-ink-3">({t.meta.testedAgo(days)})</span>}
+        {contract.validated && <span className="text-ink-3"> · {contract.validated}</span>}
+      </span>
+      {stale && <span className="basis-full text-warn">{t.meta.stale}</span>}
+    </p>
+  );
+}
+
 function Meta() {
   const { contract, locale, t } = useReader();
   const parts: string[] = [t.meta.difficulty[contract.difficulty]];
   if (contract.minutes) parts.push(t.meta.minutes(contract.minutes));
-  if (contract.validated) parts.push(t.meta.validated(contract.validated));
   if (contract.created) parts.push(new Date(contract.created).toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" }));
   return (
     <p className="ui mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-ink-3">
@@ -138,6 +170,7 @@ function Frame(props: ReaderProps) {
           <h1 className="font-display text-[2.4rem] leading-[1.1] tracking-tight text-ink">{contract.title[locale]}</h1>
           <p className="mt-3 max-w-[68ch] text-[1.1rem] leading-relaxed text-ink-2">{contract.summary[locale]}</p>
           <Meta />
+          <Freshness />
           <div className="mt-6 border-b border-line pb-5">
             <Toolbar title={contract.title[locale]} slug={props.slug} />
           </div>

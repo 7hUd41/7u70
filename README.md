@@ -76,7 +76,13 @@ In `page-<locale>.mdx`:
 | `<When is="WEB" equals="nginx">…</When>` | conditional on a choice (`flag=`, `notFlag=`, `oneOf=` too) |
 | `<Run>…</Run>` | the only thing shown at **Run**: a script or playbook |
 | `<Check cmd="…" expect="…" />` | verification step with a checkbox, tracked per tutorial |
+| `<Details summary="If it fails">…</Details>` | collapsible block, closed by default |
+| `<Tabs group="x"><Tab label="a.conf">…</Tab></Tabs>` | several files of one feature side by side; only the active tab is on the page |
+| ` ```ini title="/etc/x.conf" {1,3-5} ` | file name as caption, highlighted lines |
+| `<Annotated>` + `# (1)` markers + a numbered list | code annotations: hidden at Quick, badges at Guided, inline at Deep |
 | `## Heading` | a step: numbered automatically, listed in the outline |
+
+`tuto.yaml` also carries `validated` (platform string) and `tested: { on, by }`, shown under the title so the reader knows a human ran the page and when.
 
 Shell fences (` ```bash `) get a prompt, a copy button and feed the "Download install.sh" export. Other languages (` ```python `, ` ```yaml `) render as file excerpts.
 

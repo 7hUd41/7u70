@@ -94,8 +94,15 @@ export const PageContract = z
     created: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     /** Estimated hands-on time in minutes. */
     minutes: z.number().int().positive().optional(),
-    /** Upstream project version the tutorial was validated against. */
+    /** Upstream project version / platform the tutorial was validated against. */
     validated: z.string().optional(),
+    /** Last time a human ran the whole page end to end. Reassures the reader. */
+    tested: z
+      .object({
+        on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        by: z.string().min(1),
+      })
+      .optional(),
     groups: z.array(GroupSpec).default([]),
     vars: z.array(VarSpec).default([]),
     choices: z.array(ChoiceSpec).default([]),

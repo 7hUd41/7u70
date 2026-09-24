@@ -282,6 +282,14 @@ samp,
   color: var(--paper);
 }
 
+/* Collapsible blocks. */
+.details > summary::-webkit-details-marker {
+  display: none;
+}
+.details[open] > summary .chevron {
+  transform: rotate(90deg);
+}
+
 /* Margin columns: thin, quiet scrollbar kept away from the controls. */
 .sidebar-scroll {
   scrollbar-width: thin;

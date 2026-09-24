@@ -10,6 +10,7 @@ import remarkGfm from "remark-gfm";
 import type { MDXComponents } from "mdx/types";
 import type { ComponentType } from "react";
 import { rehypeHeadingIds } from "./rehype-heading-ids";
+import { rehypeCodeMeta } from "./rehype-code-meta";
 
 export type MdxContent = ComponentType<{ components?: MDXComponents }>;
 
@@ -17,7 +18,7 @@ export async function compileMdx(source: string): Promise<MdxContent> {
   const mod = await evaluate(source, {
     ...runtime,
     remarkPlugins: [remarkGfm],
-    rehypePlugins: [rehypeHeadingIds],
+    rehypePlugins: [rehypeHeadingIds, rehypeCodeMeta],
     development: false,
   });
   return mod.default as MdxContent;

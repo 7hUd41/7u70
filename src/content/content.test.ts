@@ -8,6 +8,7 @@ import remarkGfm from "remark-gfm";
 import { keysOf, LOCALES } from "@/engine";
 import { listSeries, readPageSource } from "./loader";
 import { rehypeHeadingIds } from "./rehype-heading-ids";
+import { parseMeta, rehypeCodeMeta } from "./rehype-code-meta";
 
 const series = await listSeries();
 const pages = series.flatMap((s) => s.pages);
@@ -23,7 +24,7 @@ describe("content", () => {
 
       it(`${name} compiles`, async () => {
         const src = await readPageSource(page, locale);
-        await expect(compile(src, { remarkPlugins: [remarkGfm], rehypePlugins: [rehypeHeadingIds] })).resolves.toBeTruthy();
+        await expect(compile(src, { remarkPlugins: [remarkGfm], rehypePlugins: [rehypeHeadingIds, rehypeCodeMeta] })).resolves.toBeTruthy();
       });
 
       it(`${name} only uses declared variables and choices`, async () => {
@@ -48,4 +49,24 @@ describe("content", () => {
       expect(new Set(outlines).size, "same number of headings in every locale").toBe(1);
     });
   }
+});
+
+describe("rehype inside JSX containers", () => {
+  it("keeps fence meta and heading ids nested in <When>/<Annotated>", async () => {
+    const src = '<When flag="X">\n\n## Inside\n\n```ini title="a.conf" {1}\nk = v\n```\n\n</When>\n';
+    const out = String(await compile(src, { rehypePlugins: [rehypeHeadingIds, rehypeCodeMeta] }));
+    expect(out).toContain('id: "inside"');
+    expect(out).toContain('"data-meta": "title=\\"a.conf\\" {1}"');
+  });
+});
+
+describe("fence meta", () => {
+  it("parses title and highlighted lines", () => {
+    const m = parseMeta('title="configuration.py" {2,4-6}');
+    expect(m.title).toBe("configuration.py");
+    expect([...m.highlight].sort((a, b) => a - b)).toEqual([2, 4, 5, 6]);
+  });
+  it("is empty without meta", () => {
+    expect(parseMeta(undefined).highlight.size).toBe(0);
+  });
 });

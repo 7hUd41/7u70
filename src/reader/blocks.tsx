@@ -17,8 +17,8 @@
    Checks:      <Check cmd="systemctl is-active netbox" expect="active" />
    ────────────────────────────────────────────────────────────── */
 
-import { Children, isValidElement, useState, type ReactNode } from "react";
-import { AlertTriangle, Check as CheckIcon, Copy, Info, Play } from "lucide-react";
+import { Children, isValidElement, useEffect, useState, type ReactNode } from "react";
+import { AlertTriangle, Check as CheckIcon, ChevronRight, Copy, Info, Play } from "lucide-react";
 import { atLeast, evaluate, fill, type Condition } from "@/engine";
 import { useReader } from "./store";
 import { Tokenized } from "./Tokenized";
@@ -162,6 +162,90 @@ export function Check({ cmd, expect, id }: { cmd: string; expect?: string; id?: 
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Collapsible block ────────────────────────────────────────
+   <Details summary="If it fails">…</Details>
+   Closed by default; the reader who is fine never sees the inside. */
+export function Details({ summary, open, children }: { summary: string; open?: boolean; children: ReactNode }) {
+  return (
+    <details open={open} className="details my-5 rounded-md border border-line bg-paper-2/60">
+      <summary className="ui flex cursor-pointer select-none items-center gap-2 px-4 py-2.5 text-[13.5px] text-ink">
+        <ChevronRight className="chevron h-3.5 w-3.5 text-ink-3 transition-transform" />
+        {summary}
+      </summary>
+      <div className="space-y-3 border-t border-line px-4 py-3 text-[0.95em]">{children}</div>
+    </details>
+  );
+}
+
+/* ── Content tabs ─────────────────────────────────────────────
+   Several files of one feature, side by side instead of one after another:
+     <Tabs>
+       <Tab label="wg0.conf">…</Tab>
+       <Tab label="peers.conf">…</Tab>
+     </Tabs>
+   Only the active tab is rendered, so exports match what is on screen.
+   Tabs sharing a `group` stay in sync and remember the choice. */
+export function Tab({ children }: { label: string; children: ReactNode }) {
+  return <>{children}</>;
+}
+
+export function Tabs({ group, children }: { group?: string; children: ReactNode }) {
+  // Tabs are the children carrying a `label`; comparing component identity is
+  // unreliable across the server/client boundary.
+  const tabs = Children.toArray(children).filter(
+    (c): c is React.ReactElement<{ label: string; children: ReactNode }> =>
+      isValidElement<{ label?: unknown }>(c) && typeof c.props.label === "string"
+  );
+  const [active, setActive] = useState(0);
+  const key = group ? `at:tabs:${group}` : null;
+
+  useEffect(() => {
+    if (!key) return;
+    /* eslint-disable react-hooks/set-state-in-effect -- hydration from storage */
+    try {
+      const i = tabs.findIndex((t) => t.props.label === localStorage.getItem(key));
+      if (i >= 0) setActive(i);
+    } catch {}
+    /* eslint-enable react-hooks/set-state-in-effect */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+
+  const pick = (i: number) => {
+    setActive(i);
+    if (key) {
+      try {
+        localStorage.setItem(key, tabs[i].props.label);
+      } catch {}
+    }
+  };
+
+  if (tabs.length === 0) return null;
+  return (
+    <div className="my-5">
+      <div role="tablist" className="ui flex flex-wrap gap-1 border-b border-line">
+        {tabs.map((t, i) => (
+          <button
+            key={t.props.label}
+            role="tab"
+            type="button"
+            aria-selected={i === active}
+            onClick={() => pick(i)}
+            className={
+              "-mb-px rounded-t border-b-2 px-3 py-1.5 font-mono text-[12.5px] transition " +
+              (i === active ? "border-accent text-ink" : "border-transparent text-ink-3 hover:text-ink")
+            }
+          >
+            {t.props.label}
+          </button>
+        ))}
+      </div>
+      <div role="tabpanel" className="[&>*:first-child]:mt-2">
+        {tabs[active]}
       </div>
     </div>
   );

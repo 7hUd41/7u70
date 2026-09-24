@@ -1,0 +1,50 @@
+title:
+  en: Example
+  fr: Exemple
+summary:
+  en: >-
+    One real, short tutorial that uses every feature of this site. It is the page the guided
+    tour lands on, and the reference when writing new ones.
+  fr: >-
+    Un vrai tuto, court, qui utilise chaque fonctionnalité du site. C'est la page où atterrit
+    la visite guidée, et la référence quand on en écrit de nouveaux.
+order:
+  - secure-ssh-on-a-fresh-server
+
+groups:
+  - id: server
+    label: { en: Server, fr: Serveur }
+    desc: { en: The machine you are securing., fr: La machine que tu sécurises. }
+
+vars:
+  - key: SERVER_IP
+    kind: ip
+    group: server
+    default: 203.0.113.10
+    label: { en: Server IP, fr: IP du serveur }
+    hint:
+      en: The public address of the server, as given by your provider.
+      fr: L'adresse publique du serveur, telle que fournie par ton hébergeur.
+    impact:
+      en: Every ssh command on this page targets it. A typo here means "connection refused" everywhere.
+      fr: Chaque commande ssh de cette page la vise. Une faute ici donne « connection refused » partout.
+  - key: USERNAME
+    kind: user
+    group: server
+    default: deploy
+    label: { en: Your user, fr: Ton utilisateur }
+    hint:
+      en: The everyday account you will create, instead of root. Lowercase, no spaces.
+      fr: Le compte de tous les jours que tu vas créer, à la place de root. Minuscules, sans espace.
+    impact:
+      en: Gets sudo rights and your SSH key. After hardening, root can no longer log in, so this is your only way in.
+      fr: "Reçoit les droits sudo et ta clé SSH. Après durcissement, root ne peut plus se connecter : c'est ta seule porte."
+
+choices:
+  - key: OS
+    type: select
+    label: { en: Distribution, fr: Distribution }
+    default: debian
+    options:
+      - { value: debian, label: { en: Debian / Ubuntu, fr: Debian / Ubuntu } }
+      - { value: rhel, label: { en: RHEL / Rocky / Alma, fr: RHEL / Rocky / Alma } }

@@ -1,0 +1,314 @@
+{/* Reference page. Every authoring feature appears here at least once; keep it that way when adding features. */}
+
+A server straight from the provider answers to `root` with a password, on port 22, to the whole internet. Within the hour, bots are trying passwords. This page closes those doors in five steps, each one verified before the next.
+
+<Run>
+
+The script does every step for **<V name="SERVER_IP" />**. Run it **on the server**, as root, right after delivery, with your public key already in `/root/.ssh/authorized_keys`.
+
+<When is="OS" equals="debian">
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Secure SSH — ${SERVER_IP} (Debian/Ubuntu)
+adduser --disabled-password --gecos "" ${USERNAME}
+usermod -aG sudo ${USERNAME}
+rsync --archive --chown=${USERNAME}:${USERNAME} ~/.ssh /home/${USERNAME}
+cat > /etc/ssh/sshd_config.d/99-hardening.conf <<EOF
+Port ${SSH_PORT}
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+EOF
+apt-get update && apt-get install -y ufw
+ufw allow ${SSH_PORT}/tcp
+ufw --force enable
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Secure SSH — ${SERVER_IP} (RHEL family)
+useradd -m ${USERNAME}
+usermod -aG wheel ${USERNAME}
+rsync --archive --chown=${USERNAME}:${USERNAME} ~/.ssh /home/${USERNAME}
+cat > /etc/ssh/sshd_config.d/99-hardening.conf <<EOF
+Port ${SSH_PORT}
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+EOF
+semanage port -a -t ssh_port_t -p tcp ${SSH_PORT} || semanage port -m -t ssh_port_t -p tcp ${SSH_PORT}
+firewall-cmd --permanent --add-port=${SSH_PORT}/tcp
+firewall-cmd --permanent --remove-service=ssh
+firewall-cmd --reload
+```
+
+</When>
+
+<When flag="FAIL2BAN">
+
+<When is="OS" equals="debian">
+
+```bash
+apt-get install -y fail2ban
+printf '[sshd]\nenabled = true\nport = ${SSH_PORT}\nmaxretry = 3\nbantime = 1h\n' > /etc/fail2ban/jail.d/sshd.local
+systemctl enable --now fail2ban
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+dnf install -y epel-release && dnf install -y fail2ban
+printf '[sshd]\nenabled = true\nport = ${SSH_PORT}\nmaxretry = 3\nbantime = 1h\n' > /etc/fail2ban/jail.d/sshd.local
+systemctl enable --now fail2ban
+```
+
+</When>
+
+</When>
+
+```bash
+sshd -t && systemctl restart ssh 2>/dev/null || systemctl restart sshd
+echo "Done. From your machine: ssh -p ${SSH_PORT} ${USERNAME}@${SERVER_IP}"
+```
+
+<Warn>Keep your current root session open until you have logged in with the new user on the new port from a second terminal.</Warn>
+
+</Run>
+
+## Before you start
+
+<Guided>You need the server's IP, root access (password or key, as delivered), and an SSH key pair on **your** machine. If you have never made one:</Guided>
+
+```bash
+ssh-keygen -t ed25519 -C "${USERNAME}@laptop"
+```
+
+<Deep>Ed25519 keys are short, fast and have no weak parameters to get wrong, which is why every current guide prefers them to RSA. The comment after `-C` is free text; it only helps you recognise the key in `authorized_keys` later.</Deep>
+
+<Check cmd="cat ~/.ssh/id_ed25519.pub" expect="ssh-ed25519 AAAA… ${USERNAME}@laptop" />
+
+| What | Before | After this page |
+|---|---|---|
+| Who can log in | `root`, anyone with the password | <V name="USERNAME" />, with a key |
+| Port | 22 | <V name="SSH_PORT" /> |
+| Wrong passwords | unlimited | <When flag="FAIL2BAN">3, then banned for an hour</When><When notFlag="FAIL2BAN">passwords are refused anyway</When> |
+
+## Create your own user
+
+<Guided>Working as `root` all day is how one typo erases a server. We create an everyday account, give it `sudo`, and copy root's authorised key so it can log in right away.</Guided>
+
+<When is="OS" equals="debian">
+
+```bash
+ssh root@${SERVER_IP}
+adduser ${USERNAME}
+usermod -aG sudo ${USERNAME}
+rsync --archive --chown=${USERNAME}:${USERNAME} ~/.ssh /home/${USERNAME}
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+ssh root@${SERVER_IP}
+useradd -m ${USERNAME} && passwd ${USERNAME}
+usermod -aG wheel ${USERNAME}
+rsync --archive --chown=${USERNAME}:${USERNAME} ~/.ssh /home/${USERNAME}
+```
+
+<Note>On the RHEL family the sudo group is called `wheel`, not `sudo`.</Note>
+
+</When>
+
+<Deep>`rsync --archive --chown` copies `~/.ssh` with its permissions intact and hands it to the new user in one go. Permissions matter: SSH refuses a key file readable by others, silently, and you would be left wondering why the key "does not work".</Deep>
+
+<Check cmd="ssh ${USERNAME}@${SERVER_IP} sudo -n true && echo OK" expect="OK" />
+
+<Details summary="If sudo asks for a password">
+Debian and Ubuntu grant password-less sudo to nobody by default; `sudo -n` then fails. Either type the password (fine), or allow the group without password:
+
+```bash
+echo '%sudo ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/90-sudo-nopasswd
+```
+
+Do this only if the account is protected by a key, which is what the next step enforces.
+</Details>
+
+## Harden the SSH daemon
+
+<Guided>Three settings do most of the work: a new port, no root login, keys only. They go in a drop-in file, so the distribution's own `sshd_config` stays untouched by upgrades.</Guided>
+
+<Annotated>
+
+```ini title="/etc/ssh/sshd_config.d/99-hardening.conf" {1-3}
+Port ${SSH_PORT}                       # (1)
+PermitRootLogin no                     # (2)
+PasswordAuthentication no              # (3)
+KbdInteractiveAuthentication no        # (4)
+```
+
+1. Moving off port 22 does not make SSH more secure by itself, but it removes almost all automated login attempts, which keeps logs readable and fail2ban quiet.
+2. Root cannot log in at all, even with a key. Elevation happens through `sudo` from your own account, which leaves a trace.
+3. Only keys are accepted. A password, however long, can be guessed; a 256-bit key cannot.
+4. Closes the second password door: keyboard-interactive is what PAM uses to prompt for a password even when `PasswordAuthentication` is off.
+
+</Annotated>
+
+<Deep>Files in `sshd_config.d/` are read **before** the main file, and the first value wins in `sshd_config`, which is why a drop-in can override the defaults. The `99-` prefix is convention, not ordering: keep one drop-in per concern.</Deep>
+
+<Warn>Do not restart SSH yet. The firewall must accept port <V name="SSH_PORT" /> first, or the restart cuts you off.</Warn>
+
+<Check cmd="sudo sshd -t && echo syntax OK" expect="syntax OK" />
+
+## Firewall
+
+<Guided>Only the new SSH port stays open. Anything else you host later (80, 443…) gets added when you host it.</Guided>
+
+<When is="OS" equals="debian">
+
+```bash
+sudo apt install -y ufw
+sudo ufw allow ${SSH_PORT}/tcp
+sudo ufw enable
+```
+
+<Check cmd="sudo ufw status" expect="Status: active
+${SSH_PORT}/tcp                  ALLOW       Anywhere" />
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+sudo semanage port -a -t ssh_port_t -p tcp ${SSH_PORT}
+sudo firewall-cmd --permanent --add-port=${SSH_PORT}/tcp
+sudo firewall-cmd --permanent --remove-service=ssh
+sudo firewall-cmd --reload
+```
+
+<Deep>SELinux only lets `sshd` bind to ports labelled `ssh_port_t`; without the `semanage` line the daemon starts, logs a denial, and keeps listening on 22 only. `firewalld` ships with the `ssh` service (port 22) allowed: we remove it since 22 will be closed.</Deep>
+
+<Check cmd="sudo firewall-cmd --list-ports" expect="${SSH_PORT}/tcp" />
+
+</When>
+
+Now restart SSH and, **from a second terminal**, log in on the new port:
+
+<When is="OS" equals="debian">
+
+```bash
+sudo systemctl restart ssh
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+sudo systemctl restart sshd
+```
+
+</When>
+
+<Check cmd="ssh -p ${SSH_PORT} ${USERNAME}@${SERVER_IP} echo connected" expect="connected" />
+
+<Details summary="If the new connection fails">
+Your first terminal is still logged in: nothing is lost. In order of likelihood:
+
+- The firewall does not list <V name="SSH_PORT" />: re-run the firewall step.
+- `sshd -t` reports an error: fix the drop-in, restart again.
+- The provider has its own network firewall in front of the server (common at OVH, Hetzner, cloud providers): open the port there too.
+- You are testing from the first terminal by mistake: use a new one.
+</Details>
+
+<When flag="FAIL2BAN">
+
+## Ban brute force
+
+<Guided>With passwords off, guessing is useless, but bots still hammer the port. fail2ban reads the log and bans an address after a few failures, keeping the noise out of your logs and CPU.</Guided>
+
+<When is="OS" equals="debian">
+
+```bash
+sudo apt install -y fail2ban
+```
+
+</When>
+
+<When is="OS" equals="rhel">
+
+```bash
+sudo dnf install -y epel-release
+sudo dnf install -y fail2ban
+```
+
+</When>
+
+<Tabs group="fail2ban-files">
+
+<Tab label="jail.d/sshd.local">
+
+```ini title="/etc/fail2ban/jail.d/sshd.local"
+[sshd]
+enabled = true
+port = ${SSH_PORT}
+maxretry = 3
+bantime = 1h
+```
+
+</Tab>
+
+<Tab label="jail.d/defaults.local">
+
+Default jail settings, applied to every jail:
+
+```ini title="/etc/fail2ban/jail.d/defaults.local" {3}
+[DEFAULT]
+bantime.increment = true
+ignoreip = 127.0.0.1/8 ${SERVER_IP}
+findtime = 10m
+```
+
+</Tab>
+
+</Tabs>
+
+```bash
+sudo systemctl enable --now fail2ban
+```
+
+<Check cmd="sudo fail2ban-client status sshd | head -3" expect="Status for the jail: sshd
+|- Filter
+|  |- Currently failed: 0" />
+
+<Details summary="If you ban yourself">
+Three typos in a row from your own address and you are out for an hour. From another address (phone hotspot, the provider's console), unban yourself:
+
+```bash
+sudo fail2ban-client set sshd unbanip YOUR.IP.ADDRESS
+```
+
+To never ban your office or home, add `ignoreip = 203.0.113.0/24` to the jail.
+</Details>
+
+</When>
+
+## Done
+
+Root is locked out, passwords are refused, the port is off the beaten path<When flag="FAIL2BAN">, and repeat offenders are banned</When>. From now on you connect with:
+
+```bash
+ssh -p ${SSH_PORT} ${USERNAME}@${SERVER_IP}
+```
+
+<Note>Add it to `~/.ssh/config` on your machine as a `Host` entry and you will never type the port again.</Note>

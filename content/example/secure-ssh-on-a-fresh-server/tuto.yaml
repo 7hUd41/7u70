@@ -1,0 +1,43 @@
+# Reference page: uses every feature. Inherits SERVER_IP, USERNAME and OS from ../series.yaml.
+
+title:
+  en: Secure SSH on a fresh server
+  fr: Sécuriser l'accès SSH d'un serveur neuf
+summary:
+  en: >-
+    Ten minutes after delivery, before anything else: a personal account, key-only login,
+    a non-default port, a firewall, and a ban on brute force.
+  fr: >-
+    Dix minutes après la livraison, avant toute autre chose : un compte personnel, connexion par
+    clé uniquement, un port non standard, un pare-feu, et un bannissement du brute force.
+difficulty: beginner
+tags: [ssh, linux, security, example]
+authors: [thudal]
+created: 2026-09-24
+minutes: 10
+validated: Debian 12 · Rocky 9
+tested: { on: "2026-09-24", by: thudal }
+
+groups:
+  - id: access
+    label: { en: Access, fr: Accès }
+
+vars:
+  - key: SSH_PORT
+    kind: port
+    group: access
+    default: "2222"
+    label: { en: SSH port, fr: Port SSH }
+    hint:
+      en: The port SSH will listen on after hardening. Anything but 22 removes most automated noise.
+      fr: Le port sur lequel SSH écoutera après durcissement. Tout sauf 22 supprime l'essentiel du bruit automatisé.
+    impact:
+      en: Reused by the firewall and by fail2ban. It must be opened in the firewall before SSH is restarted, or you lock yourself out.
+      fr: Réutilisé par le pare-feu et par fail2ban. Il doit être ouvert dans le pare-feu avant de redémarrer SSH, sinon tu te verrouilles dehors.
+
+choices:
+  - key: FAIL2BAN
+    type: boolean
+    label: { en: Ban brute-force attempts (fail2ban), fr: Bannir le brute force (fail2ban) }
+    hint: { en: Recommended on any server reachable from the internet., fr: Recommandé sur tout serveur joignable depuis internet. }
+    default: true
