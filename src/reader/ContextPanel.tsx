@@ -12,27 +12,45 @@ import { useReader } from "./store";
 
 /* Full, level-independent explanation of a variable: what it is, why it
    matters, what a value looks like. Opens on hover or keyboard focus. */
+const TIP_WIDTH = 300;
+const TIP_MAX_HEIGHT = 320;
+
+type TipPos = { left: number; top?: number; bottom?: number };
+
 function Help({ spec }: { spec: VarSpec }) {
   const { locale, t } = useReader();
-  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<TipPos | null>(null);
   const id = useId();
+
+  // Fixed positioning escapes the scrolling margin; flip above the icon when
+  // the space below would clip the text.
+  const show = (el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    const left = Math.max(8, Math.min(r.right - TIP_WIDTH, window.innerWidth - TIP_WIDTH - 8));
+    const roomBelow = window.innerHeight - r.bottom;
+    setPos(roomBelow >= TIP_MAX_HEIGHT ? { left, top: r.bottom + 6 } : { left, bottom: window.innerHeight - r.top + 6 });
+  };
+  const hide = () => setPos(null);
+
   return (
-    <span className="relative inline-flex" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+    <span className="inline-flex" onMouseLeave={hide}>
       <button
         type="button"
         aria-label={t.help.about(spec.label[locale])}
-        aria-describedby={open ? id : undefined}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setOpen(false)}
+        aria-describedby={pos ? id : undefined}
+        onMouseEnter={(e) => show(e.currentTarget)}
+        onFocus={(e) => show(e.currentTarget)}
+        onBlur={hide}
         className="rounded text-ink-3 hover:text-ink"
       >
         <HelpCircle className="h-3.5 w-3.5" />
       </button>
-      {open && (
+      {pos && (
         <span
           id={id}
           role="tooltip"
-          className="ui absolute right-0 top-full z-40 mt-1.5 w-72 rounded-md border border-line bg-paper p-3 text-left text-[12.5px] leading-snug text-ink shadow-soft"
+          style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: TIP_WIDTH, maxHeight: TIP_MAX_HEIGHT }}
+          className="ui fixed z-50 overflow-y-auto rounded-md border border-line bg-paper p-3 text-left text-[12.5px] leading-snug text-ink shadow-soft"
         >
           <span className="mb-1 block font-bold">{spec.label[locale]}</span>
           {spec.hint && <span className="block">{spec.hint[locale]}</span>}
@@ -156,15 +174,17 @@ export function StackPanel() {
 
 export function ValuesPanel() {
   const { contract, choices, locale, resetProfile, t } = useReader();
-  const { groups } = contract;
-  const vars = contract.vars.filter((v) => !v.when || evaluate(v.when, choices));
+  const declared = new Set(contract.groups.map((g) => g.id));
+  const visibleGroups = contract.groups.filter((g) => !g.when || evaluate(g.when, choices));
+  const visibleIds = new Set(visibleGroups.map((g) => g.id));
+  // A variable is shown when its own condition holds and its group (if declared) is visible.
+  const vars = contract.vars.filter(
+    (v) => (!v.when || evaluate(v.when, choices)) && (!v.group || !declared.has(v.group) || visibleIds.has(v.group))
+  );
   if (vars.length === 0) return null;
 
-  const grouped = groups
-    .filter((g) => !g.when || evaluate(g.when, choices))
-    .map((g) => ({ g, items: vars.filter((v) => v.group === g.id) }))
-    .filter((x) => x.items.length > 0);
-  const ungrouped = vars.filter((v) => !v.group || !grouped.some((x) => x.g.id === v.group));
+  const grouped = visibleGroups.map((g) => ({ g, items: vars.filter((v) => v.group === g.id) })).filter((x) => x.items.length > 0);
+  const ungrouped = vars.filter((v) => !v.group || !declared.has(v.group));
 
   return (
     <section aria-label={t.context.title} className="space-y-5">

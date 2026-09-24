@@ -82,7 +82,14 @@ function Frame(props: ReaderProps) {
         level={level}
         setLevel={setLevel}
       />
-      <div className="mx-auto grid w-full max-w-[100rem] gap-10 px-6 py-10 lg:grid-cols-[minmax(0,1fr)_320px] lg:px-10">
+      {/* Wide screens: outline left (where am I), content, context right (what is mine).
+          Narrower: context column only, outline on top. */}
+      <div className="mx-auto grid w-full max-w-[100rem] gap-10 px-6 py-10 lg:grid-cols-[minmax(0,1fr)_320px] lg:px-10 xl:grid-cols-[220px_minmax(0,1fr)_320px]">
+        <aside className="hidden xl:block">
+          <div className="sticky top-16 max-h-[calc(100vh-5rem)] overflow-y-auto pr-2">
+            <Outline />
+          </div>
+        </aside>
         <main className="min-w-0">
           <h1 className="font-display text-[2.4rem] leading-[1.1] tracking-tight text-ink">{contract.title[locale]}</h1>
           <p className="mt-3 max-w-[68ch] text-[1.1rem] leading-relaxed text-ink-2">{contract.summary[locale]}</p>
@@ -117,9 +124,10 @@ function Frame(props: ReaderProps) {
           )}
         </main>
         <aside>
-          {/* Reading order: what is the path → which path is mine → my values. */}
           <div className="space-y-8 lg:sticky lg:top-16 lg:max-h-[calc(100vh-5rem)] lg:overflow-y-auto lg:pr-1">
-            <Outline />
+            <div className="xl:hidden">
+              <Outline />
+            </div>
             <StackPanel />
             <ValuesPanel />
           </div>

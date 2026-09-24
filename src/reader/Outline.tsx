@@ -44,6 +44,17 @@ export function Outline() {
   };
 
   if (items.length === 0 && checks.total === 0) return null;
+
+  // Progressive disclosure: sub-steps (h3) only under the step being read.
+  const parentOf = new Map<string, string>();
+  let currentH2 = "";
+  for (const it of items) {
+    if (it.depth === 2) currentH2 = it.id;
+    else parentOf.set(it.id, currentH2);
+  }
+  const activeH2 = items.find((i) => i.id === active)?.depth === 2 ? active : (parentOf.get(active) ?? "");
+  const visible = items.filter((it) => it.depth === 2 || parentOf.get(it.id) === activeH2);
+
   const pct = checks.total ? Math.round((checks.done / checks.total) * 100) : 0;
   const all = checks.total > 0 && checks.done === checks.total;
 
@@ -73,7 +84,7 @@ export function Outline() {
         <nav aria-label={t.toc}>
           <span className="label mb-1.5 block">{t.toc}</span>
           <ul className="space-y-0.5 border-l border-line">
-            {items.map((it) => (
+            {visible.map((it) => (
               <li key={it.id}>
                 <a
                   href={`#${it.id}`}
