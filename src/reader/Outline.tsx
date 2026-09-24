@@ -9,8 +9,9 @@ import { useReader } from "./store";
 
 type Item = { id: string; text: string; depth: 2 | 3 };
 
-export function Outline() {
-  const { level, choices, done, t } = useReader();
+/* Reads the rendered body: headings for the outline, checks for progress. */
+function useOutline() {
+  const { level, choices, done } = useReader();
   const trigger = `${level}|${JSON.stringify(choices)}|${JSON.stringify(done)}`;
   const [items, setItems] = useState<Item[]>([]);
   const [active, setActive] = useState("");
@@ -38,10 +39,41 @@ export function Outline() {
     return () => obs.disconnect();
   }, [trigger]);
 
-  const resume = () => {
-    const next = Array.from(document.querySelectorAll<HTMLElement>('.doc-body [data-check][data-done="false"]'))[0];
-    next?.scrollIntoView({ behavior: "smooth", block: "center" });
-  };
+  return { items, active, checks };
+}
+
+function resume() {
+  const next = Array.from(document.querySelectorAll<HTMLElement>('.doc-body [data-check][data-done="false"]'))[0];
+  next?.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+/* Folded outline: progress only, compact, lives in the header. */
+export function ProgressPill() {
+  const { t } = useReader();
+  const { checks } = useOutline();
+  if (checks.total === 0) return null;
+  const pct = Math.round((checks.done / checks.total) * 100);
+  const all = checks.done === checks.total;
+  return (
+    <button
+      type="button"
+      onClick={all ? undefined : resume}
+      title={`${t.progress.title} · ${t.progress.steps(checks.done, checks.total)}${all ? "" : ` — ${t.progress.resume}`}`}
+      className="ui inline-flex items-center gap-2 rounded-full border border-line px-2.5 py-1 text-[12px] text-ink-2 hover:text-ink"
+    >
+      <span className="relative h-1 w-16 overflow-hidden rounded-full bg-paper-3">
+        <span className={"absolute inset-y-0 left-0 transition-all duration-500 " + (all ? "bg-ok" : "bg-accent")} style={{ width: `${pct}%` }} />
+      </span>
+      <span className={"font-mono tabular-nums " + (all ? "text-ok" : "")}>
+        {checks.done}/{checks.total}
+      </span>
+    </button>
+  );
+}
+
+export function Outline() {
+  const { t } = useReader();
+  const { items, active, checks } = useOutline();
 
   if (items.length === 0 && checks.total === 0) return null;
 

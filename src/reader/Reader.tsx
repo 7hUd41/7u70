@@ -5,11 +5,11 @@
 
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
-import { ArrowLeft, ArrowRight, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { ArrowLeft, ArrowRight } from "lucide-react";
 import type { Locale, TutoContract } from "@/engine";
 import { StackPanel, ValuesPanel } from "./ContextPanel";
 import { Header } from "./Header";
-import { Outline } from "./Outline";
+import { Outline, ProgressPill } from "./Outline";
 import { ReaderProvider, useReader } from "./store";
 import { Toolbar } from "./Toolbar";
 import { VarEditor } from "./VarEditor";
@@ -98,43 +98,23 @@ function Frame(props: ReaderProps) {
         crumbs={[{ href: props.series.href, label: props.series.title }]}
         level={level}
         setLevel={setLevel}
+        outline={{ open: outlineOpen, toggle: toggleOutline, folded: <ProgressPill /> }}
       />
       {/* Wide screens: outline left (where am I), content, context right (what is mine).
           Narrower: context column only, outline on top. */}
       <div
         className={
           "mx-auto grid w-full max-w-[100rem] gap-10 px-6 py-10 lg:grid-cols-[minmax(0,1fr)_320px] lg:px-10 " +
-          (outlineOpen ? "xl:grid-cols-[220px_minmax(0,1fr)_320px]" : "xl:grid-cols-[28px_minmax(0,1fr)_320px]")
+          (outlineOpen ? "xl:grid-cols-[220px_minmax(0,1fr)_320px]" : "")
         }
       >
-        <aside className="hidden xl:block">
-          <div className="sticky top-16 max-h-[calc(100vh-5rem)] overflow-y-auto pr-1">
-            {outlineOpen ? (
-              <>
-                <button
-                  type="button"
-                  onClick={toggleOutline}
-                  title={t.outline.hide}
-                  aria-label={t.outline.hide}
-                  className="mb-3 flex items-center gap-1.5 rounded text-ink-3 hover:text-ink"
-                >
-                  <PanelLeftClose className="h-4 w-4" />
-                </button>
-                <Outline />
-              </>
-            ) : (
-              <button
-                type="button"
-                onClick={toggleOutline}
-                title={t.outline.show}
-                aria-label={t.outline.show}
-                className="rounded text-ink-3 hover:text-ink"
-              >
-                <PanelLeftOpen className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-        </aside>
+        {outlineOpen && (
+          <aside className="hidden xl:block">
+            <div className="sticky top-16 max-h-[calc(100vh-5rem)] overflow-y-auto pr-2">
+              <Outline />
+            </div>
+          </aside>
+        )}
         <main className="min-w-0">
           <h1 className="font-display text-[2.4rem] leading-[1.1] tracking-tight text-ink">{contract.title[locale]}</h1>
           <p className="mt-3 max-w-[68ch] text-[1.1rem] leading-relaxed text-ink-2">{contract.summary[locale]}</p>
