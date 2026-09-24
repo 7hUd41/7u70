@@ -72,9 +72,27 @@ function Meta() {
 
 const OUTLINE_KEY = "at:outline";
 
+/* True while scrolling down past the top; false as soon as the reader scrolls up. */
+function useHideOnScroll(): boolean {
+  const [hidden, setHidden] = useState(false);
+  useEffect(() => {
+    let last = window.scrollY;
+    const onScroll = () => {
+      const y = window.scrollY;
+      if (y > last + 4 && y > 120) setHidden(true);
+      else if (y < last - 4 || y <= 0) setHidden(false);
+      last = y;
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+  return hidden;
+}
+
 function Frame(props: ReaderProps) {
   const { level, setLevel, contract, locale, t } = useReader();
   const [outlineOpen, setOutlineOpen] = useState(true);
+  const headerHidden = useHideOnScroll();
   useEffect(() => {
     try {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration from storage
@@ -99,6 +117,7 @@ function Frame(props: ReaderProps) {
         level={level}
         setLevel={setLevel}
         outline={{ open: outlineOpen, toggle: toggleOutline, folded: <ProgressPill /> }}
+        hidden={headerHidden}
       />
       {/* Wide screens: outline left (where am I), content, context right (what is mine).
           Narrower: context column only, outline on top. */}
@@ -110,7 +129,7 @@ function Frame(props: ReaderProps) {
       >
         {outlineOpen && (
           <aside className="hidden xl:block">
-            <div className="sticky top-16 max-h-[calc(100vh-5rem)] overflow-y-auto pr-2">
+            <div className="sidebar-scroll sticky top-16 max-h-[calc(100vh-5rem)] overflow-y-auto pr-4">
               <Outline />
             </div>
           </aside>
@@ -149,7 +168,7 @@ function Frame(props: ReaderProps) {
           )}
         </main>
         <aside>
-          <div className="space-y-8 lg:sticky lg:top-16 lg:max-h-[calc(100vh-5rem)] lg:overflow-y-auto lg:pr-1">
+          <div className="sidebar-scroll space-y-8 lg:sticky lg:top-16 lg:max-h-[calc(100vh-5rem)] lg:overflow-y-auto lg:pr-5">
             <div className="xl:hidden">
               <Outline />
             </div>

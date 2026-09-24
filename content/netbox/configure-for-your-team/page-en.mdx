@@ -1,0 +1,279 @@
+{/* First pass — to be validated against docs.netbox.dev (configuration parameters, plugins, REST API) before publishing. */}
+
+The previous page left you with a working NetBox and one administrator. Before colleagues get the URL, a handful of settings turn it from an install into *your* instance. Most of them live in `configuration.py`; the rest is done through the REST API, so you can replay it on the next instance.
+
+<Run>
+
+The script applies every setting of this page to **<V name="NETBOX_HOST" />** and restarts NetBox. It appends to `configuration.py` (never rewrites it) and needs a valid API token in your values.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# NetBox — team configuration for ${NETBOX_HOST}
+CFG=${INSTALL_DIR}/netbox/netbox/configuration.py
+API=https://${NETBOX_HOST}/api
+AUTH="Authorization: Token ${NETBOX_TOKEN}"
+
+sudo tee -a "$CFG" >/dev/null <<'EOF'
+
+# --- team settings
+TIME_ZONE = '${TIMEZONE}'
+BANNER_TOP = '${BANNER}'
+LOGIN_REQUIRED = True
+CHANGELOG_RETENTION = 180
+EOF
+```
+
+<When flag="MAIL">
+
+```bash
+sudo tee -a "$CFG" >/dev/null <<'EOF'
+EMAIL = {
+    'SERVER': '${SMTP_HOST}',
+    'PORT': ${SMTP_PORT},
+    'USE_TLS': True,
+    'FROM_EMAIL': '${FROM_EMAIL}',
+    'TIMEOUT': 10,
+}
+EOF
+```
+
+</When>
+
+<When flag="PLUGIN_TOPOLOGY">
+
+```bash
+echo netbox-topology-views | sudo tee -a ${INSTALL_DIR}/local_requirements.txt
+```
+
+</When>
+
+<When flag="PLUGIN_BGP">
+
+```bash
+echo netbox-bgp | sudo tee -a ${INSTALL_DIR}/local_requirements.txt
+```
+
+</When>
+
+```bash
+PLUGINS=()
+grep -q '^netbox-topology-views' ${INSTALL_DIR}/local_requirements.txt && PLUGINS+=("'netbox_topology_views'")
+grep -q '^netbox-bgp' ${INSTALL_DIR}/local_requirements.txt && PLUGINS+=("'netbox_bgp'")
+echo "PLUGINS = [$(IFS=,; echo "${PLUGINS[*]}")]" | sudo tee -a "$CFG"
+sudo ${INSTALL_DIR}/upgrade.sh
+sudo systemctl restart netbox netbox-rq
+curl -sf -H "$AUTH" -H 'Content-Type: application/json' "$API/users/groups/" -d '{"name": "netops"}'
+curl -sf -H "$AUTH" -H 'Content-Type: application/json' "$API/users/groups/" -d '{"name": "readers"}'
+echo "Done. Permissions for the groups are set in the UI: Admin → Permissions."
+```
+
+</Run>
+
+## Before you start
+
+<Guided>You need the administrator account from the previous page and, for the API steps, a token: log in, open your profile (top right), **API tokens → Add**, give it an expiry date and copy it into your values. The commands below run on the NetBox server itself.</Guided>
+
+<Deep>Everything on this page could be clicked through the web interface. We do it with the API on purpose: a `curl` command is reviewable, repeatable on the staging instance, and it is the first step toward keeping NetBox's configuration in code, which the last page of this series is about. Settings that only exist in `configuration.py` are edited there; NetBox reloads it on restart.</Deep>
+
+<Check cmd="curl -sf -H 'Authorization: Token ${NETBOX_TOKEN}' https://${NETBOX_HOST}/api/status/ | python3 -m json.tool | head -3" expect='{
+    "django-version": "5.x",' />
+
+## Instance settings
+
+<Guided>Four lines set the tone: the time zone, a banner that tells people which instance they are on, mandatory login, and how long the change log is kept.</Guided>
+
+Append to <V name="INSTALL_DIR" />`/netbox/netbox/configuration.py`:
+
+```python
+TIME_ZONE = '${TIMEZONE}'
+BANNER_TOP = '${BANNER}'
+LOGIN_REQUIRED = True
+CHANGELOG_RETENTION = 180
+```
+
+<Deep>`LOGIN_REQUIRED` defaults to `False`: an anonymous visitor can read everything. That is rarely what you want for a source of truth that lists every device and IP you own. `CHANGELOG_RETENTION` is in days; `0` keeps changes forever, which is fine for a small team and costly after a few years of automation writing thousands of objects a day.</Deep>
+
+<Note>Other parameters worth a look in the same file: `LOGIN_BANNER` (a notice on the login page, useful for legal wording), `ALLOWED_URL_SCHEMES` if your custom links use `ssh://`, and `MAINTENANCE_MODE` for planned work.</Note>
+
+<When flag="MAIL">
+
+## Outgoing mail
+
+<Guided>NetBox sends mail for password resets and for the notifications you will set up later. It only needs a relay.</Guided>
+
+```python
+EMAIL = {
+    'SERVER': '${SMTP_HOST}',
+    'PORT': ${SMTP_PORT},
+    'USE_TLS': True,
+    'FROM_EMAIL': '${FROM_EMAIL}',
+    'TIMEOUT': 10,
+}
+```
+
+<Deep>Add `USERNAME` and `PASSWORD` keys if the relay authenticates. `USE_TLS` means STARTTLS on port 587; for an implicit-TLS relay on 465 use `USE_SSL` instead. `TIMEOUT` matters: without it a dead relay makes password resets hang for minutes.</Deep>
+
+After a restart (next section), send a test message to yourself:
+
+<Check cmd="sudo ${INSTALL_DIR}/venv/bin/python ${INSTALL_DIR}/netbox/manage.py sendtestemail you@example.com" expect="Test email sent to: you@example.com" />
+
+</When>
+
+## Groups and permissions
+
+<Guided>NetBox permissions are granted to groups, per object type and per action (view, add, change, delete), optionally restricted by a filter. Two groups cover most teams: one that can change everything, one that can only read.</Guided>
+
+```bash
+API=https://${NETBOX_HOST}/api
+AUTH="Authorization: Token ${NETBOX_TOKEN}"
+curl -sf -H "$AUTH" -H 'Content-Type: application/json' "$API/users/groups/" -d '{"name": "netops"}'
+curl -sf -H "$AUTH" -H 'Content-Type: application/json' "$API/users/groups/" -d '{"name": "readers"}'
+```
+
+<Guided>Permissions themselves are easier to set once in the interface: **Admin → Permissions → Add**. For `netops`, tick all four actions and leave object types empty (all). For `readers`, tick *view* only.</Guided>
+
+<Deep>A permission's *constraints* field takes a JSON filter evaluated against the object. `{"site__name": "Paris"}` on a change permission lets a group edit objects of one site only. That is how you delegate a campus to a local team without giving them the rest of the network.</Deep>
+
+<When flag="LDAP">
+
+### Map directory groups
+
+<Guided>With LDAP, rights should follow directory membership rather than be assigned by hand. Two settings in `ldap_config.py` do it: superuser status from one group, and NetBox group membership mirrored from the directory.</Guided>
+
+```python
+from django_auth_ldap.config import LDAPSearch, GroupOfNamesType
+
+AUTH_LDAP_GROUP_SEARCH = LDAPSearch('${LDAP_BASE_DN}', ldap.SCOPE_SUBTREE, '(objectClass=group)')
+AUTH_LDAP_GROUP_TYPE = GroupOfNamesType()
+AUTH_LDAP_USER_FLAGS_BY_GROUP = {
+    'is_active': '${LDAP_BASE_DN}',
+    'is_staff': '${LDAP_ADMIN_GROUP}',
+    'is_superuser': '${LDAP_ADMIN_GROUP}',
+}
+AUTH_LDAP_FIND_GROUP_PERMS = True
+AUTH_LDAP_MIRROR_GROUPS = True
+```
+
+<Deep>`AUTH_LDAP_MIRROR_GROUPS` creates a NetBox group for each directory group the user belongs to, named after the group's CN. Create the `netops` and `readers` groups in the directory with those exact names and the permissions you set above apply automatically. For Active Directory, `NestedActiveDirectoryGroupType` resolves nested groups; it costs one extra query per login.</Deep>
+
+</When>
+
+<When notFlag="LDAP">
+
+<Guided>Without a directory, invite people from **Admin → Users → Add**, and put them in a group. Tick *Staff status* only for those who administer NetBox itself.</Guided>
+
+</When>
+
+## Plugins
+
+<Guided>Plugins are Python packages listed in `local_requirements.txt` (so `upgrade.sh` reinstalls them at every upgrade) and enabled in `PLUGINS`. Start with few; each one adds tables and migrations.</Guided>
+
+<When flag="PLUGIN_TOPOLOGY">
+
+```bash
+echo netbox-topology-views | sudo tee -a ${INSTALL_DIR}/local_requirements.txt
+```
+
+</When>
+
+<When flag="PLUGIN_BGP">
+
+```bash
+echo netbox-bgp | sudo tee -a ${INSTALL_DIR}/local_requirements.txt
+```
+
+</When>
+
+<When notFlag="PLUGIN_TOPOLOGY">
+
+<When notFlag="PLUGIN_BGP">
+
+<Note>No plugin selected in your stack. The steps below still apply when you add one later.</Note>
+
+</When>
+
+</When>
+
+Enable them in `configuration.py` (module names use underscores):
+
+<When flag="PLUGIN_TOPOLOGY">
+
+<When flag="PLUGIN_BGP">
+
+```python
+PLUGINS = ['netbox_topology_views', 'netbox_bgp']
+```
+
+</When>
+
+<When notFlag="PLUGIN_BGP">
+
+```python
+PLUGINS = ['netbox_topology_views']
+```
+
+</When>
+
+</When>
+
+<When notFlag="PLUGIN_TOPOLOGY">
+
+<When flag="PLUGIN_BGP">
+
+```python
+PLUGINS = ['netbox_bgp']
+```
+
+</When>
+
+</When>
+
+Then install and migrate:
+
+```bash
+sudo ${INSTALL_DIR}/upgrade.sh
+```
+
+<Deep>`upgrade.sh` reads `local_requirements.txt`, installs into the virtual environment, runs the plugins' migrations and collects their static files. Skipping it and running `pip install` by hand works once, then breaks at the next NetBox upgrade when the venv is rebuilt. Check each plugin's compatibility matrix: a plugin lagging one minor version behind NetBox is the most common cause of a failed upgrade.</Deep>
+
+## Custom fields
+
+<Guided>The data model covers networks well; what it does not know is your organisation. Custom fields attach your own attributes to any object type. A classic first one: an asset tag on devices.</Guided>
+
+```bash
+curl -sf -H "$AUTH" -H 'Content-Type: application/json' "$API/extras/custom-fields/" -d '{
+  "name": "asset_tag_internal",
+  "label": "Internal asset tag",
+  "type": "text",
+  "object_types": ["dcim.device"],
+  "required": false,
+  "filter_logic": "exact"
+}'
+```
+
+<Deep>Custom fields are indexed and filterable like native ones, and they appear in the API and in exports. Prefer them to free-text comments as soon as a value will be searched or automated on. Types include text, integer, boolean, date, URL, JSON, selection (with a choice set) and object (a reference to another NetBox object).</Deep>
+
+## Restart and verify
+
+```bash
+sudo systemctl restart netbox netbox-rq
+```
+
+<Check cmd="systemctl is-active netbox netbox-rq" expect="active
+active" />
+
+<Check
+  cmd={"curl -sf -H 'Authorization: Token ${NETBOX_TOKEN}' https://${NETBOX_HOST}/api/users/groups/ | python3 -c 'import sys,json; print([g[\"name\"] for g in json.load(sys.stdin)[\"results\"]])'"}
+  expect="['netops', 'readers']"
+/>
+
+<When flag="PLUGIN_TOPOLOGY">
+
+<Check cmd={"curl -sf -H 'Authorization: Token ${NETBOX_TOKEN}' https://${NETBOX_HOST}/api/plugins/ | grep -o '\"name\": \"[^\"]*\"'"} expect='"name": "Topology views"' />
+
+</When>
+
+## Done
+
+Your instance has a name on every page, sends mail, knows who may change what, and carries the first fields your data needs. Next: keeping it that way, with upgrades, backups and monitoring.

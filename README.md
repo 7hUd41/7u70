@@ -28,7 +28,8 @@ npm run lint
 ```
 content/                       tutorials, one folder per page
   <series>/
-    series.yaml                title, summary, reading order
+    series.yaml                title, summary, reading order, and the variables/choices
+                               shared by every page (filled once for the series)
     <page>/
       tuto.yaml                contract: variables, choices, metadata (language-independent)
       page-en.mdx              prose, English
@@ -44,7 +45,7 @@ src/
 
 ### Writing a page
 
-`tuto.yaml` declares what the reader can change. Prose may only use what is declared; the test suite enforces it.
+`tuto.yaml` declares what the reader can change on this page; `series.yaml` declares what the whole series shares (hostnames, install paths, the OS…). A page inherits the series' declarations and may add its own, never redefine one. Prose may only use what is declared; the test suite enforces it. Groups and variables can carry a `when` so they disappear when a choice makes them irrelevant.
 
 ```yaml
 vars:

@@ -17,20 +17,35 @@
    Checks:      <Check cmd="systemctl is-active netbox" expect="active" />
    ────────────────────────────────────────────────────────────── */
 
-import { useState, type ReactNode } from "react";
+import { Children, isValidElement, useState, type ReactNode } from "react";
 import { AlertTriangle, Check as CheckIcon, Copy, Info, Play } from "lucide-react";
 import { atLeast, evaluate, fill, type Condition } from "@/engine";
 import { useReader } from "./store";
 import { Tokenized } from "./Tokenized";
 
+/* Text written inline inside a tag (<Guided>text</Guided>) reaches us as bare
+   nodes, not a paragraph. Wrap it so it gets paragraph spacing and measure;
+   block content (a code fence, a list, another paragraph) passes through. */
+const INLINE_TAGS = new Set(["code", "strong", "em", "a", "kbd", "span", "br"]);
+
+function asBlock(children: ReactNode): ReactNode {
+  const nodes = Children.toArray(children);
+  const inline = nodes.every((n) => {
+    if (typeof n === "string" || typeof n === "number") return true;
+    if (!isValidElement(n)) return false;
+    return typeof n.type === "string" ? INLINE_TAGS.has(n.type) : n.type === V;
+  });
+  return inline ? <p>{children}</p> : children;
+}
+
 export function Guided({ children }: { children: ReactNode }) {
   const { level } = useReader();
-  return atLeast(level, "guided") ? <>{children}</> : null;
+  return atLeast(level, "guided") ? <>{asBlock(children)}</> : null;
 }
 
 export function Deep({ children }: { children: ReactNode }) {
   const { level } = useReader();
-  return atLeast(level, "deep") ? <>{children}</> : null;
+  return atLeast(level, "deep") ? <>{asBlock(children)}</> : null;
 }
 
 export function Note({ children }: { children: ReactNode }) {

@@ -52,7 +52,8 @@ export function useReader(): ReaderState {
 }
 
 const LEVEL_KEY = "at:level";
-const profileKey = (id: string) => `at:profile:${id}`;
+/* Values and choices are shared by the whole series (declared once, filled once). */
+const profileKey = (id: string) => `at:profile:${id.split("/")[0]}`;
 const progressKey = (id: string) => `at:progress:${id}`;
 
 function readJson<T>(key: string): T | null {

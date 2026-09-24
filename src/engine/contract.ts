@@ -82,7 +82,9 @@ export const GroupSpec = z.object({
 export const Difficulty = z.enum(["beginner", "intermediate", "advanced"]);
 export type Difficulty = z.infer<typeof Difficulty>;
 
-export const TutoContract = z
+/* Shape of a page's tuto.yaml on its own. Cross-references (groups, `when`)
+   are checked by TutoContract once the series' declarations are merged in. */
+export const PageContract = z
   .object({
     title: Localized,
     summary: Localized,
@@ -97,8 +99,10 @@ export const TutoContract = z
     groups: z.array(GroupSpec).default([]),
     vars: z.array(VarSpec).default([]),
     choices: z.array(ChoiceSpec).default([]),
-  })
-  .superRefine((t, ctx) => {
+  });
+export type PageContract = z.infer<typeof PageContract>;
+
+export const TutoContract = PageContract.superRefine((t, ctx) => {
     const groupIds = new Set(t.groups.map((g) => g.id));
     const seen = new Set<string>();
     for (const v of t.vars) {
@@ -121,7 +125,7 @@ export const TutoContract = z
     };
     for (const g of t.groups) checkWhen(`group ${g.id}`, g.when, "groups");
     for (const v of t.vars) checkWhen(`variable ${v.key}`, v.when, "vars");
-  });
+});
 export type TutoContract = z.infer<typeof TutoContract>;
 
 export const SeriesContract = z.object({
@@ -129,8 +133,34 @@ export const SeriesContract = z.object({
   summary: Localized,
   /** Page slugs in reading order. Folders not listed are appended alphabetically. */
   order: z.array(Slug).default([]),
+  /** Shared by every page of the series: the reader fills them once. */
+  groups: z.array(GroupSpec).default([]),
+  vars: z.array(VarSpec).default([]),
+  choices: z.array(ChoiceSpec).default([]),
 });
 export type SeriesContract = z.infer<typeof SeriesContract>;
+
+/** A page inherits the series' groups, variables and choices; it may add, never redefine. */
+export function inherit(series: SeriesContract, page: PageContract): TutoContract {
+  const clash = (kind: string, a: { key?: string; id?: string }[], b: { key?: string; id?: string }[]) => {
+    const ids = new Set(a.map((x) => x.key ?? x.id));
+    for (const x of b) {
+      const k = x.key ?? x.id;
+      if (ids.has(k)) throw new Error(`${kind} "${k}" is already declared by the series; a page cannot redefine it`);
+    }
+  };
+  clash("group", series.groups, page.groups);
+  clash("variable", series.vars, page.vars);
+  clash("choice", series.choices, page.choices);
+  const merged = {
+    ...page,
+    groups: [...series.groups, ...page.groups],
+    vars: [...series.vars, ...page.vars],
+    choices: [...series.choices, ...page.choices],
+  };
+  // Re-validate cross-references (groups, `when`) against the merged whole.
+  return TutoContract.parse(merged);
+}
 
 /** Initial values for a fresh profile of this tutorial. */
 export function defaultsOf(t: TutoContract): { vars: Record<string, string>; choices: Record<string, string | boolean> } {

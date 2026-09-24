@@ -16,7 +16,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
-import { LOCALES, SeriesContract, TutoContract, type Locale } from "@/engine";
+import { inherit, LOCALES, PageContract, SeriesContract, type TutoContract, type Locale } from "@/engine";
 
 export const CONTENT_DIR = path.join(process.cwd(), "content");
 
@@ -64,9 +64,19 @@ export function pageSourcePath(page: PageRef, locale: Locale): string {
   return path.join(CONTENT_DIR, page.series, page.slug, `page-${locale}.mdx`);
 }
 
-async function loadPage(series: string, slug: string): Promise<Page> {
+async function readSeriesContract(series: string): Promise<SeriesContract> {
+  return readYaml(path.join(CONTENT_DIR, series, "series.yaml"), SeriesContract);
+}
+
+async function loadPage(series: string, slug: string, seriesContract?: SeriesContract): Promise<Page> {
   const dir = path.join(CONTENT_DIR, series, slug);
-  const contract = await readYaml(path.join(dir, "tuto.yaml"), TutoContract);
+  const own = await readYaml(path.join(dir, "tuto.yaml"), PageContract);
+  let contract: TutoContract;
+  try {
+    contract = inherit(seriesContract ?? (await readSeriesContract(series)), own);
+  } catch (err) {
+    throw new Error(`Invalid ${path.relative(process.cwd(), path.join(dir, "tuto.yaml"))}:\n${(err as Error).message}`);
+  }
   for (const locale of LOCALES) {
     const src = pageSourcePath({ series, slug }, locale);
     if (!(await exists(src))) throw new Error(`Missing ${path.relative(process.cwd(), src)} — every page needs every locale.`);
@@ -76,14 +86,14 @@ async function loadPage(series: string, slug: string): Promise<Page> {
 
 export async function loadSeries(slug: string): Promise<Series> {
   const dir = path.join(CONTENT_DIR, slug);
-  const contract = await readYaml(path.join(dir, "series.yaml"), SeriesContract);
+  const contract = await readSeriesContract(slug);
   const entries = await readdir(dir, { withFileTypes: true });
   const folders = entries.filter((e) => e.isDirectory()).map((e) => e.name);
   const pageFolders: string[] = [];
   for (const f of folders) if (await exists(path.join(dir, f, "tuto.yaml"))) pageFolders.push(f);
 
   const ordered = [...contract.order.filter((s) => pageFolders.includes(s)), ...pageFolders.filter((s) => !contract.order.includes(s)).sort()];
-  const pages = await Promise.all(ordered.map((p) => loadPage(slug, p)));
+  const pages = await Promise.all(ordered.map((p) => loadPage(slug, p, contract)));
   return { slug, contract, pages };
 }
 

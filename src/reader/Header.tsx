@@ -14,6 +14,7 @@ export function Header({
   level,
   setLevel,
   outline,
+  hidden,
 }: {
   locale: Locale;
   /** Path without the locale prefix, for the language switch. */
@@ -23,10 +24,17 @@ export function Header({
   setLevel?: (l: Level) => void;
   /** Outline toggle (wide screens only) and what replaces the outline when folded. */
   outline?: { open: boolean; toggle: () => void; folded?: ReactNode };
+  /** Slides out of view while the reader scrolls down. */
+  hidden?: boolean;
 }) {
   const t = dict(locale);
   return (
-    <header className="sticky top-0 z-30 border-b border-line bg-paper/90 backdrop-blur">
+    <header
+      className={
+        "sticky top-0 z-30 border-b border-line bg-paper/90 backdrop-blur transition-transform duration-200 " +
+        (hidden ? "-translate-y-full" : "")
+      }
+    >
       <div className="mx-auto flex max-w-[100rem] flex-wrap items-center gap-x-4 gap-y-2 px-6 py-2.5 lg:px-10">
         {outline && (
           <button

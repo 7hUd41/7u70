@@ -1,0 +1,109 @@
+# Inherits from ../series.yaml: NETBOX_HOST, INSTALL_DIR, OS, WEB, LDAP and the host/auth groups.
+
+title:
+  en: Configure NetBox for your team
+  fr: Configurer NetBox pour ton équipe
+summary:
+  en: >-
+    The settings you want before opening NetBox to colleagues: time zone and banners, outgoing
+    mail, groups and permissions, the first plugins, and the custom fields your data needs.
+  fr: >-
+    Les réglages à faire avant d'ouvrir NetBox aux collègues : fuseau et bandeaux, envoi de mail,
+    groupes et permissions, premiers plugins, et les champs personnalisés dont tes données ont besoin.
+difficulty: intermediate
+tags: [netbox, permissions, plugins, api]
+authors: [thudal]
+created: 2026-09-24
+minutes: 40
+validated: NetBox 4.4 · Ubuntu 24.04
+
+groups:
+  - id: mail
+    label: { en: Outgoing mail, fr: Envoi de mail }
+    desc: { en: Only used when mail is enabled., fr: Utilisé seulement si le mail est activé. }
+    when: { flag: MAIL }
+  - id: api
+    label: { en: API access, fr: Accès API }
+
+vars:
+  - key: TIMEZONE
+    kind: text
+    group: host
+    default: Europe/Paris
+    label: { en: Time zone, fr: Fuseau horaire }
+    hint:
+      en: The zone in which NetBox shows dates and times, as a tz database name.
+      fr: Le fuseau dans lequel NetBox affiche dates et heures, sous forme de nom tz.
+    impact:
+      en: Applies to the whole instance, including the change log and scheduled jobs. Users can override it in their preferences.
+      fr: S'applique à toute l'instance, journal des changements et tâches planifiées compris. Chaque utilisateur peut le surcharger dans ses préférences.
+  - key: BANNER
+    kind: text
+    group: host
+    default: Lab instance — data may be reset
+    label: { en: Top banner, fr: Bandeau du haut }
+    hint:
+      en: A short line shown on every page. Use it to tell staging from production at a glance. Leave empty for none.
+      fr: Une ligne courte affichée sur chaque page. Sert à distinguer la préprod de la prod d'un coup d'œil. Vide pour ne rien afficher.
+  - key: SMTP_HOST
+    kind: hostname
+    group: mail
+    default: smtp.example.com
+    label: { en: SMTP server, fr: Serveur SMTP }
+    hint:
+      en: The mail relay NetBox hands its messages to. It must accept mail from this server's IP.
+      fr: Le relais mail auquel NetBox confie ses messages. Il doit accepter le courrier venant de l'IP de ce serveur.
+  - key: SMTP_PORT
+    kind: port
+    group: mail
+    default: "587"
+    label: { en: SMTP port, fr: Port SMTP }
+    hint:
+      en: 587 for submission with STARTTLS (the usual choice), 25 for a relay on the local network.
+      fr: 587 pour la soumission avec STARTTLS (le choix habituel), 25 pour un relais sur le réseau local.
+  - key: FROM_EMAIL
+    kind: email
+    group: mail
+    default: netbox@example.com
+    label: { en: Sender address, fr: Adresse d'expédition }
+    hint:
+      en: What recipients see in the From field. Some relays refuse addresses outside their own domain.
+      fr: Ce que les destinataires voient dans le champ From. Certains relais refusent les adresses hors de leur domaine.
+  - key: NETBOX_TOKEN
+    kind: secret
+    group: api
+    default: ""
+    label: { en: API token, fr: Jeton d'API }
+    hint:
+      en: A token created in NetBox (your profile → API tokens). It lets the commands on this page change settings through the REST API instead of clicking.
+      fr: Un jeton créé dans NetBox (ton profil → jetons d'API). Il permet aux commandes de cette page de modifier les réglages via l'API REST plutôt qu'en cliquant.
+    impact:
+      en: A token carries the permissions of the user who created it. Create it with an expiry date, and revoke it when this page is done.
+      fr: Un jeton porte les permissions de l'utilisateur qui l'a créé. Crée-le avec une date d'expiration, et révoque-le une fois cette page terminée.
+  - key: LDAP_ADMIN_GROUP
+    kind: text
+    group: auth
+    default: CN=netbox-admins,OU=Groups,DC=example,DC=com
+    label: { en: Administrators group, fr: Groupe des administrateurs }
+    hint:
+      en: The directory group whose members become NetBox superusers, as a full distinguished name.
+      fr: Le groupe d'annuaire dont les membres deviennent superutilisateurs NetBox, sous forme de DN complet.
+    impact:
+      en: Membership is checked at each login. Removing someone from the group removes their rights at their next login, not immediately.
+      fr: L'appartenance est vérifiée à chaque connexion. Retirer quelqu'un du groupe lui retire ses droits à sa prochaine connexion, pas immédiatement.
+
+choices:
+  - key: MAIL
+    type: boolean
+    label: { en: Send email (password resets, alerts), fr: Envoyer des emails (réinitialisations, alertes) }
+    default: true
+  - key: PLUGIN_TOPOLOGY
+    type: boolean
+    label: { en: Plugin — topology views, fr: Plugin — vues de topologie }
+    hint: { en: Draws your cabling as diagrams., fr: Dessine ton câblage en schémas. }
+    default: true
+  - key: PLUGIN_BGP
+    type: boolean
+    label: { en: Plugin — BGP, fr: Plugin — BGP }
+    hint: { en: Models sessions, peer groups and routing policies., fr: Modélise sessions, groupes de pairs et politiques de routage. }
+    default: false

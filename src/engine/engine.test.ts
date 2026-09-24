@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { atLeast, buildInstallScript, defaultsOf, evaluate, fill, joinCommands, keysOf, scanDangers, segments, TutoContract, validate } from "./index";
+import { atLeast, buildInstallScript, defaultsOf, evaluate, fill, inherit, joinCommands, keysOf, PageContract, scanDangers, segments, SeriesContract, TutoContract, validate } from "./index";
 
 describe("template", () => {
   const vars = { HOST: "netbox.lan", PORT: "8001" };
@@ -160,5 +160,37 @@ describe("contract", () => {
 
   it("rejects lowercase keys", () => {
     expect(() => TutoContract.parse({ ...base, vars: [{ ...base.vars[0], key: "host" }] })).toThrow();
+  });
+});
+
+describe("series inheritance", () => {
+  const series = SeriesContract.parse({
+    title: { en: "S", fr: "S" },
+    summary: { en: "s", fr: "s" },
+    groups: [{ id: "host", label: { en: "Host", fr: "Hôte" } }],
+    vars: [{ key: "HOST", kind: "hostname", group: "host", default: "a", label: { en: "Host", fr: "Hôte" } }],
+    choices: [{ key: "OS", type: "select", label: { en: "OS", fr: "OS" }, options: [{ value: "u", label: { en: "U", fr: "U" } }, { value: "r", label: { en: "R", fr: "R" } }] }],
+  });
+  const page = PageContract.parse({
+    title: { en: "P", fr: "P" },
+    summary: { en: "p", fr: "p" },
+    vars: [{ key: "SMTP", kind: "hostname", group: "host", label: { en: "SMTP", fr: "SMTP" } }],
+  });
+
+  it("merges series-level declarations before the page's own", () => {
+    const m = inherit(series, page);
+    expect(m.vars.map((v) => v.key)).toEqual(["HOST", "SMTP"]);
+    expect(m.choices.map((c) => c.key)).toEqual(["OS"]);
+    expect(m.groups.map((g) => g.id)).toEqual(["host"]);
+  });
+
+  it("lets a page variable use a series group, and a page `when` use a series choice", () => {
+    const p2 = PageContract.parse({ ...page, groups: [{ id: "mail", label: { en: "Mail", fr: "Mail" }, when: { is: "OS", equals: "u" } }] });
+    expect(() => inherit(series, p2)).not.toThrow();
+  });
+
+  it("refuses a page redefining a series key", () => {
+    const p3 = PageContract.parse({ ...page, vars: [{ key: "HOST", kind: "text", label: { en: "x", fr: "x" } }] });
+    expect(() => inherit(series, p3)).toThrow(/already declared/);
   });
 });
