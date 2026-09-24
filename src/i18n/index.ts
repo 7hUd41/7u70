@@ -52,6 +52,7 @@ const en = {
     complete: "All checks passed",
   },
   toc: "On this page",
+  outline: { hide: "Hide the outline", show: "Show the outline" },
   help: {
     about: (label: string) => `About ${label}`,
     impact: "Why it matters",
@@ -146,6 +147,7 @@ const fr: Dict = {
     complete: "Toutes les vérifications passent",
   },
   toc: "Sur cette page",
+  outline: { hide: "Masquer le sommaire", show: "Afficher le sommaire" },
   help: {
     about: (label) => `À propos de ${label}`,
     impact: "Pourquoi c'est important",

@@ -5,7 +5,7 @@
 
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
-import { ArrowLeft, ArrowRight } from "lucide-react";
+import { ArrowLeft, ArrowRight, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import type { Locale, TutoContract } from "@/engine";
 import { StackPanel, ValuesPanel } from "./ContextPanel";
 import { Header } from "./Header";
@@ -70,8 +70,25 @@ function Meta() {
   );
 }
 
+const OUTLINE_KEY = "at:outline";
+
 function Frame(props: ReaderProps) {
   const { level, setLevel, contract, locale, t } = useReader();
+  const [outlineOpen, setOutlineOpen] = useState(true);
+  useEffect(() => {
+    try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration from storage
+      if (localStorage.getItem(OUTLINE_KEY) === "closed") setOutlineOpen(false);
+    } catch {}
+  }, []);
+  const toggleOutline = () => {
+    setOutlineOpen((o) => {
+      try {
+        localStorage.setItem(OUTLINE_KEY, o ? "closed" : "open");
+      } catch {}
+      return !o;
+    });
+  };
   return (
     <>
       <ReadingLine />
@@ -84,10 +101,38 @@ function Frame(props: ReaderProps) {
       />
       {/* Wide screens: outline left (where am I), content, context right (what is mine).
           Narrower: context column only, outline on top. */}
-      <div className="mx-auto grid w-full max-w-[100rem] gap-10 px-6 py-10 lg:grid-cols-[minmax(0,1fr)_320px] lg:px-10 xl:grid-cols-[220px_minmax(0,1fr)_320px]">
+      <div
+        className={
+          "mx-auto grid w-full max-w-[100rem] gap-10 px-6 py-10 lg:grid-cols-[minmax(0,1fr)_320px] lg:px-10 " +
+          (outlineOpen ? "xl:grid-cols-[220px_minmax(0,1fr)_320px]" : "xl:grid-cols-[28px_minmax(0,1fr)_320px]")
+        }
+      >
         <aside className="hidden xl:block">
-          <div className="sticky top-16 max-h-[calc(100vh-5rem)] overflow-y-auto pr-2">
-            <Outline />
+          <div className="sticky top-16 max-h-[calc(100vh-5rem)] overflow-y-auto pr-1">
+            {outlineOpen ? (
+              <>
+                <button
+                  type="button"
+                  onClick={toggleOutline}
+                  title={t.outline.hide}
+                  aria-label={t.outline.hide}
+                  className="mb-3 flex items-center gap-1.5 rounded text-ink-3 hover:text-ink"
+                >
+                  <PanelLeftClose className="h-4 w-4" />
+                </button>
+                <Outline />
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={toggleOutline}
+                title={t.outline.show}
+                aria-label={t.outline.show}
+                className="rounded text-ink-3 hover:text-ink"
+              >
+                <PanelLeftOpen className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </aside>
         <main className="min-w-0">
