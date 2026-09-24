@@ -15,7 +15,7 @@ export default async function Catalogue({ params }: { params: Promise<{ locale: 
   return (
     <>
       <Header locale={locale} path="" />
-      <main className="mx-auto w-full max-w-6xl px-5 py-14">
+      <main className="mx-auto w-full max-w-[100rem] px-6 py-14 lg:px-10">
         <h1 className="font-display text-[2.8rem] leading-[1.05] tracking-tight text-ink">{t.brand}</h1>
         <p className="mt-3 max-w-[60ch] text-[1.15rem] leading-relaxed text-ink-2">{t.tagline}</p>
 

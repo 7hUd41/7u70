@@ -8,6 +8,17 @@ import { Tokenized } from "./Tokenized";
 
 const SHELL = new Set(["", "bash", "sh", "shell", "zsh", "console"]);
 
+/* A `$` prompt marks a line the reader would type. Scripts (shebang), comments,
+   blank lines and continuations of a previous `\` line are not typed. */
+function promptLines(lines: string[], isScript: boolean): boolean[] {
+  let continued = false;
+  return lines.map((line) => {
+    const show = !isScript && !continued && line.trim() !== "" && !line.trim().startsWith("#");
+    continued = line.trimEnd().endsWith("\\");
+    return show;
+  });
+}
+
 /* Fenced code becomes <pre><code class="language-x">…</code></pre> in MDX.
    We map <pre> here and read the language + text from the inner <code>. */
 export function Pre({ children }: { children?: ReactNode }) {
@@ -24,7 +35,11 @@ export function CodeBlock({ code, lang = "", title }: { code: string; lang?: str
   const [copied, setCopied] = useState(false);
   const clean = code.replace(/\n$/, "");
   const shell = SHELL.has(lang.toLowerCase());
+  const isScript = clean.startsWith("#!");
+  const lines = clean.split("\n");
+  const prompts = promptLines(lines, isScript);
   const dangers = shell ? scanDangers(clean) : [];
+  const caption = title ?? (shell && isScript ? "script" : !shell && lang ? lang : undefined);
 
   const copy = async () => {
     try {
@@ -43,9 +58,9 @@ export function CodeBlock({ code, lang = "", title }: { code: string; lang?: str
       data-lang={lang || undefined}
       className="group relative my-4 overflow-hidden rounded-md border border-code-line bg-code-bg text-code-ink"
     >
-      {(title || (lang && !shell)) && (
+      {caption && (
         <figcaption className="label flex items-center justify-between border-b border-code-line px-3.5 py-1.5">
-          <span className="font-mono normal-case tracking-normal">{title ?? lang}</span>
+          <span className="font-mono normal-case tracking-normal">{caption}</span>
         </figcaption>
       )}
       {dangers.length > 0 && (
@@ -61,16 +76,16 @@ export function CodeBlock({ code, lang = "", title }: { code: string; lang?: str
         onClick={copy}
         aria-label={t.code.copy}
         className="ui absolute right-2 top-2 inline-flex items-center gap-1 rounded border border-line bg-paper px-2 py-1 text-[12px] text-ink-2 opacity-0 transition hover:text-ink focus:opacity-100 group-hover:opacity-100"
-        style={{ top: dangers.length > 0 || title || (lang && !shell) ? undefined : "0.5rem" }}
+        style={{ top: dangers.length > 0 || caption ? undefined : "0.5rem" }}
       >
         {copied ? <Check className="h-3 w-3 text-ok" /> : <Copy className="h-3 w-3" />}
         {copied ? t.code.copied : t.code.copy}
       </button>
       <pre className="overflow-x-auto px-3.5 py-3 text-[13.5px] leading-[1.65]">
         <code>
-          {clean.split("\n").map((line, i) => (
+          {lines.map((line, i) => (
             <div key={i}>
-              {shell && <span className="mr-2 select-none text-code-muted">$</span>}
+              {shell && !isScript && <span className={"mr-2 inline-block w-3 select-none text-code-muted " + (prompts[i] ? "" : "opacity-0")}>$</span>}
               <Tokenized template={line} />
             </div>
           ))}

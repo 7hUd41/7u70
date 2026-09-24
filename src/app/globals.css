@@ -128,11 +128,22 @@ samp,
 }
 
 /* ── Prose (tutorial body) ─────────────────────────────────── */
+/* Text keeps a reading measure; code, checks and tables use the whole column. */
 .prose {
-  max-width: 68ch;
+  --measure: 70ch;
 }
 .prose > * + * {
   margin-top: 1em;
+}
+.prose p,
+.prose h1,
+.prose h2,
+.prose h3,
+.prose ul,
+.prose ol,
+.prose blockquote,
+.prose aside {
+  max-width: var(--measure);
 }
 .prose h2 {
   font-family: var(--font-serif);

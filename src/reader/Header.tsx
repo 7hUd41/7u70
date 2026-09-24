@@ -22,7 +22,7 @@ export function Header({
   const t = dict(locale);
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-paper/90 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-2 px-5 py-2.5">
+      <div className="mx-auto flex max-w-[100rem] flex-wrap items-center gap-x-4 gap-y-2 px-6 py-2.5 lg:px-10">
         <nav className="ui flex min-w-0 items-center gap-2 text-[13px]">
           <Link href={`/${locale}`} className="font-bold text-ink">
             {t.brand}
