@@ -58,11 +58,13 @@ function promptLines(lines: string[], isScript: boolean): boolean[] {
   });
 }
 
-/* Fenced code becomes <pre><code class="language-x" data-meta="…">…</code></pre>.
-   We map <pre> here and read language, meta and text from the inner <code>. */
+/* Fenced code becomes <pre data-code data-lang data-meta><code>…</code></pre>
+   (see rehype-code-meta). We map <pre> here and read the attributes; the
+   inner <code> is only a fallback for HTML that did not go through it. */
 type CodeEl = React.ReactElement<{ className?: string; children?: ReactNode; "data-meta"?: string }>;
 
-export function Pre({ children }: { children?: ReactNode }) {
+export function Pre({ children, ...props }: { children?: ReactNode; "data-code"?: string; "data-lang"?: string; "data-meta"?: string }) {
+  if (props["data-code"] !== undefined) return <CodeBlock code={props["data-code"]} lang={props["data-lang"] ?? ""} meta={props["data-meta"]} />;
   // The <code> child may arrive alone or among whitespace strings.
   const nodes = Array.isArray(children) ? children : [children];
   const code = nodes.find((n): n is CodeEl => isValidElement(n) && n.type === "code");

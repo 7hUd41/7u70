@@ -4,7 +4,7 @@
    (stack and values, secrets masked). Folded boxes open for the print
    and close again afterwards. */
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Printer } from "lucide-react";
 import { useReader } from "./store";
 
@@ -27,11 +27,18 @@ export function PrintSummary() {
   const { contract, choices, vars, locale, level, t } = useReader();
   const visibleChoices = contract.choices.filter((c) => choices[c.key] !== undefined);
   const visibleVars = contract.vars.filter((v) => (vars[v.key] ?? "") !== "");
+  // The page URL is only known in the browser; reading it during render
+  // would make the server HTML differ and force a full client re-render.
+  const [url, setUrl] = useState("");
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- from the DOM, after hydration
+    setUrl(window.location.href.split("#")[0]);
+  }, []);
   return (
     <section className="hidden print:block" aria-hidden>
       <div className="mb-6 border-b border-line pb-4 text-[11pt]">
         <p className="ui text-[9pt] text-ink-3">
-          {t.print.printedFrom} {typeof window !== "undefined" ? window.location.href.split("#")[0] : ""} · {t.levels[level].label}
+          {t.print.printedFrom} {url} · {t.levels[level].label}
         </p>
         {visibleChoices.length > 0 && (
           <p className="ui mt-2">

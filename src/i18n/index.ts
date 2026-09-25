@@ -52,7 +52,7 @@ const en = {
     complete: "All checks passed",
   },
   toc: "On this page",
-  gist: { title: "The gist", more: "Show every layer", less: "Back to the simple picture" },
+  gist: { title: "The gist", more: "Show every layer", less: "Back to the simple picture", fullscreen: "Full screen", close: "Close", fit: "Fit", hint: "Scroll to zoom · drag to move · Esc to close" },
   print: { button: "Print", printedFrom: "Printed from" },
   glossary: { title: "Glossary", intro: "The terms and abbreviations these pages use. Hover any underlined term in a page to read its definition there.", link: "Open the glossary" },
   search: {
@@ -214,7 +214,7 @@ const fr: Dict = {
     complete: "Toutes les vérifications passent",
   },
   toc: "Sur cette page",
-  gist: { title: "En un coup d'œil", more: "Voir toutes les couches", less: "Revenir au schéma simple" },
+  gist: { title: "En un coup d'œil", more: "Voir toutes les couches", less: "Revenir au schéma simple", fullscreen: "Plein écran", close: "Fermer", fit: "Ajuster", hint: "Molette pour zoomer · glisser pour déplacer · Échap pour fermer" },
   print: { button: "Imprimer", printedFrom: "Imprimé depuis" },
   glossary: { title: "Glossaire", intro: "Les termes et abréviations que ces pages emploient. Survole un terme souligné dans une page pour lire sa définition sur place.", link: "Ouvrir le glossaire" },
   search: {

@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import Script from "next/script";
 import { isLocale, LOCALES } from "@/engine";
 import { dict } from "@/i18n";
 import { fontClassName } from "../fonts";
@@ -17,9 +16,9 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
   return { title: { default: t.brand, template: `%s · ${t.brand}` }, description: t.tagline };
 }
 
-/* Applied before paint so the theme never flashes. Reads the stored choice,
-   falls back to the OS preference. */
-const themeScript = `(function(){try{var t=localStorage.getItem("theme");if(t!=="light"&&t!=="dark"){t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"}document.documentElement.dataset.theme=t;var s=localStorage.getItem("skin");if(s&&s!=="editorial"){document.documentElement.dataset.skin=s}}catch(e){}})();`;
+/* public/theme.js runs before paint so the theme and skin never flash. A
+   plain blocking script in <head>: next/script's beforeInteractive only
+   runs before hydration, which is after the first paint. */
 
 export default async function LocaleLayout({ children, params }: { children: React.ReactNode; params: Promise<{ locale: string }> }) {
   const { locale } = await params;
@@ -27,7 +26,8 @@ export default async function LocaleLayout({ children, params }: { children: Rea
   return (
     <html lang={locale} className={`${fontClassName} h-full`} suppressHydrationWarning>
       <head>
-        <Script id="theme" strategy="beforeInteractive" dangerouslySetInnerHTML={{ __html: themeScript }} />
+        {/* eslint-disable-next-line @next/next/no-sync-scripts -- must run before paint, a few hundred bytes */}
+        <script src="/theme.js" />
       </head>
       <body className="flex min-h-full flex-col">{children}</body>
     </html>
