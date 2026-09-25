@@ -190,16 +190,17 @@ function Drawing({ l, hover, onHover }: { l: Layout; hover: Hover | null; onHove
 }
 
 /* A small card next to the hovered element, in the page. */
-function HoverTip({ rect, what }: { rect: DOMRect; what: { title: string; desc?: string } }) {
-  const below = window.innerHeight - rect.bottom > 160;
-  const left = Math.max(8, Math.min(rect.left, window.innerWidth - 320));
+function HoverTip({ rect, what, large }: { rect: DOMRect; what: { title: string; desc?: string }; large?: boolean }) {
+  const w = large ? 360 : 300;
+  const below = window.innerHeight - rect.bottom > 180;
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - w - 8));
   return (
     <div
       role="tooltip"
-      className="ui pointer-events-none fixed z-50 w-[300px] rounded-md border border-line bg-paper p-2.5 text-[12.5px] leading-snug text-ink shadow-soft"
-      style={{ left, top: below ? rect.bottom + 6 : undefined, bottom: below ? undefined : window.innerHeight - rect.top + 6 }}
+      className={"ui pointer-events-none fixed z-50 rounded-md border border-line bg-paper leading-snug text-ink shadow-soft " + (large ? "p-3.5 text-[14.5px]" : "p-2.5 text-[12.5px]")}
+      style={{ width: w, left, top: below ? rect.bottom + 8 : undefined, bottom: below ? undefined : window.innerHeight - rect.top + 8 }}
     >
-      <div className="mb-0.5 font-bold">{what.title}</div>
+      <div className="mb-1 font-bold">{what.title}</div>
       {what.desc && (
         <div className="text-ink-2">
           <Tokenized template={what.desc} />
@@ -256,8 +257,9 @@ function Fullscreen({ spec, onClose }: { spec: DiagramSpec; onClose: () => void 
   const stage = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
-  const [hover, setHover] = useState<Hover | null>(null);
-  const onHover = useCallback((h: Hover | null) => setHover((prev) => (sameHover(prev, h) ? prev : h)), []);
+  // The hovered element and where it is on screen, for the tip beside it.
+  const [hover, setHover] = useState<{ h: Hover; rect: DOMRect } | null>(null);
+  const onHover = useCallback((h: Hover | null, rect?: DOMRect) => setHover((prev) => (h && rect ? (prev && sameHover(prev.h, h) ? prev : { h, rect }) : null)), []);
   const drag = useRef<{ x: number; y: number; vx: number; vy: number; moved: boolean } | null>(null);
 
   // The stage size decides how the chain wraps: as many rows as fill the screen best.
@@ -271,7 +273,7 @@ function Fullscreen({ spec, onClose }: { spec: DiagramSpec; onClose: () => void 
     return () => ro.disconnect();
   }, []);
   const l = size ? layoutForStage(spec, choices, level, size.w - STAGE_PAD, size.h - STAGE_PAD) : layoutDiagram(spec, choices, level);
-  const what = describe(l, hover, locale);
+  const what = hover ? describe(l, hover.h, locale) : null;
 
   const fit = useCallback(() => {
     const el = stage.current;
@@ -384,24 +386,13 @@ function Fullscreen({ spec, onClose }: { spec: DiagramSpec; onClose: () => void 
         onClickCapture={onClickCapture}
       >
         <div className="absolute left-0 top-0 origin-top-left" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }}>
-          <Drawing l={l} hover={hover} onHover={onHover} />
+          <Drawing l={l} hover={hover?.h ?? null} onHover={onHover} />
         </div>
+        {hover && what?.desc && <HoverTip rect={hover.rect} what={what} large />}
       </div>
-      {/* The reading line: the caption, or what the pointer is on. */}
-      <div className="grid min-h-[64px] grid-cols-[1fr_auto] items-center gap-4 border-t border-line px-4 py-2">
-        {what ? (
-          <p className="text-[14px] leading-snug text-ink">
-            <span className="ui font-bold">{what.title}</span>
-            {what.desc && (
-              <>
-                {" — "}
-                <Tokenized template={what.desc} />
-              </>
-            )}
-          </p>
-        ) : (
-          <p className="text-[14px] leading-snug text-ink-2">{spec.caption?.[locale] ?? t.gist.hoverHint}</p>
-        )}
+      {/* The caption stays below; explanations appear beside what the pointer is on. */}
+      <div className="grid min-h-[56px] grid-cols-[1fr_auto] items-center gap-4 border-t border-line px-4 py-2">
+        <p className="text-[14px] leading-snug text-ink-2">{spec.caption?.[locale] ?? t.gist.hoverHint}</p>
         <span className="text-[11.5px] text-ink-3">{t.gist.hint}</span>
       </div>
     </div>
