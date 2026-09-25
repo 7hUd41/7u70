@@ -20,7 +20,7 @@ export function LevelSwitch({ level, setLevel, locale }: { level: Level; setLeve
           title={t.levels[l].hint}
           onClick={() => setLevel(l)}
           className={
-            "rounded px-2.5 py-1 text-[12.5px] transition " +
+            "rounded-[calc(var(--radius-md)-2px)] px-2.5 py-1 text-[12.5px] transition " +
             (level === l ? "bg-paper text-ink shadow-soft" : "text-ink-3 hover:text-ink")
           }
         >

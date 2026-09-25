@@ -1,13 +1,16 @@
 "use client";
 
-/* Search palette: "/" or ⌘K opens it, the index loads on first use, results
-   are sections of pages ranked by where the terms appear (heading > title >
-   text). Enter goes to the section. No dependency: a few dozen lines are
-   enough for a few hundred pages. */
+/* Search palette: "/" or ⌘K opens it. With no query it browses every page
+   by series; with one it ranks sections (heading > title > text). Filters
+   by series and tag on the right, glossary link at the bottom. Rendered
+   in a portal on <body>: the header's backdrop filter would otherwise trap
+   a fixed element inside it. */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Search as SearchIcon } from "lucide-react";
+import { BookA, Search as SearchIcon } from "lucide-react";
 import type { Locale } from "@/engine";
 import { dict } from "@/i18n";
 import type { IndexEntry } from "@/content/search-index";
@@ -85,7 +88,7 @@ export function SearchButton({ locale }: { locale: Locale }) {
         <span className="hidden sm:inline">{t.search.open}</span>
         <kbd className="hidden rounded border border-line px-1 font-mono text-[10.5px] sm:inline">/</kbd>
       </button>
-      {open && <SearchPalette locale={locale} onClose={() => setOpen(false)} />}
+      {open && createPortal(<SearchPalette locale={locale} onClose={() => setOpen(false)} />, document.body)}
     </>
   );
 }
@@ -96,6 +99,8 @@ function SearchPalette({ locale, onClose }: { locale: Locale; onClose: () => voi
   const [index, setIndex] = useState<IndexEntry[] | null>(null);
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
+  const [series, setSeries] = useState<string | null>(null);
+  const [tag, setTag] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -113,56 +118,137 @@ function SearchPalette({ locale, onClose }: { locale: Locale; onClose: () => voi
     };
   }, [locale]);
 
-  const hits = useMemo(() => (index ? search(index, q) : []), [index, q]);
-  const go = (h: Hit) => {
+  // Escape closes from anywhere, not only from the input.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const filtered = useMemo(() => (index ?? []).filter((e) => (!series || e.series === series) && (!tag || e.tags.includes(tag))), [index, series, tag]);
+  const hits = useMemo(() => search(filtered, q), [filtered, q]);
+  const browsing = q.trim().length < 2;
+
+  // Counts for the filter lists, from the whole index so a filter never hides its siblings.
+  const seriesList = useMemo(() => {
+    const m = new Map<string, { title: string; n: number }>();
+    for (const e of index ?? []) m.set(e.series, { title: e.seriesTitle, n: (m.get(e.series)?.n ?? 0) + 1 });
+    return [...m.entries()];
+  }, [index]);
+  const tagList = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of index ?? []) for (const x of e.tags) m.set(x, (m.get(x) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [index]);
+
+  const goPage = (e: IndexEntry, sectionId = "") => {
     onClose();
-    router.push(`/${locale}/${h.entry.series}/${h.entry.page}${h.sectionId ? `#${h.sectionId}` : ""}`);
+    router.push(`/${locale}/${e.series}/${e.page}${sectionId ? `#${sectionId}` : ""}`);
   };
 
+  const rows = browsing ? filtered.map((e) => ({ key: `${e.series}/${e.page}`, entry: e, sectionId: "", heading: "", snippet: e.summary })) : hits.map((h) => ({ key: `${h.entry.series}/${h.entry.page}#${h.sectionId}`, ...h }));
+
   return (
-    <div className="fixed inset-0 z-[70] flex items-start justify-center bg-ink/40 p-4 pt-[12vh]" onClick={onClose} role="dialog" aria-modal aria-label={t.search.open}>
-      <div className="ui w-full max-w-xl overflow-hidden rounded-md border border-line bg-paper shadow-soft" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-2 border-b border-line px-3">
-          <SearchIcon className="h-4 w-4 shrink-0 text-ink-3" />
-          <input
-            ref={input}
-            autoFocus
-            value={q}
-            onChange={(e) => {
-              setQ(e.target.value);
-              setSel(0);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") onClose();
-              else if (e.key === "ArrowDown") setSel((s) => Math.min(hits.length - 1, s + 1));
-              else if (e.key === "ArrowUp") setSel((s) => Math.max(0, s - 1));
-              else if (e.key === "Enter" && hits[sel]) go(hits[sel]);
-            }}
-            placeholder={t.search.placeholder}
-            className="w-full bg-transparent py-3 text-[15px] text-ink placeholder:text-ink-3 focus:outline-none"
-          />
-          <kbd className="rounded border border-line px-1 font-mono text-[10.5px] text-ink-3">esc</kbd>
+    <div className="fixed inset-0 z-[70] flex items-start justify-center bg-ink/40 p-4 pt-[10vh]" onClick={onClose} role="dialog" aria-modal aria-label={t.search.open}>
+      <div className="ui grid w-full max-w-3xl overflow-hidden rounded-md border border-line bg-paper shadow-soft sm:grid-cols-[minmax(0,1fr)_200px]" onClick={(e) => e.stopPropagation()}>
+        <div className="flex min-h-0 flex-col">
+          <div className="flex items-center gap-2 border-b border-line px-3">
+            <SearchIcon className="h-4 w-4 shrink-0 text-ink-3" />
+            <input
+              ref={input}
+              autoFocus
+              value={q}
+              onChange={(e) => {
+                setQ(e.target.value);
+                setSel(0);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowDown") setSel((s) => Math.min(rows.length - 1, s + 1));
+                else if (e.key === "ArrowUp") setSel((s) => Math.max(0, s - 1));
+                else if (e.key === "Enter" && rows[sel]) goPage(rows[sel].entry, rows[sel].sectionId);
+              }}
+              placeholder={t.search.placeholder}
+              className="w-full bg-transparent py-3 text-[15px] text-ink placeholder:text-ink-3 focus:outline-none"
+            />
+            <kbd className="rounded border border-line px-1 font-mono text-[10.5px] text-ink-3">esc</kbd>
+          </div>
+          <ul className="max-h-[56vh] overflow-y-auto py-1">
+            {index === null && <li className="px-4 py-3 text-[13px] text-ink-3">{t.search.loading}</li>}
+            {index !== null && rows.length === 0 && <li className="px-4 py-3 text-[13px] text-ink-3">{t.search.empty}</li>}
+            {browsing && rows.length > 0 && <li className="label px-4 pb-1 pt-2">{t.search.browse}</li>}
+            {rows.map((r, i) => (
+              <li key={r.key}>
+                <button
+                  type="button"
+                  onMouseEnter={() => setSel(i)}
+                  onClick={() => goPage(r.entry, r.sectionId)}
+                  className={"block w-full px-4 py-2.5 text-left transition " + (i === sel ? "bg-paper-2" : "hover:bg-paper-2/60")}
+                >
+                  <span className="label block">
+                    {r.entry.seriesTitle}
+                    {!browsing && ` / ${r.entry.title}`}
+                  </span>
+                  <span className="block font-serif text-[15px] text-ink">{browsing ? r.entry.title : r.heading || r.entry.title}</span>
+                  <span className="block text-[12.5px] leading-snug text-ink-2">{r.snippet}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="flex items-center justify-between border-t border-line px-4 py-2 text-[12.5px]">
+            <Link href={`/${locale}/glossary`} onClick={onClose} className="inline-flex items-center gap-1.5 text-ink-2 hover:text-ink">
+              <BookA className="h-3.5 w-3.5" /> {t.search.glossary}
+            </Link>
+            <span className="text-ink-3">↑↓ · ⏎ · esc</span>
+          </div>
         </div>
-        <ul className="max-h-[60vh] overflow-y-auto py-1">
-          {index === null && <li className="px-4 py-3 text-[13px] text-ink-3">{t.search.loading}</li>}
-          {index !== null && q.trim().length >= 2 && hits.length === 0 && <li className="px-4 py-3 text-[13px] text-ink-3">{t.search.empty}</li>}
-          {hits.map((h, i) => (
-            <li key={`${h.entry.series}/${h.entry.page}#${h.sectionId}`}>
+
+        <aside className="hidden border-l border-line bg-paper-2/50 p-3 sm:block">
+          <div className="mb-3 flex items-baseline justify-between">
+            <span className="label">{t.search.filters}</span>
+            {(series || tag) && (
               <button
                 type="button"
-                onMouseEnter={() => setSel(i)}
-                onClick={() => go(h)}
-                className={"block w-full px-4 py-2.5 text-left transition " + (i === sel ? "bg-paper-2" : "hover:bg-paper-2/60")}
+                onClick={() => {
+                  setSeries(null);
+                  setTag(null);
+                }}
+                className="text-[11.5px] text-accent-ink hover:underline"
               >
-                <span className="label block">
-                  {h.entry.seriesTitle} / {h.entry.title}
-                </span>
-                {h.heading && <span className="block font-serif text-[15px] text-ink">{h.heading}</span>}
-                <span className="block text-[12.5px] leading-snug text-ink-2">{h.snippet}</span>
+                {t.search.clear}
               </button>
-            </li>
-          ))}
-        </ul>
+            )}
+          </div>
+          <span className="label mb-1 block text-[10.5px]">{t.search.bySeries}</span>
+          <ul className="mb-4 space-y-0.5">
+            {seriesList.map(([slug, s]) => (
+              <li key={slug}>
+                <button
+                  type="button"
+                  onClick={() => setSeries(series === slug ? null : slug)}
+                  className={"flex w-full items-center justify-between rounded px-1.5 py-1 text-[12.5px] " + (series === slug ? "bg-accent-soft text-ink" : "text-ink-2 hover:text-ink")}
+                >
+                  <span className="truncate">{s.title}</span>
+                  <span className="text-ink-3">{s.n}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <span className="label mb-1 block text-[10.5px]">{t.search.byTag}</span>
+          <ul className="space-y-0.5">
+            {tagList.map(([x, n]) => (
+              <li key={x}>
+                <button
+                  type="button"
+                  onClick={() => setTag(tag === x ? null : x)}
+                  className={"flex w-full items-center justify-between rounded px-1.5 py-1 text-[12.5px] " + (tag === x ? "bg-accent-soft text-ink" : "text-ink-2 hover:text-ink")}
+                >
+                  <span className="truncate">{x}</span>
+                  <span className="text-ink-3">{n}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </aside>
       </div>
     </div>
   );

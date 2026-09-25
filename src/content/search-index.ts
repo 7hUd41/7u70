@@ -20,6 +20,8 @@ export type IndexEntry = {
   page: string;
   title: string;
   summary: string;
+  tags: string[];
+  difficulty: string;
   sections: IndexSection[];
 };
 
@@ -84,6 +86,8 @@ export async function buildIndex(locale: Locale): Promise<IndexEntry[]> {
         page: p.slug,
         title: p.contract.title[locale],
         summary: p.contract.summary[locale],
+        tags: p.contract.tags,
+        difficulty: p.contract.difficulty,
         sections: sectionsOf(src),
       });
     }

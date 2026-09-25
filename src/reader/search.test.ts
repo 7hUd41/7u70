@@ -4,14 +4,14 @@ import type { IndexEntry } from "@/content/search-index";
 
 const index: IndexEntry[] = [
   {
-    series: "netbox", seriesTitle: "NetBox", page: "install", title: "Install NetBox", summary: "",
+    series: "netbox", seriesTitle: "NetBox", page: "install", title: "Install NetBox", summary: "", tags: ["netbox"], difficulty: "intermediate",
     sections: [
       { id: "", heading: "", text: "NetBox is four moving parts." },
       { id: "postgresql", heading: "PostgreSQL", text: "sudo apt install -y postgresql" },
       { id: "redis", heading: "Redis", text: "redis-cli ping PONG" },
     ],
   },
-  { series: "example", seriesTitle: "Example", page: "ssh", title: "Secure SSH", summary: "", sections: [{ id: "firewall", heading: "Firewall", text: "sudo ufw allow 2222/tcp" }] },
+  { series: "example", seriesTitle: "Example", page: "ssh", title: "Secure SSH", summary: "", tags: ["ssh"], difficulty: "beginner", sections: [{ id: "firewall", heading: "Firewall", text: "sudo ufw allow 2222/tcp" }] },
 ];
 
 describe("search", () => {
