@@ -102,7 +102,7 @@ const en = {
       check: { title: "Verify each step", body: "A check shows the command to run and what you should see. Tick it when it matches: your progress is remembered per page." },
       details: { title: "When it fails", body: "Folded boxes hold the fixes for what usually goes wrong. Open them only if you need them." },
       validate: { title: "Tell the next reader", body: "Finished on a real machine? Say so. Your validation is dated and records your stack, never your values." },
-      locale: { title: "Two languages, one page", body: "Every page exists in English and French, with the same steps. Switch here; your values follow you." },
+      locale: { title: "Languages", body: "Under the title, the languages this page is written in. Some pages exist in one language only, for now. Switch here; your values follow you." },
     },
   },
   validated: {
@@ -135,6 +135,7 @@ const en = {
     names: { editorial: "Editorial", parchment: "Parchment", transit: "Transit pink", transit2: "Transit green", slate: "Slate", night: "Night", headline: "Headline", atom: "Atom" },
   },
   locale: { en: "English", fr: "Français" },
+  localeLabel: "Language",
   run: {
     banner: "Run mode: one script does everything. Fill in your context, download, run. Switch to Quick to see what it did.",
   },
@@ -265,7 +266,7 @@ const fr: Dict = {
       check: { title: "Vérifie chaque étape", body: "Une vérification montre la commande à lancer et ce que tu dois voir. Coche quand ça correspond : ta progression est mémorisée par page." },
       details: { title: "Quand ça échoue", body: "Les blocs repliés contiennent les remèdes à ce qui rate d'habitude. Ouvre-les seulement si besoin." },
       validate: { title: "Dis-le au prochain lecteur", body: "Terminé sur une vraie machine ? Dis-le. Ta validation est datée et enregistre ta stack, jamais tes valeurs." },
-      locale: { title: "Deux langues, une page", body: "Chaque page existe en anglais et en français, avec les mêmes étapes. Change ici ; tes valeurs te suivent." },
+      locale: { title: "Langues", body: "Sous le titre, les langues dans lesquelles cette page est écrite. Certaines pages n'existent que dans une langue, pour l'instant. Change ici ; tes valeurs te suivent." },
     },
   },
   validated: {
@@ -298,6 +299,7 @@ const fr: Dict = {
     names: { editorial: "Éditorial", parchment: "Parchemin", transit: "Transit rose", transit2: "Transit vert", slate: "Ardoise", night: "Nuit", headline: "Manchette", atom: "Atom" },
   },
   locale: { en: "English", fr: "Français" },
+  localeLabel: "Langue",
   run: {
     banner: "Mode automatique : un seul script fait tout. Renseigne ton contexte, télécharge, lance. Passe en Express pour voir ce qu'il a fait.",
   },

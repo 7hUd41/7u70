@@ -39,6 +39,15 @@ function find(target: string | string[]): HTMLElement | null {
   return null;
 }
 
+/** The nearest ancestor that scrolls on its own (a side panel), if any. */
+function scrollParent(el: HTMLElement): HTMLElement | null {
+  for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    const o = getComputedStyle(p).overflowY;
+    if ((o === "auto" || o === "scroll") && p.scrollHeight > p.clientHeight) return p;
+  }
+  return null;
+}
+
 export function Tour({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t } = useReader();
   const [i, setI] = useState(0);
@@ -56,7 +65,16 @@ export function Tour({ open, onClose }: { open: boolean; onClose: () => void }) 
     if (!el) return false;
     const r = el.getBoundingClientRect();
     const pad = 8;
-    const b = { top: r.top - pad, left: r.left - pad, width: r.width + pad * 2, height: r.height + pad * 2 };
+    // A target inside a scrolling panel is only lit where the panel shows it;
+    // the panel keeps scrolling under the spotlight.
+    const sp = scrollParent(el);
+    const clip = sp ? sp.getBoundingClientRect() : { top: 0, left: 0, bottom: window.innerHeight, right: window.innerWidth };
+    const y0 = Math.max(r.top, clip.top, 0) - pad;
+    const x0 = Math.max(r.left, clip.left, 0) - pad;
+    const y1 = Math.min(r.bottom, clip.bottom, window.innerHeight) + pad;
+    // …and its scrollbar stays in the light, so the hint is visible.
+    const x1 = Math.min(sp ? clip.right : r.right, window.innerWidth) + pad;
+    const b = { top: y0, left: x0, width: Math.max(0, x1 - x0), height: Math.max(0, y1 - y0) };
     setBox(b);
     const cardW = 340;
     const cardH = 190;
@@ -95,7 +113,10 @@ export function Tour({ open, onClose }: { open: boolean; onClose: () => void }) 
     // Hide the spotlight while the page moves; show it once the scroll has settled.
     setBox(null);
     setCard(null);
-    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    const sp = scrollParent(el);
+    el.scrollIntoView({ block: sp ? "start" : "center", behavior: "smooth" });
+    // Hint that the panel scrolls: its scrollbar takes the accent for this step.
+    sp?.setAttribute("data-tour-scroll", "");
     let settled = false;
     let lastY = window.scrollY;
     let stableFor = 0;
@@ -116,10 +137,13 @@ export function Tour({ open, onClose }: { open: boolean; onClose: () => void }) 
     };
     window.addEventListener("resize", onMove);
     window.addEventListener("scroll", onMove, { passive: true });
+    sp?.addEventListener("scroll", onMove, { passive: true });
     return () => {
       clearInterval(tick);
       window.removeEventListener("resize", onMove);
       window.removeEventListener("scroll", onMove);
+      sp?.removeEventListener("scroll", onMove);
+      sp?.removeAttribute("data-tour-scroll");
     };
   }, [open, i, measure, onClose]);
 
@@ -144,15 +168,23 @@ export function Tour({ open, onClose }: { open: boolean; onClose: () => void }) 
   }
 
   return (
-    <div className="fixed inset-0 z-[60]" role="dialog" aria-modal aria-label={t.tour.title}>
+    <div className="pointer-events-none fixed inset-0 z-[60]" role="dialog" aria-modal aria-label={t.tour.title}>
       {/* The spotlight: everything outside it is dimmed by the shadow. */}
       <div
         className="pointer-events-none absolute rounded-lg ring-2 ring-accent transition-all duration-500 ease-out"
         style={{ ...box, boxShadow: "0 0 0 9999px rgb(20 18 14 / 0.55)" }}
       />
-      <div className="absolute inset-0 cursor-pointer" onClick={onClose} />
+      {/* Four panes around the spotlight close the tour on click; inside it, the page stays live (a panel scrolls, a value opens). */}
+      {[
+        { top: 0, left: 0, right: 0, height: Math.max(0, box.top) },
+        { top: box.top + box.height, left: 0, right: 0, bottom: 0 },
+        { top: box.top, left: 0, width: Math.max(0, box.left), height: box.height },
+        { top: box.top, left: box.left + box.width, right: 0, height: box.height },
+      ].map((st, k) => (
+        <div key={k} className="pointer-events-auto absolute cursor-pointer" style={st} onClick={onClose} />
+      ))}
       <div
-        className="ui absolute w-[340px] rounded-md border border-line bg-paper p-4 shadow-soft transition-all duration-500 ease-out"
+        className="ui pointer-events-auto absolute w-[340px] rounded-md border border-line bg-paper p-4 shadow-soft transition-all duration-500 ease-out"
         style={card}
         onClick={(e) => e.stopPropagation()}
       >

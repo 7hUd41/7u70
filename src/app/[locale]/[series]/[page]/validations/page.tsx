@@ -34,7 +34,7 @@ export default async function ValidationsPage({ params }: { params: Promise<Para
 
   return (
     <>
-      <Header locale={locale} path={`/${series}/${slug}/validations`} crumbs={[{ href: `/${locale}/${series}/${slug}`, label: page.contract.title[locale] }]} />
+      <Header locale={locale} crumbs={[{ href: `/${locale}/${series}/${slug}`, label: page.contract.title[locale] }]} />
       <main className="mx-auto w-full max-w-4xl px-6 py-12 lg:px-10">
         <h1 className="font-display text-[2.2rem] leading-[1.1] text-ink">{t.validated.pageTitle}</h1>
         <p className="mt-2 text-ink-2">

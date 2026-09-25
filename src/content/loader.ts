@@ -9,8 +9,9 @@
          page-en.mdx               prose, one file per locale
          page-fr.mdx
 
-   Both locales are mandatory: a page missing one is a build error,
-   not a fallback.
+   A page exists in the languages it has a prose file for: some are
+   written in English only, some translated later. At least one file
+   is required; the reader is offered the languages that exist.
    ────────────────────────────────────────────────────────────── */
 
 import { appendFile, readdir, readFile, stat } from "node:fs/promises";
@@ -26,6 +27,8 @@ export type Page = PageRef & {
   contract: TutoContract;
   /** Absolute folder of the page. */
   dir: string;
+  /** Languages this page is written in, in site order. */
+  locales: Locale[];
 };
 
 export type Series = {
@@ -77,11 +80,10 @@ async function loadPage(series: string, slug: string, seriesContract?: SeriesCon
   } catch (err) {
     throw new Error(`Invalid ${path.relative(process.cwd(), path.join(dir, "tuto.yaml"))}:\n${(err as Error).message}`);
   }
-  for (const locale of LOCALES) {
-    const src = pageSourcePath({ series, slug }, locale);
-    if (!(await exists(src))) throw new Error(`Missing ${path.relative(process.cwd(), src)} — every page needs every locale.`);
-  }
-  return { series, slug, contract, dir };
+  const locales: Locale[] = [];
+  for (const locale of LOCALES) if (await exists(pageSourcePath({ series, slug }, locale))) locales.push(locale);
+  if (locales.length === 0) throw new Error(`${path.relative(process.cwd(), dir)}: no page-<lang>.mdx — a page needs at least one language.`);
+  return { series, slug, contract, dir, locales };
 }
 
 export async function loadSeries(slug: string): Promise<Series> {

@@ -5,6 +5,7 @@ import { isLocale } from "@/engine";
 import { listSeries } from "@/content/loader";
 import { dict } from "@/i18n";
 import { Header } from "@/reader/Header";
+import { LocaleSwitch } from "@/reader/controls";
 
 export default async function Catalogue({ params }: { params: Promise<{ locale: string }> }) {
   const { locale } = await params;
@@ -14,10 +15,15 @@ export default async function Catalogue({ params }: { params: Promise<{ locale: 
 
   return (
     <>
-      <Header locale={locale} path="" />
+      <Header locale={locale} />
       <main className="mx-auto w-full max-w-[100rem] px-6 py-14 lg:px-10">
-        <h1 className="font-display text-[2.8rem] leading-[1.05] tracking-tight text-ink">{t.brand}</h1>
-        <p className="mt-3 max-w-[60ch] text-[1.15rem] leading-relaxed text-ink-2">{t.tagline}</p>
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h1 className="font-display text-[2.8rem] leading-[1.05] tracking-tight text-ink">{t.brand}</h1>
+            <p className="mt-3 max-w-[60ch] text-[1.15rem] leading-relaxed text-ink-2">{t.tagline}</p>
+          </div>
+          <LocaleSwitch locale={locale} path="" />
+        </div>
 
         {series.map((s) => (
           <section key={s.slug} className="mt-14">
@@ -31,13 +37,20 @@ export default async function Catalogue({ params }: { params: Promise<{ locale: 
             </div>
             <p className="mb-6 max-w-[60ch] text-ink-2">{s.contract.summary[locale]}</p>
             <ol className="grid gap-3 sm:grid-cols-2">
-              {s.pages.map((p, i) => (
+              {s.pages.map((p, i) => {
+                const inLocale = p.locales.includes(locale);
+                const l = inLocale ? locale : p.locales[0];
+                return (
                 <li key={p.slug}>
                   <Link
-                    href={`/${locale}/${s.slug}/${p.slug}`}
+                    href={`/${l}/${s.slug}/${p.slug}`}
+                    hrefLang={l}
                     className="group flex h-full flex-col rounded-md border border-line bg-paper-2/60 p-5 transition hover:border-line-2 hover:bg-paper-2"
                   >
-                    <span className="label mb-2 font-mono normal-case tracking-normal">{String(i + 1).padStart(2, "0")}</span>
+                    <span className="label mb-2 flex items-center gap-2 font-mono normal-case tracking-normal">
+                      {String(i + 1).padStart(2, "0")}
+                      {!inLocale && <span className="rounded border border-line px-1 text-[10.5px] uppercase text-ink-3">{l}</span>}
+                    </span>
                     <span className="font-serif text-[1.2rem] font-semibold leading-snug text-ink">{p.contract.title[locale]}</span>
                     <span className="mt-2 text-[0.95rem] leading-relaxed text-ink-2">{p.contract.summary[locale]}</span>
                     <span className="ui mt-4 flex items-center gap-2 text-[12.5px] text-ink-3">
@@ -47,7 +60,8 @@ export default async function Catalogue({ params }: { params: Promise<{ locale: 
                     </span>
                   </Link>
                 </li>
-              ))}
+                );
+              })}
             </ol>
           </section>
         ))}

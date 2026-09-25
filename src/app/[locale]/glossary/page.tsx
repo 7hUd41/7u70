@@ -4,6 +4,7 @@ import { isLocale, LOCALES } from "@/engine";
 import { readGlossary } from "@/content/loader";
 import { dict } from "@/i18n";
 import { Header } from "@/reader/Header";
+import { LocaleSwitch } from "@/reader/controls";
 
 export function generateStaticParams() {
   return LOCALES.map((locale) => ({ locale }));
@@ -23,9 +24,12 @@ export default async function GlossaryPage({ params }: { params: Promise<{ local
 
   return (
     <>
-      <Header locale={locale} path="/glossary" />
+      <Header locale={locale} />
       <main className="mx-auto w-full max-w-4xl px-6 py-12 lg:px-10">
-        <h1 className="font-display text-[2.2rem] leading-[1.1] text-ink">{t.glossary.title}</h1>
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <h1 className="font-display text-[2.2rem] leading-[1.1] text-ink">{t.glossary.title}</h1>
+          <LocaleSwitch locale={locale} path="/glossary" />
+        </div>
         <p className="mt-2 text-ink-2">{t.glossary.intro}</p>
         <dl className="mt-10 grid gap-x-8 gap-y-6 sm:grid-cols-[minmax(0,200px)_1fr]">
           {entries.map((e) => (

@@ -689,6 +689,13 @@ samp,
   background: var(--line-2);
   border-radius: 3px;
 }
+/* During the tour step that lights a panel: the scrollbar shows it scrolls. */
+.sidebar-scroll[data-tour-scroll] {
+  scrollbar-color: var(--accent) transparent;
+}
+.sidebar-scroll[data-tour-scroll]::-webkit-scrollbar-thumb {
+  background: var(--accent);
+}
 
 /* Glossary term marked in the prose. */
 abbr.term {

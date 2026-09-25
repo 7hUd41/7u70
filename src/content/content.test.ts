@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { compile } from "@mdx-js/mdx";
 import remarkGfm from "remark-gfm";
-import { keysOf, LOCALES } from "@/engine";
+import { keysOf } from "@/engine";
 import { listSeries, readDiagram, readGlossary, readPageSource } from "./loader";
 import { rehypeGlossary } from "./rehype-glossary";
 import { GlossaryEntry } from "@/engine";
@@ -22,7 +22,7 @@ describe("content", () => {
   });
 
   for (const page of pages) {
-    for (const locale of LOCALES) {
+    for (const locale of page.locales) {
       const name = `${page.series}/${page.slug} (${locale})`;
 
       it(`${name} compiles`, async () => {
@@ -64,7 +64,7 @@ describe("content", () => {
 
     it(`${page.series}/${page.slug}: locales use the same headings`, async () => {
       const outlines = await Promise.all(
-        LOCALES.map(async (l) => (await readPageSource(page, l)).split("\n").filter((line) => /^##+ /.test(line)).length)
+        page.locales.map(async (l) => (await readPageSource(page, l)).split("\n").filter((line) => /^##+ /.test(line)).length)
       );
       expect(new Set(outlines).size, "same number of headings in every locale").toBe(1);
     });

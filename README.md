@@ -33,7 +33,8 @@ content/                       tutorials, one folder per page
     <page>/
       tuto.yaml                contract: variables, choices, metadata (language-independent)
       page-en.mdx              prose, English
-      page-fr.mdx              prose, French
+      page-fr.mdx              prose, French — a page exists in the languages it has a file for (at least one);
+                               the reader is offered those, under the title
       diagram.yaml             optional: the visual gist, boxes and arrows, no coordinates
       validations.yaml         append-only: who ran the page end to end, on which stack
 src/

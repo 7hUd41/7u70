@@ -5,8 +5,15 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { ArrowLeft, ArrowRight } from "lucide-react";
-import { LEVELS, type DiagramSpec, type GlossaryEntry, type Locale, type TutoContract, type Validation } from "@/engine";
+import { ArrowLeft, ArrowRight, CalendarDays, Clock } from "lucide-react";
+import {
+  LEVELS,
+  type DiagramSpec,
+  type GlossaryEntry,
+  type Locale,
+  type TutoContract,
+  type Validation,
+} from "@/engine";
 import { GlossaryTips } from "./GlossaryTips";
 import { PrintSummary, PrintSupport } from "./Print";
 import { Gist } from "./Diagram";
@@ -16,6 +23,7 @@ import { StackPanel, ValuesPanel } from "./ContextPanel";
 import { Header } from "./Header";
 import { Outline, ProgressPill } from "./Outline";
 import { ReaderProvider, useReader } from "./store";
+import { LocaleSwitch } from "./controls";
 import { Toolbar } from "./Toolbar";
 import { Tour, TOUR_DONE_KEY } from "./Tour";
 import { VarEditor } from "./VarEditor";
@@ -34,6 +42,8 @@ export type ReaderProps = {
   validations: Validation[];
   diagram: DiagramSpec | null;
   glossary: GlossaryEntry[];
+  /** Languages this page is written in. */
+  locales: Locale[];
   canValidate: boolean;
   /** Start the tour on the reader's first visit of this page. */
   tourOnFirstVisit?: boolean;
@@ -52,32 +62,68 @@ function ReadingLine() {
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
-  return <div className="progress-line fixed inset-x-0 top-0 z-40 print:hidden" style={{ transform: `scaleX(${pct})` }} />;
+  return (
+    <div
+      className="progress-line fixed inset-x-0 top-0 z-40 print:hidden"
+      style={{ transform: `scaleX(${pct})` }}
+    />
+  );
 }
 
-function Meta() {
+/* Under the summary: what kind of page this is (difficulty, time, date),
+   its tags, and the languages it is written in. */
+const DIFFICULTY_DOT = {
+  beginner: "bg-ok",
+  intermediate: "bg-accent",
+  advanced: "bg-warn",
+} as const;
+
+function Meta({ locales, path }: { locales: Locale[]; path: string }) {
   const { contract, locale, t } = useReader();
-  const parts: string[] = [t.meta.difficulty[contract.difficulty]];
-  if (contract.minutes) parts.push(t.meta.minutes(contract.minutes));
-  if (contract.created) parts.push(new Date(contract.created).toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" }));
   return (
-    <p className="ui mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-ink-3">
-      {parts.map((p, i) => (
-        <span key={i} className="flex items-center gap-3">
-          {i > 0 && <span aria-hidden>·</span>}
-          {p}
+    <div className="ui mt-4 space-y-2 text-[12.5px] text-ink-2">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <span className="inline-flex items-center gap-2 rounded-full border border-line bg-paper-2 px-2.5 py-0.5">
+          <span
+            className={
+              "h-1.5 w-1.5 rounded-full " + DIFFICULTY_DOT[contract.difficulty]
+            }
+            aria-hidden
+          />
+          {t.meta.difficulty[contract.difficulty]}
         </span>
-      ))}
+        {contract.minutes && (
+          <span className="inline-flex items-center gap-1.5">
+            <Clock className="h-3.5 w-3.5 text-ink-3" aria-hidden />
+            {t.meta.minutes(contract.minutes)}
+          </span>
+        )}
+        {contract.created && (
+          <span className="inline-flex items-center gap-1.5">
+            <CalendarDays className="h-3.5 w-3.5 text-ink-3" aria-hidden />
+            <time dateTime={contract.created}>
+              {new Date(contract.created).toLocaleDateString(locale, {
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+              })}
+            </time>
+          </span>
+        )}
+        <span className="ml-auto">
+          <LocaleSwitch locale={locale} path={path} locales={locales} />
+        </span>
+      </div>
       {contract.tags.length > 0 && (
-        <span className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-ink-3">
           {contract.tags.map((tag) => (
-            <span key={tag} className="rounded border border-line px-1.5 py-px text-[11.5px]">
-              {tag}
+            <span key={tag} className="font-mono text-[11.5px]">
+              #{tag}
             </span>
           ))}
-        </span>
+        </div>
       )}
-    </p>
+    </div>
   );
 }
 
@@ -129,7 +175,13 @@ function Frame(props: ReaderProps) {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
-      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      if (
+        el &&
+        (el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.isContentEditable)
+      )
+        return;
       if (tourOpen) return;
       const n = Number(e.key);
       if (n >= 1 && n <= LEVELS.length) return setLevel(LEVELS[n - 1]);
@@ -160,11 +212,14 @@ function Frame(props: ReaderProps) {
       <ReadingLine />
       <Header
         locale={locale}
-        path={props.path}
         crumbs={[{ href: props.series.href, label: props.series.title }]}
         level={level}
         setLevel={setLevel}
-        outline={{ open: outlineOpen, toggle: toggleOutline, folded: <ProgressPill /> }}
+        outline={{
+          open: outlineOpen,
+          toggle: toggleOutline,
+          folded: <ProgressPill />,
+        }}
         hidden={headerHidden}
         onTour={() => setTourOpen(true)}
       />
@@ -185,10 +240,17 @@ function Frame(props: ReaderProps) {
         )}
         <main className="min-w-0">
           <PrintSummary />
-          <h1 className="font-display text-[2.4rem] leading-[1.1] tracking-tight text-ink">{contract.title[locale]}</h1>
-          <p className="mt-3 text-[1.1rem] leading-relaxed text-ink-2">{contract.summary[locale]}</p>
-          <Meta />
-          <ValidationLine list={validations.list} href={`/${locale}${props.path}/validations`} />
+          <h1 className="font-display text-[2.4rem] leading-[1.1] tracking-tight text-ink">
+            {contract.title[locale]}
+          </h1>
+          <p className="mt-3 text-[1.1rem] leading-relaxed text-ink-2">
+            {contract.summary[locale]}
+          </p>
+          <Meta locales={props.locales} path={props.path} />
+          <ValidationLine
+            list={validations.list}
+            href={`/${locale}${props.path}/validations`}
+          />
           {props.diagram && <Gist spec={props.diagram} />}
           <div className="mt-6 border-b border-line pb-5 print:hidden">
             <Toolbar title={contract.title[locale]} slug={props.slug} />
@@ -196,25 +258,40 @@ function Frame(props: ReaderProps) {
           <article className="prose doc-body" data-level={level}>
             {props.children}
           </article>
-          <ValidatePanel series={props.id.split("/")[0]} slug={props.slug} onAdded={validations.add} canValidate={props.canValidate} />
+          <ValidatePanel
+            series={props.id.split("/")[0]}
+            slug={props.slug}
+            onAdded={validations.add}
+            canValidate={props.canValidate}
+          />
           {(props.prev || props.next) && (
             <nav className="ui mt-14 grid gap-3 border-t border-line pt-6 sm:grid-cols-2 print:hidden">
               {props.prev ? (
-                <Link href={props.prev.href} className="group rounded-md border border-line p-4 transition hover:border-line-2">
+                <Link
+                  href={props.prev.href}
+                  className="group rounded-md border border-line p-4 transition hover:border-line-2"
+                >
                   <span className="mb-1 flex items-center gap-1 text-[12px] text-ink-3">
                     <ArrowLeft className="h-3.5 w-3.5" /> {t.nav.prev}
                   </span>
-                  <span className="font-serif text-[15px] text-ink">{props.prev.title}</span>
+                  <span className="font-serif text-[15px] text-ink">
+                    {props.prev.title}
+                  </span>
                 </Link>
               ) : (
                 <span />
               )}
               {props.next && (
-                <Link href={props.next.href} className="group rounded-md border border-line p-4 text-right transition hover:border-accent">
+                <Link
+                  href={props.next.href}
+                  className="group rounded-md border border-line p-4 text-right transition hover:border-accent"
+                >
                   <span className="mb-1 flex items-center justify-end gap-1 text-[12px] text-ink-3">
                     {t.nav.next} <ArrowRight className="h-3.5 w-3.5" />
                   </span>
-                  <span className="font-serif text-[15px] text-ink">{props.next.title}</span>
+                  <span className="font-serif text-[15px] text-ink">
+                    {props.next.title}
+                  </span>
                 </Link>
               )}
             </nav>
@@ -240,7 +317,11 @@ function Frame(props: ReaderProps) {
 
 export function Reader(props: ReaderProps) {
   return (
-    <ReaderProvider id={props.id} locale={props.locale} contract={props.contract}>
+    <ReaderProvider
+      id={props.id}
+      locale={props.locale}
+      contract={props.contract}
+    >
       <Frame {...props} />
     </ReaderProvider>
   );

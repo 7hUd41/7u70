@@ -7,7 +7,7 @@
 
 import { useId, useRef, useState } from "react";
 import { HelpCircle, RotateCcw } from "lucide-react";
-import { atLeast, evaluate, validate, type ChoiceSpec, type VarSpec } from "@/engine";
+import { evaluate, validate, type ChoiceSpec, type VarSpec } from "@/engine";
 import { useReader } from "./store";
 
 /* Full, level-independent explanation of a variable: what it is, why it
@@ -17,7 +17,7 @@ const TIP_MAX_HEIGHT = 320;
 
 type TipPos = { left: number; top?: number; bottom?: number };
 
-function Help({ spec }: { spec: VarSpec }) {
+function Help({ spec, anchor }: { spec: VarSpec; anchor: React.RefObject<HTMLDivElement | null> }) {
   const { locale, t } = useReader();
   const [pos, setPos] = useState<TipPos | null>(null);
   const id = useId();
@@ -27,13 +27,19 @@ function Help({ spec }: { spec: VarSpec }) {
     hideTimer.current = null;
   };
 
-  // Fixed positioning escapes the scrolling margin; flip above the icon when
-  // the space below would clip the text.
+  // Beside the field, never over it: to the left of the panel when there is
+  // room (the usual case, the panel sits in the right margin), else under it.
+  // Fixed positioning escapes the scrolling margin.
   const show = (el: HTMLElement) => {
-    const r = el.getBoundingClientRect();
-    const left = Math.max(8, Math.min(r.right - TIP_WIDTH, window.innerWidth - TIP_WIDTH - 8));
-    const roomBelow = window.innerHeight - r.bottom;
-    setPos(roomBelow >= TIP_MAX_HEIGHT ? { left, top: r.bottom + 6 } : { left, bottom: window.innerHeight - r.top + 6 });
+    const r = (anchor.current ?? el).getBoundingClientRect();
+    if (r.left - TIP_WIDTH - 12 >= 8) {
+      const top = Math.max(8, Math.min(r.top, window.innerHeight - TIP_MAX_HEIGHT - 8));
+      setPos({ left: r.left - TIP_WIDTH - 12, top });
+    } else {
+      const left = Math.max(8, Math.min(r.left, window.innerWidth - TIP_WIDTH - 8));
+      const roomBelow = window.innerHeight - r.bottom;
+      setPos(roomBelow >= TIP_MAX_HEIGHT ? { left, top: r.bottom + 6 } : { left, bottom: window.innerHeight - r.top + 6 });
+    }
   };
   const hide = () => {
     cancelHide();
@@ -85,18 +91,20 @@ function Help({ spec }: { spec: VarSpec }) {
   );
 }
 
+/* A value: label, the ? that explains it beside the field, the input.
+   The explanation lives in the tip only, whatever the level: the panel
+   stays short enough to show many values at once. */
 function Field({ spec }: { spec: VarSpec }) {
-  const { vars, setVar, highlight, setHighlight, level, locale, t } = useReader();
+  const { vars, setVar, highlight, setHighlight, locale, t } = useReader();
   const value = vars[spec.key] ?? "";
   const err = validate(spec.kind, value);
   const lit = highlight === spec.key;
-  const showHint = atLeast(level, "quick") && spec.hint;
-  const showImpact = atLeast(level, "deep") && spec.impact;
+  const box = useRef<HTMLDivElement>(null);
   return (
-    <div onMouseEnter={() => setHighlight(spec.key)} onMouseLeave={() => setHighlight(null)}>
+    <div ref={box} onMouseEnter={() => setHighlight(spec.key)} onMouseLeave={() => setHighlight(null)}>
       <label className="ui mb-1 flex items-center justify-between gap-2 text-[12.5px] text-ink-2">
         <span>{spec.label[locale]}</span>
-        {(spec.hint || spec.impact) && <Help spec={spec} />}
+        {(spec.hint || spec.impact) && <Help spec={spec} anchor={box} />}
       </label>
       <input
         value={value}
@@ -108,16 +116,11 @@ function Field({ spec }: { spec: VarSpec }) {
         type={spec.kind === "secret" ? "password" : "text"}
         aria-invalid={err ? true : undefined}
         className={
-          "w-full rounded border bg-paper px-2.5 py-1.5 font-mono text-[13px] text-ink transition placeholder:text-ink-3/60 focus:outline-none " +
-          (err ? "border-warn" : lit ? "border-accent bg-accent-soft/40" : "border-line focus:border-accent")
+          "w-full rounded border bg-paper px-2.5 py-1.5 font-mono text-[13px] text-ink transition placeholder:text-ink-3/60 focus:outline-none focus:ring-2 " +
+          (err ? "border-warn focus:ring-warn" : lit ? "border-accent bg-accent-soft/40 focus:ring-accent" : "border-line focus:border-accent focus:ring-accent")
         }
       />
-      {err ? (
-        <span className="ui mt-1 block text-[12px] text-warn">{t.validation[err]}</span>
-      ) : (
-        showHint && <span className="ui mt-1 block text-[12px] leading-snug text-ink-3">{spec.hint![locale]}</span>
-      )}
-      {showImpact && <span className="ui mt-1.5 block border-l border-accent/50 pl-2 text-[12px] leading-snug text-ink-2">{spec.impact![locale]}</span>}
+      {err && <span className="ui mt-1 block text-[12px] text-warn">{t.validation[err]}</span>}
     </div>
   );
 }

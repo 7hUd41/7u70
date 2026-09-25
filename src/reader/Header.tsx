@@ -5,12 +5,11 @@ import type { ReactNode } from "react";
 import { Compass, PanelLeft } from "lucide-react";
 import type { Level, Locale } from "@/engine";
 import { dict } from "@/i18n";
-import { LevelSwitch, LocaleSwitch, SkinMenu, ThemeToggle } from "./controls";
+import { LevelSwitch, SkinMenu, ThemeToggle } from "./controls";
 import { SearchButton } from "./Search";
 
 export function Header({
   locale,
-  path,
   crumbs = [],
   level,
   setLevel,
@@ -19,8 +18,6 @@ export function Header({
   onTour,
 }: {
   locale: Locale;
-  /** Path without the locale prefix, for the language switch. */
-  path: string;
   crumbs?: { href: string; label: string }[];
   level?: Level;
   setLevel?: (l: Level) => void;
@@ -70,7 +67,6 @@ export function Header({
         <div className="ml-auto flex items-center gap-3">
           <SearchButton locale={locale} />
           {level && setLevel && <LevelSwitch level={level} setLevel={setLevel} locale={locale} />}
-          <LocaleSwitch locale={locale} path={path} />
           <ThemeToggle locale={locale} />
           <SkinMenu locale={locale} />
           {onTour && (

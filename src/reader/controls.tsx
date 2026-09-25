@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Moon, Palette, Sun } from "lucide-react";
+import { Languages, Moon, Palette, Sun } from "lucide-react";
 import { LEVELS, LOCALES, type Level, type Locale } from "@/engine";
 import { dict } from "@/i18n";
 
@@ -56,20 +56,25 @@ export function ThemeToggle({ locale }: { locale: Locale }) {
 }
 
 /* ── EN / FR, same page ────────────────────────────────────── */
-export function LocaleSwitch({ locale, path }: { locale: Locale; path: string }) {
+/* The languages a page (or the site) is written in. A page written in one
+   language shows one code, not a choice. */
+export function LocaleSwitch({ locale, path, locales = LOCALES }: { locale: Locale; path: string; locales?: readonly Locale[] }) {
+  const t = dict(locale);
   return (
-    <nav aria-label="Language" data-tour="locale" className="ui inline-flex items-center gap-1 text-[12.5px]">
-      {LOCALES.map((l, i) => (
-        <span key={l} className="inline-flex items-center gap-1">
-          {i > 0 && <span className="text-line-2">/</span>}
-          <Link
-            href={`/${l}${path}`}
-            hrefLang={l}
-            aria-current={l === locale ? "page" : undefined}
-            className={l === locale ? "text-ink" : "text-ink-3 hover:text-ink"}
-          >
-            {l.toUpperCase()}
-          </Link>
+    <nav aria-label={t.localeLabel} data-tour="locale" className="ui inline-flex items-center gap-1.5 text-[12.5px]">
+      <Languages className="h-3.5 w-3.5 text-ink-3" aria-hidden />
+      {locales.map((l, i) => (
+        <span key={l} className="inline-flex items-center gap-1.5">
+          {i > 0 && <span className="text-line-2">·</span>}
+          {l === locale ? (
+            <span aria-current="page" className="font-bold text-ink" title={t.locale[l]}>
+              {l.toUpperCase()}
+            </span>
+          ) : (
+            <Link href={`/${l}${path}`} hrefLang={l} className="text-ink-3 hover:text-ink" title={t.locale[l]}>
+              {l.toUpperCase()}
+            </Link>
+          )}
         </span>
       ))}
     </nav>
