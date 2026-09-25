@@ -1,0 +1,194 @@
+# The path of an automated change: your script → the REST API → NetBox → the
+# queue → the RQ worker → your webhook receiver. Quick shows that chain; Guided
+# adds the database, the token and the queue; Deep adds scripts, GraphQL and
+# every header, port and unit.
+# `desc` is what the reader gets when hovering a box or an arrow.
+title: { en: "From your script to your receiver", fr: "De ton script à ton récepteur" }
+caption:
+  en: "Your script talks to the REST API with the automation user's token. NetBox writes the objects, queues an event, and the RQ worker on the server delivers the webhook to your receiver."
+  fr: "Ton script parle à l'API REST avec le jeton de l'utilisateur d'automatisation. NetBox écrit les objets, met un événement en file, et le worker RQ du serveur livre le webhook à ton récepteur."
+
+groups:
+  - id: server
+    label: { en: "NetBox server", fr: "Serveur NetBox" }
+    desc:
+      en: "The instance from the first pages. The API is the same Django application as the UI, with the same permissions."
+      fr: "L'instance des premières pages. L'API est la même application Django que l'interface, avec les mêmes permissions."
+
+nodes:
+  - id: operator
+    kind: client
+    label: { en: "Your script", fr: "Ton script" }
+    sub: "pynetbox · curl"
+    when: { is: CLIENT, equals: pynetbox }
+    desc:
+      en: "pynetbox in a virtual environment on your machine, nothing on the server: get, then create or update, so every script can be run twice."
+      fr: "pynetbox dans un environnement virtuel sur ta machine, rien sur le serveur : chercher, puis créer ou modifier, pour que chaque script puisse tourner deux fois."
+    deep:
+      sub: "~/.venvs/netbox · pynetbox.api(\"https://${NETBOX_HOST}\", token=…) · get → create / update"
+  - id: operator-curl
+    kind: client
+    label: { en: "Your shell", fr: "Ton shell" }
+    sub: "curl · JSON"
+    when: { is: CLIENT, equals: curl }
+    desc:
+      en: "curl with the token in a header and JSON bodies: the raw HTTP that every client, pynetbox included, sends."
+      fr: "curl avec le jeton dans un en-tête et des corps JSON : le HTTP brut que tout client, pynetbox compris, envoie."
+    deep:
+      sub: "curl -H 'Authorization: Token …' -H 'Content-Type: application/json' · ?limit= · ?brief=1"
+  - id: token
+    kind: file
+    label: { en: "Automation token", fr: "Jeton d'automatisation" }
+    sub: "${AUTOMATION_USER}"
+    in: server
+    level: guided
+    desc:
+      en: "A token of ${AUTOMATION_USER}, write-enabled, with an expiry date. Its permissions are what the script may do: devices of ${SITE_NAME} only."
+      fr: "Un jeton de ${AUTOMATION_USER}, en écriture, avec une date d'expiration. Ses permissions sont ce que le script peut faire : les équipements de ${SITE_NAME} seulement."
+    deep:
+      sub: "users.token · user ${AUTOMATION_USER} · expires · constraints site__name = ${SITE_NAME}"
+  - id: api
+    kind: net
+    label: { en: "REST API", fr: "API REST" }
+    sub: "https://${NETBOX_HOST}/api"
+    in: server
+    desc:
+      en: "One endpoint per model. A GET lists or filters, a POST creates, a PATCH changes; the answer is always the object as JSON."
+      fr: "Un endpoint par modèle. Un GET liste ou filtre, un POST crée, un PATCH modifie ; la réponse est toujours l'objet en JSON."
+    deep:
+      sub: "https://${NETBOX_HOST}/api · DRF · /dcim/devices/ · /ipam/ip-addresses/ · /extras/event-rules/ · /graphql/"
+  - id: netbox
+    kind: server
+    label: { en: "NetBox", fr: "NetBox" }
+    sub: "permissions · validation"
+    in: server
+    focus: true
+    desc:
+      en: "Checks the token, applies the permission constraints, validates the object, writes it, records the change, and queues an event if a rule matches."
+      fr: "Vérifie le jeton, applique les contraintes de permission, valide l'objet, l'écrit, enregistre le changement, et met un événement en file si une règle correspond."
+    deep:
+      sub: "gunicorn :8001 · token → user → ObjectPermission · serializer · changelog · event rules"
+  - id: postgres
+    kind: store
+    label: { en: "PostgreSQL", fr: "PostgreSQL" }
+    sub: "objects · change log"
+    in: server
+    desc:
+      en: "Every object written by the script lands here, with a change record signed ${AUTOMATION_USER}."
+      fr: "Chaque objet écrit par le script atterrit ici, avec un enregistrement de changement signé ${AUTOMATION_USER}."
+    deep:
+      sub: "db netbox · dcim_device · ipam_ipaddress · core_objectchange (user = ${AUTOMATION_USER})"
+  - id: redis
+    kind: store
+    label: { en: "Redis queue", fr: "File Redis" }
+    sub: "events · jobs"
+    in: server
+    level: guided
+    when: { flag: EVENTS }
+    desc:
+      en: "Events and script jobs wait here for a worker. If nothing consumes them, they pile up and nothing is delivered."
+      fr: "Événements et tâches de scripts attendent ici un worker. Si rien ne les consomme, ils s'empilent et rien n'est livré."
+    deep:
+      sub: "redis db 0 · rq queues default / high / low"
+  - id: rq
+    kind: service
+    label: { en: "RQ worker", fr: "Worker RQ" }
+    sub: "netbox-rq"
+    in: server
+    when: { flag: EVENTS }
+    desc:
+      en: "The netbox-rq unit. Delivers webhooks and runs custom scripts; rq-workers-running in /api/status/ says whether it is alive."
+      fr: "L'unité netbox-rq. Livre les webhooks et exécute les scripts personnalisés ; rq-workers-running dans /api/status/ dit s'il est vivant."
+    deep:
+      sub: "netbox-rq.service · manage.py rqworker · webhooks · scripts · retries: none"
+  - id: scripts
+    kind: file
+    label: { en: "Custom scripts", fr: "Scripts personnalisés" }
+    sub: "Customization → Scripts"
+    in: server
+    level: deep
+    desc:
+      en: "Python classes uploaded in the UI or synced from a data source. Run from a form or from POST /api/extras/scripts/ID/, as a job on the worker."
+      fr: "Des classes Python téléversées dans l'interface ou synchronisées depuis une source de données. Lancées depuis un formulaire ou par POST /api/extras/scripts/ID/, comme tâche sur le worker."
+    deep:
+      sub: "${INSTALL_DIR}/netbox/scripts/ · extras.scripts.Script · ObjectVar · run(data, commit)"
+  - id: receiver
+    kind: client
+    label: { en: "Webhook receiver", fr: "Récepteur de webhooks" }
+    sub: "${WEBHOOK_URL}"
+    when: { flag: EVENTS }
+    desc:
+      en: "Ten lines of Flask on your machine that print the payload. In real life: your CI, your monitoring, your configuration generator."
+      fr: "Dix lignes de Flask sur ta machine qui affichent la charge utile. Dans la vraie vie : ta CI, ta supervision, ton générateur de configuration."
+    deep:
+      sub: "${WEBHOOK_URL} · POST JSON · event · model · data · snapshots · X-Hook-Signature"
+
+edges:
+  - from: operator
+    to: api
+    label: "HTTPS · token"
+    when: { is: CLIENT, equals: pynetbox }
+    deep: { label: "L7 HTTPS · Authorization: Token · GET / POST / PATCH" }
+    desc: { en: "Every call carries the automation token; the answer is JSON that pynetbox turns into objects.", fr: "Chaque appel porte le jeton d'automatisation ; la réponse est du JSON que pynetbox transforme en objets." }
+  - from: operator-curl
+    to: api
+    label: "HTTPS · token"
+    when: { is: CLIENT, equals: curl }
+    deep: { label: "L7 HTTPS · Authorization: Token · GET / POST" }
+    desc: { en: "Every call carries the automation token; the answer is raw JSON, paginated in count / next / results.", fr: "Chaque appel porte le jeton d'automatisation ; la réponse est du JSON brut, paginé en count / next / results." }
+  - from: api
+    to: netbox
+    deep: { label: "serializer · permissions" }
+    desc: { en: "The API layer validates the JSON and hands a checked object to the application.", fr: "La couche API valide le JSON et passe un objet vérifié à l'application." }
+  - from: token
+    to: netbox
+    label: "authorises"
+    dashed: true
+    level: guided
+    deep: { label: "user → permissions → constraints" }
+    desc: { en: "The token resolves to ${AUTOMATION_USER}, whose permissions decide the call: a device outside ${SITE_NAME} is refused with a 403.", fr: "Le jeton mène à ${AUTOMATION_USER}, dont les permissions décident de l'appel : un équipement hors de ${SITE_NAME} est refusé avec un 403." }
+  - from: netbox
+    to: postgres
+    label: "writes"
+    dashed: true
+    deep: { label: "INSERT / UPDATE · change record" }
+    desc: { en: "The object and its change record, in one transaction: a constraint failure rolls both back.", fr: "L'objet et son enregistrement de changement, dans une transaction : un échec de contrainte annule les deux." }
+  - from: netbox
+    to: redis
+    label: "event"
+    level: guided
+    when: { flag: EVENTS }
+    deep: { label: "enqueue · object_created / object_updated" }
+    desc: { en: "When an event rule matches, NetBox queues the delivery instead of calling the receiver itself.", fr: "Quand une règle d'événement correspond, NetBox met la livraison en file au lieu d'appeler le récepteur lui-même." }
+  - from: netbox
+    to: rq
+    label: "event"
+    max: quick
+    when: { flag: EVENTS }
+    desc: { en: "A device created or updated becomes a job for the worker.", fr: "Un équipement créé ou modifié devient une tâche pour le worker." }
+  - from: redis
+    to: rq
+    label: "dequeue"
+    level: guided
+    when: { flag: EVENTS }
+    desc: { en: "The worker takes jobs as they come; several workers can share the queue.", fr: "Le worker prend les tâches au fil de l'eau ; plusieurs workers peuvent se partager la file." }
+  - from: rq
+    to: receiver
+    label: "POST ${WEBHOOK_URL}"
+    when: { flag: EVENTS }
+    deep: { label: "POST JSON · X-Hook-Signature · expects 2xx" }
+    desc: { en: "The worker on the server calls your receiver: the server must reach your machine, not the other way round.", fr: "Le worker du serveur appelle ton récepteur : c'est le serveur qui doit joindre ta machine, pas l'inverse." }
+  - from: scripts
+    to: rq
+    label: "job"
+    dashed: true
+    level: deep
+    when: { flag: EVENTS }
+    desc: { en: "A custom script launched from the UI or the API runs on the worker as a job, under the launching user's permissions.", fr: "Un script personnalisé lancé depuis l'interface ou l'API tourne sur le worker comme tâche, avec les permissions de l'utilisateur qui l'a lancé." }
+  - from: scripts
+    to: netbox
+    label: "job"
+    dashed: true
+    level: deep
+    when: { notFlag: EVENTS }
+    desc: { en: "A custom script launched from the UI or the API runs as a background job on the netbox-rq worker, under the launching user's permissions.", fr: "Un script personnalisé lancé depuis l'interface ou l'API tourne comme tâche de fond sur le worker netbox-rq, avec les permissions de l'utilisateur qui l'a lancé." }

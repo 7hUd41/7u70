@@ -1,0 +1,118 @@
+# Contract for this page. Inherits the cluster and application groups, NODE_IP, K3S_VERSION,
+# APP_DOMAIN, NAMESPACE, ACME_EMAIL and the TOPOLOGY / TLS / DB choices from ../series.yaml.
+
+title:
+  en: Deploy indicat
+  fr: Déployer indicat
+summary:
+  en: >-
+    A real web application on the cluster: a namespace, its secrets, PostgreSQL (operator or
+    StatefulSet), the Deployment with probes and limits, migrations, a Service, an Ingress with
+    TLS at your domain, and an autoscaler.
+  fr: >-
+    Une vraie application web sur le cluster : un namespace, ses secrets, PostgreSQL (opérateur
+    ou StatefulSet), le Deployment avec sondes et limites, les migrations, un Service, un Ingress
+    avec TLS sur ton domaine, et un autoscaler.
+difficulty: intermediate
+tags: [kubernetes, k3s, postgresql, cloudnativepg, ingress, hpa]
+authors: [thudal]
+created: 2026-09-25
+minutes: 50
+validated: k3s v1.31 · CloudNativePG 1.24 · PostgreSQL 16
+
+groups:
+  - id: db
+    label: { en: Database, fr: Base de données }
+    desc: { en: The PostgreSQL indicat writes to., fr: Le PostgreSQL dans lequel indicat écrit. }
+  - id: registry
+    label: { en: Registry, fr: Registre }
+    desc: { en: Credentials to pull the image from a private registry., fr: Identifiants pour tirer l'image d'un registre privé. }
+    when: { flag: PRIVATE_REGISTRY }
+
+vars:
+  - key: APP_IMAGE
+    kind: text
+    group: app
+    default: ghcr.io/tugdual/indicat:latest
+    label: { en: Image, fr: Image }
+    hint:
+      en: The full image reference, registry included, with a tag. The next page replaces the tag with the commit SHA.
+      fr: La référence complète de l'image, registre compris, avec un tag. La page suivante remplace le tag par le SHA du commit.
+    impact:
+      en: Written into the Deployment and the migrations Job. The registry host in front of the first slash is what the pull secret is created for.
+      fr: Écrite dans le Deployment et dans le Job de migrations. L'hôte du registre avant la première barre oblique est celui pour lequel le pull secret est créé.
+  - key: APP_PORT
+    kind: port
+    group: app
+    default: "3000"
+    label: { en: Port the app listens on, fr: Port d'écoute de l'app }
+    hint:
+      en: What the process inside the container binds. The Service maps 80 to it.
+      fr: Ce que le processus dans le conteneur écoute. Le Service y renvoie le 80.
+    impact:
+      en: Used by the container port, the probes and the Service target port. Wrong value means probes fail and the pod never becomes Ready.
+      fr: Utilisé par le port du conteneur, les sondes et le port cible du Service. Une mauvaise valeur fait échouer les sondes et le pod ne passe jamais Ready.
+  - key: APP_REPLICAS
+    kind: text
+    group: app
+    default: "2"
+    label: { en: Replicas, fr: Réplicas }
+    hint:
+      en: How many pods run the application. Two survive a rolling update without downtime; the HPA can add more.
+      fr: Combien de pods font tourner l'application. Deux survivent à une mise à jour progressive sans coupure ; le HPA peut en ajouter.
+    impact:
+      en: Also the HPA's minimum. With more than one, sessions and migrations need the care described at the end of the page.
+      fr: Aussi le minimum du HPA. Au-delà d'un, les sessions et les migrations demandent les précautions décrites en fin de page.
+  - key: APP_SECRET
+    kind: secret
+    group: app
+    default: ""
+    label: { en: Application secret key, fr: Clé secrète de l'application }
+    hint:
+      en: The SECRET_KEY indicat signs sessions with. Long and random; generate it, never type it.
+      fr: La SECRET_KEY avec laquelle indicat signe les sessions. Longue et aléatoire ; génère-la, ne la tape jamais.
+    impact:
+      en: Stored in the indicat-secrets Secret. Changing it logs every user out.
+      fr: Rangée dans le Secret indicat-secrets. La changer déconnecte tous les utilisateurs.
+  - key: DB_PASSWORD
+    kind: secret
+    group: db
+    default: ""
+    label: { en: PostgreSQL password, fr: Mot de passe PostgreSQL }
+    hint:
+      en: The password of the "indicat" database role. Generated, never typed by hand.
+      fr: Le mot de passe du rôle de base « indicat ». Généré, jamais tapé à la main.
+    impact:
+      en: Set once in the database Secret and copied into DATABASE_URL. If the two differ, the migrations Job fails with "password authentication failed".
+      fr: Défini une fois dans le Secret de la base et recopié dans DATABASE_URL. Si les deux diffèrent, le Job de migrations échoue avec « password authentication failed ».
+  - key: REGISTRY_USER
+    kind: user
+    group: registry
+    default: tugdual
+    label: { en: Registry user, fr: Utilisateur du registre }
+    when: { flag: PRIVATE_REGISTRY }
+    hint:
+      en: The account the cluster pulls with. On GHCR, your GitHub username.
+      fr: Le compte avec lequel le cluster tire l'image. Sur GHCR, ton identifiant GitHub.
+    impact:
+      en: Goes into the regcred pull secret of the namespace, on the default ServiceAccount.
+      fr: Va dans le pull secret regcred du namespace, sur le ServiceAccount par défaut.
+  - key: REGISTRY_TOKEN
+    kind: secret
+    group: registry
+    default: ""
+    label: { en: Registry token, fr: Jeton du registre }
+    when: { flag: PRIVATE_REGISTRY }
+    hint:
+      en: A token with read access to packages only. On GitHub, a classic PAT with read:packages.
+      fr: Un jeton avec accès en lecture aux paquets seulement. Sur GitHub, un PAT classique avec read:packages.
+    impact:
+      en: If it expires, new pods fail with ImagePullBackOff while running ones keep going. Set an expiry reminder.
+      fr: S'il expire, les nouveaux pods échouent en ImagePullBackOff pendant que ceux qui tournent continuent. Mets-toi un rappel d'expiration.
+
+choices:
+  - key: PRIVATE_REGISTRY
+    type: boolean
+    label: { en: The image is on a private registry, fr: L'image est sur un registre privé }
+    hint: { en: Off if the image is public., fr: Décoche si l'image est publique. }
+    default: true

@@ -1,0 +1,61 @@
+# Inherits from ../series.yaml: LAB_DIR, LAB_NAME, MGMT_SUBNET, NETBOX_URL, NETBOX_TOKEN, SITE_NAME, NOS, AUTOMATION, CI.
+# LOOPBACK_PREFIX is also declared by netbox-as-source-of-truth and render-and-push-configs: same key, filled once per series.
+
+title:
+  en: Validate every change in CI
+  fr: Valider chaque changement en CI
+summary:
+  en: >-
+    A lint stage on a hosted runner, a lab stage on a self-hosted runner that deploys the
+    topology, renders, pushes, runs a pytest with scrapli and always tears down, artifacts,
+    and a protected main branch that only merges what the pipeline proved.
+  fr: >-
+    Une étape de lint sur un runner hébergé, une étape lab sur un runner auto-hébergé qui
+    déploie la topologie, rend, pousse, lance un pytest avec scrapli et démonte toujours, des
+    artefacts, et une branche main protégée qui ne fusionne que ce que le pipeline a prouvé.
+difficulty: advanced
+tags: [ci, github-actions, gitlab-ci, pytest, scrapli, containerlab, netdevops]
+authors: [thudal]
+created: 2026-09-25
+minutes: 40
+validated: containerlab 0.60 · GitHub Actions runner 2.3xx · GitLab Runner 17 · pytest 8
+
+groups:
+  - id: ci
+    label: { en: CI, fr: CI }
+    desc: { en: The forge that hosts the repository and the runner on the lab machine., fr: La forge qui héberge le dépôt et le runner sur la machine de lab. }
+
+vars:
+  - key: REPO_URL
+    kind: text
+    group: ci
+    default: https://github.com/you/netlab.git
+    label: { en: Repository URL, fr: URL du dépôt }
+    hint:
+      en: The remote the lab repository is pushed to, on GitHub or GitLab. HTTPS or SSH form, as you clone it.
+      fr: Le dépôt distant vers lequel le dépôt du lab est poussé, sur GitHub ou GitLab. Forme HTTPS ou SSH, comme tu le clones.
+    impact:
+      en: Added as origin on the lab machine; the runner registration points at the same project.
+      fr: Ajouté comme origin sur la machine de lab ; l'enregistrement du runner pointe sur le même projet.
+  - key: RUNNER_LABEL
+    kind: text
+    group: ci
+    default: netlab
+    label: { en: Runner label, fr: Label du runner }
+    hint:
+      en: The label (GitHub) or tag (GitLab) that sends the lab job to the runner on the lab machine, and nowhere else.
+      fr: Le label (GitHub) ou tag (GitLab) qui envoie le job lab au runner de la machine de lab, et nulle part ailleurs.
+    impact:
+      en: Written in runs-on / tags in the pipeline file and given to the runner at registration. A mismatch leaves the job queued forever.
+      fr: Écrit dans runs-on / tags du fichier de pipeline et donné au runner à l'enregistrement. Un écart laisse le job en attente pour toujours.
+  - key: LOOPBACK_PREFIX
+    kind: cidr
+    group: sot
+    default: 10.0.0.0/24
+    label: { en: Loopback prefix, fr: Préfixe des loopbacks }
+    hint:
+      en: As on the previous pages; the tests derive the leaves' loopbacks from it.
+      fr: Comme sur les pages précédentes ; les tests en dérivent les loopbacks des leaves.
+    impact:
+      en: The ping test uses the second and third host addresses (leaf1, leaf2).
+      fr: Le test de ping utilise les deuxième et troisième adresses d'hôte (leaf1, leaf2).

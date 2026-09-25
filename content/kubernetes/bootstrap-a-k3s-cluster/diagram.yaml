@@ -1,0 +1,188 @@
+# The gist: your laptop drives the API on the first node; browsers reach
+# Traefik, which routes to the hello-world; cert-manager gets the certificate.
+# Quick: five or six boxes. Guided adds cert-manager and the challenge.
+# Deep adds ports, the storage class and etcd.
+title: { en: "One API, one ingress, one certificate", fr: "Une API, un ingress, un certificat" }
+caption:
+  en: "kubectl on your laptop talks to the k3s API on the first node. Browsers reach Traefik on 443 on any node; it routes by host name to the hello-world Service. cert-manager gets the certificate and stores it in a Secret Traefik reads."
+  fr: "kubectl sur ton portable parle à l'API k3s du premier nœud. Les navigateurs atteignent Traefik sur le 443 de n'importe quel nœud ; il route par nom d'hôte vers le Service hello-world. cert-manager obtient le certificat et le range dans un Secret que lit Traefik."
+
+groups:
+  - id: cluster
+    label: { en: "Your cluster", fr: "Ton cluster" }
+    desc:
+      en: "Every box in here runs on the k3s nodes. One node in the lab topology; three servers sharing an embedded etcd in HA."
+      fr: "Tout ce qui est ici tourne sur les nœuds k3s. Un nœud en topologie lab ; trois serveurs partageant un etcd embarqué en HA."
+
+nodes:
+  - id: laptop
+    kind: client
+    label: { en: "Your laptop", fr: "Ton portable" }
+    sub: "kubectl · helm"
+    desc:
+      en: "Where you work. kubectl and helm read ~/.kube/config, which points at ${NODE_IP}:6443 with the cluster's admin credentials."
+      fr: "Là où tu travailles. kubectl et helm lisent ~/.kube/config, qui pointe vers ${NODE_IP}:6443 avec les identifiants admin du cluster."
+    deep:
+      sub: "kubectl · helm · ~/.kube/config → https://${NODE_IP}:6443"
+  - id: browser
+    kind: user
+    label: { en: "A browser", fr: "Un navigateur" }
+    sub: "https://${APP_DOMAIN}"
+    desc:
+      en: "Anyone resolving ${APP_DOMAIN}. DNS must point the name at the node(s) before the certificate can be issued."
+      fr: "Quiconque résout ${APP_DOMAIN}. Le DNS doit faire pointer le nom vers le(s) nœud(s) avant que le certificat puisse être émis."
+  - id: node1
+    kind: server
+    label: { en: "Server node 1", fr: "Nœud serveur 1" }
+    sub: "${NODE_IP} · k3s ${K3S_VERSION}"
+    in: cluster
+    focus: true
+    desc:
+      en: "The first k3s server: API server, scheduler, controllers, kubelet and the datastore, all in one binary. In the lab topology it is the whole cluster."
+      fr: "Le premier serveur k3s : API server, scheduler, contrôleurs, kubelet et datastore, tout dans un binaire. En topologie lab, c'est tout le cluster."
+    guided:
+      sub: "${NODE_IP} · k3s ${K3S_VERSION} · API :6443"
+    deep:
+      sub: "${NODE_IP} · k3s ${K3S_VERSION} · API 6443 · kubelet 10250 · flannel VXLAN 8472/udp"
+  - id: node2
+    kind: server
+    label: { en: "Server node 2", fr: "Nœud serveur 2" }
+    sub: "${NODE2_IP}"
+    in: cluster
+    when: { is: TOPOLOGY, equals: ha }
+    desc:
+      en: "Joined with the token from node 1. Runs the same components and a second etcd member."
+      fr: "Rejoint avec le token du nœud 1. Fait tourner les mêmes composants et un second membre etcd."
+    deep:
+      sub: "${NODE2_IP} · etcd member · 2379-2380"
+  - id: node3
+    kind: server
+    label: { en: "Server node 3", fr: "Nœud serveur 3" }
+    sub: "${NODE3_IP}"
+    in: cluster
+    when: { is: TOPOLOGY, equals: ha }
+    desc:
+      en: "Third etcd member. With three, the cluster keeps a quorum when one node is down."
+      fr: "Troisième membre etcd. À trois, le cluster garde un quorum quand un nœud est arrêté."
+    deep:
+      sub: "${NODE3_IP} · etcd member · 2379-2380"
+  - id: traefik
+    kind: net
+    label: { en: "Traefik", fr: "Traefik" }
+    sub: ":80 :443 · Ingress"
+    in: cluster
+    desc:
+      en: "The ingress controller k3s ships. ServiceLB publishes it on ports 80 and 443 of every node; it routes each request by host name."
+      fr: "L'ingress controller livré avec k3s. ServiceLB le publie sur les ports 80 et 443 de chaque nœud ; il route chaque requête par nom d'hôte."
+    deep:
+      sub: "kube-system · Service LoadBalancer via ServiceLB · :80 :443 on every node · TLS ends here"
+  - id: certmanager
+    kind: service
+    label: { en: "cert-manager", fr: "cert-manager" }
+    sub: "ClusterIssuer"
+    in: cluster
+    level: guided
+    desc:
+      en: "Watches Ingresses carrying its annotation, orders a certificate from the ClusterIssuer and writes it into the Secret named in the Ingress. Renews it by itself."
+      fr: "Surveille les Ingress qui portent son annotation, commande un certificat au ClusterIssuer et l'écrit dans le Secret nommé dans l'Ingress. Le renouvelle tout seul."
+    deep:
+      sub: "cert-manager ns · ClusterIssuer · Certificate → Secret hello-tls"
+  - id: letsencrypt
+    kind: cloud
+    label: { en: "Let's Encrypt", fr: "Let's Encrypt" }
+    sub: "ACME · HTTP-01"
+    when: { is: TLS, equals: letsencrypt }
+    desc:
+      en: "The public CA. It checks that you control ${APP_DOMAIN} by fetching a token over plain HTTP on port 80, then signs the certificate."
+      fr: "L'AC publique. Elle vérifie que tu contrôles ${APP_DOMAIN} en récupérant un jeton en HTTP sur le port 80, puis signe le certificat."
+    deep:
+      sub: "acme-v02.api.letsencrypt.org · HTTP-01 on :80 · 90-day certs"
+  - id: hello
+    kind: service
+    label: { en: "hello-world", fr: "hello-world" }
+    sub: "Deployment · Service · Ingress"
+    in: cluster
+    desc:
+      en: "The smallest possible application, there only to prove that ingress and TLS work end to end. Deleted at the end."
+      fr: "La plus petite application possible, là seulement pour prouver qu'ingress et TLS marchent de bout en bout. Supprimée à la fin."
+    deep:
+      sub: "Deployment hello (whoami) · Service :80 · Ingress host ${APP_DOMAIN} · Secret hello-tls"
+  - id: storage
+    kind: store
+    label: { en: "local-path", fr: "local-path" }
+    sub: "/var/lib/rancher/k3s/storage"
+    in: cluster
+    level: deep
+    desc:
+      en: "The default StorageClass: a directory on the node that holds the pod. Simple, fast, and tied to that node — the next page's database lives on it."
+      fr: "La StorageClass par défaut : un répertoire sur le nœud qui héberge le pod. Simple, rapide, et lié à ce nœud — la base de la page suivante vit dessus."
+
+edges:
+  - from: laptop
+    to: node1
+    label: "kubectl"
+    guided: { label: "kubectl · TCP 6443" }
+    deep: { label: "L7 HTTPS (Kubernetes API) · L4 TCP 6443 · client cert" }
+    desc:
+      en: "Every kubectl and helm command is an HTTPS call to the API server, authenticated by the client certificate in your kubeconfig."
+      fr: "Chaque commande kubectl ou helm est un appel HTTPS à l'API server, authentifié par le certificat client de ton kubeconfig."
+  - from: node1
+    to: node2
+    label: "etcd"
+    dashed: true
+    when: { is: TOPOLOGY, equals: ha }
+    deep: { label: "etcd raft · TCP 2379-2380" }
+    desc:
+      en: "The three servers replicate the cluster state between them. Writes need two of three to agree."
+      fr: "Les trois serveurs répliquent l'état du cluster entre eux. Une écriture demande l'accord de deux sur trois."
+  - from: node1
+    to: node3
+    label: "etcd"
+    dashed: true
+    when: { is: TOPOLOGY, equals: ha }
+    deep: { label: "etcd raft · TCP 2379-2380" }
+    desc:
+      en: "Same replication to the third member."
+      fr: "Même réplication vers le troisième membre."
+  - from: browser
+    to: traefik
+    label: "HTTPS"
+    deep: { label: "L7 HTTPS · L4 TCP 443 · SNI ${APP_DOMAIN}" }
+    desc:
+      en: "The browser connects to any node on 443; Traefik picks the certificate by the requested name."
+      fr: "Le navigateur se connecte à n'importe quel nœud sur le 443 ; Traefik choisit le certificat d'après le nom demandé."
+  - from: traefik
+    to: hello
+    label: "Ingress"
+    guided: { label: "host ${APP_DOMAIN} → Service" }
+    deep: { label: "Ingress host ${APP_DOMAIN} → Service hello :80 → pod :80" }
+    desc:
+      en: "The Ingress rule: this host name goes to this Service, which load-balances across the pods."
+      fr: "La règle d'Ingress : ce nom d'hôte va vers ce Service, qui répartit sur les pods."
+  - from: certmanager
+    to: letsencrypt
+    label: "ACME order"
+    dashed: true
+    level: guided
+    when: { is: TLS, equals: letsencrypt }
+    desc:
+      en: "cert-manager asks for a certificate for ${APP_DOMAIN} and gets a challenge back."
+      fr: "cert-manager demande un certificat pour ${APP_DOMAIN} et reçoit un défi en retour."
+  - from: letsencrypt
+    to: traefik
+    label: "HTTP-01"
+    dashed: true
+    level: guided
+    when: { is: TLS, equals: letsencrypt }
+    deep: { label: "GET /.well-known/acme-challenge/… · TCP 80" }
+    desc:
+      en: "Let's Encrypt fetches the challenge token over port 80; cert-manager created a temporary Ingress to serve it."
+      fr: "Let's Encrypt récupère le jeton du défi sur le port 80 ; cert-manager a créé un Ingress temporaire pour le servir."
+  - from: certmanager
+    to: hello
+    label: "tls Secret"
+    dashed: true
+    level: guided
+    desc:
+      en: "The signed certificate lands in the Secret the Ingress names; Traefik picks it up without a restart."
+      fr: "Le certificat signé atterrit dans le Secret nommé par l'Ingress ; Traefik le prend en compte sans redémarrer."

@@ -11,6 +11,8 @@ summary:
 order:
   - install-from-scratch
   - configure-for-your-team
+  - maintain-and-upgrade
+  - automate-with-the-api
 
 # Shared by every page: the reader fills these once for the whole series.
 groups:

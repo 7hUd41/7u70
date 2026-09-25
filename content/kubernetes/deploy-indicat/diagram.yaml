@@ -1,0 +1,217 @@
+# The gist: users reach Traefik, which routes to the indicat pods, which talk
+# to PostgreSQL. Quick: five boxes. Guided adds the Secret, the operator and the
+# migrations Job. Deep adds the Service, the HPA and cert-manager's part.
+title: { en: "indicat on the cluster", fr: "indicat sur le cluster" }
+caption:
+  en: "Traefik terminates TLS for ${APP_DOMAIN} and routes to the indicat Service, which spreads requests over the pods. The pods read their configuration from a Secret and write to PostgreSQL through the database Service. The image comes from the registry at each pod start."
+  fr: "Traefik termine le TLS pour ${APP_DOMAIN} et route vers le Service indicat, qui répartit les requêtes sur les pods. Les pods lisent leur configuration dans un Secret et écrivent dans PostgreSQL via le Service de la base. L'image vient du registre à chaque démarrage de pod."
+
+groups:
+  - id: cluster
+    label: { en: "Cluster (kube-system and operators)", fr: "Cluster (kube-system et opérateurs)" }
+    desc:
+      en: "What the previous page installed and the operator this page adds. Shared by every application on the cluster."
+      fr: "Ce que la page précédente a installé et l'opérateur que celle-ci ajoute. Partagé par toutes les applications du cluster."
+  - id: ns
+    label: { en: "Your namespace", fr: "Ton namespace" }
+    desc:
+      en: "Namespace ${NAMESPACE}: every object of the application lives here. Delete the namespace and the application is gone, volumes included."
+      fr: "Namespace ${NAMESPACE} : tout objet de l'application vit ici. Supprime le namespace et l'application disparaît, volumes compris."
+
+nodes:
+  - id: users
+    kind: user
+    label: { en: "Users", fr: "Utilisateurs" }
+    sub: "https://${APP_DOMAIN}"
+    desc:
+      en: "Browsers. They reach any node on 443 and are served whichever pod the Service picks."
+      fr: "Des navigateurs. Ils atteignent n'importe quel nœud sur le 443 et sont servis par le pod que choisit le Service."
+  - id: registry
+    kind: cloud
+    label: { en: "Registry", fr: "Registre" }
+    sub: "${APP_IMAGE}"
+    desc:
+      en: "Where the image lives. Pulled by the kubelet of each node when a pod starts; with a private registry, using the regcred pull secret."
+      fr: "Là où vit l'image. Tirée par le kubelet de chaque nœud au démarrage d'un pod ; avec un registre privé, via le pull secret regcred."
+  - id: traefik
+    kind: net
+    label: { en: "Traefik", fr: "Traefik" }
+    sub: "Ingress · TLS ${APP_DOMAIN}"
+    in: cluster
+    desc:
+      en: "The ingress controller from the previous page. The Ingress of this page tells it: this host goes to the indicat Service, with this certificate."
+      fr: "L'ingress controller de la page précédente. L'Ingress de cette page lui dit : cet hôte va vers le Service indicat, avec ce certificat."
+    deep:
+      sub: ":443 · SNI ${APP_DOMAIN} · Secret indicat-tls"
+  - id: certmanager
+    kind: service
+    label: { en: "cert-manager", fr: "cert-manager" }
+    sub: "ClusterIssuer → indicat-tls"
+    in: cluster
+    level: deep
+    desc:
+      en: "Sees the annotation on the Ingress and fills the indicat-tls Secret, exactly as for the hello-world."
+      fr: "Voit l'annotation sur l'Ingress et remplit le Secret indicat-tls, exactement comme pour le hello-world."
+  - id: operator
+    kind: service
+    label: { en: "CloudNativePG", fr: "CloudNativePG" }
+    sub: "cnpg-system · operator"
+    in: cluster
+    level: guided
+    when: { is: DB, equals: cnpg }
+    desc:
+      en: "The operator: it reads the Cluster object and creates the PostgreSQL pods, their volumes, the Services and the failover logic. One install serves every database on the cluster."
+      fr: "L'opérateur : il lit l'objet Cluster et crée les pods PostgreSQL, leurs volumes, les Services et la logique de bascule. Une installation sert toutes les bases du cluster."
+  - id: svc
+    kind: net
+    label: { en: "Service indicat", fr: "Service indicat" }
+    sub: "ClusterIP :80 → ${APP_PORT}"
+    in: ns
+    level: deep
+    desc:
+      en: "A stable name and address in front of the pods. Round-robins connections across the Ready ones; a pod failing its readiness probe drops out."
+      fr: "Un nom et une adresse stables devant les pods. Répartit les connexions sur ceux qui sont Ready ; un pod qui rate sa sonde de readiness en sort."
+  - id: app
+    kind: server
+    label: { en: "indicat", fr: "indicat" }
+    sub: "${APP_REPLICAS} pods · :${APP_PORT}"
+    in: ns
+    focus: true
+    desc:
+      en: "The Deployment: ${APP_REPLICAS} pods of ${APP_IMAGE}, each with a liveness and a readiness probe on /healthz, CPU and memory limits, and its environment from the Secret."
+      fr: "Le Deployment : ${APP_REPLICAS} pods de ${APP_IMAGE}, chacun avec une sonde de liveness et de readiness sur /healthz, des limites CPU et mémoire, et son environnement depuis le Secret."
+    deep:
+      sub: "Deployment · ${APP_REPLICAS} × ${APP_IMAGE} · :${APP_PORT} · /healthz · HPA 70 % CPU"
+  - id: secret
+    kind: file
+    label: { en: "Secret indicat-secrets", fr: "Secret indicat-secrets" }
+    sub: "DATABASE_URL · SECRET_KEY"
+    in: ns
+    level: guided
+    desc:
+      en: "Two keys, injected as environment variables. Base64 in etcd, not encrypted: whoever reads Secrets in ${NAMESPACE} reads the password."
+      fr: "Deux clés, injectées en variables d'environnement. En base64 dans etcd, pas chiffrées : qui lit les Secrets de ${NAMESPACE} lit le mot de passe."
+  - id: migrate
+    kind: service
+    label: { en: "Job indicat-migrate", fr: "Job indicat-migrate" }
+    sub: "runs once before each rollout"
+    in: ns
+    level: guided
+    desc:
+      en: "The same image, started once with the migration command. The rollout waits for it to complete, so no pod ever runs against an old schema."
+      fr: "La même image, lancée une fois avec la commande de migration. Le rollout attend qu'il se termine, donc aucun pod ne tourne sur un vieux schéma."
+  - id: postgres
+    kind: store
+    label: { en: "PostgreSQL", fr: "PostgreSQL" }
+    sub: "indicat-db-rw:5432"
+    in: ns
+    when: { is: DB, equals: cnpg }
+    desc:
+      en: "A CloudNativePG Cluster named indicat-db. The -rw Service always points at the primary; -ro at the replicas when there are any."
+      fr: "Un Cluster CloudNativePG nommé indicat-db. Le Service -rw pointe toujours vers le primaire ; -ro vers les réplicas quand il y en a."
+    deep:
+      sub: "Cluster indicat-db · PG 16 · 1 or 3 instances · PVC local-path 10Gi · svc -rw / -ro / -r"
+  - id: postgres-sts
+    kind: store
+    label: { en: "PostgreSQL", fr: "PostgreSQL" }
+    sub: "indicat-db:5432"
+    in: ns
+    when: { is: DB, equals: statefulset }
+    desc:
+      en: "One pod from a StatefulSet with the postgres:16 image, its data on a PersistentVolumeClaim. No replication, no automatic failover."
+      fr: "Un pod d'un StatefulSet avec l'image postgres:16, ses données sur un PersistentVolumeClaim. Pas de réplication, pas de bascule automatique."
+    deep:
+      sub: "StatefulSet indicat-db · postgres:16 · headless Service · PVC local-path 10Gi"
+
+edges:
+  - from: users
+    to: traefik
+    label: "HTTPS"
+    deep: { label: "L7 HTTPS · L4 TCP 443 · SNI ${APP_DOMAIN}" }
+    desc:
+      en: "Encrypted with the certificate cert-manager issued for ${APP_DOMAIN}."
+      fr: "Chiffré avec le certificat émis par cert-manager pour ${APP_DOMAIN}."
+  - from: traefik
+    to: app
+    label: "Ingress"
+    max: guided
+    guided: { label: "Ingress · host ${APP_DOMAIN}" }
+    desc:
+      en: "Plain HTTP inside the cluster: Traefik forwards to the Service, which picks a pod."
+      fr: "HTTP en clair dans le cluster : Traefik transmet au Service, qui choisit un pod."
+  - from: traefik
+    to: svc
+    label: "HTTP · host ${APP_DOMAIN}"
+    level: deep
+    desc:
+      en: "Traefik resolves the Service's endpoints itself and load-balances across the Ready pods."
+      fr: "Traefik résout lui-même les endpoints du Service et répartit sur les pods Ready."
+  - from: svc
+    to: app
+    label: ":${APP_PORT}"
+    level: deep
+    desc:
+      en: "Port 80 of the Service maps to ${APP_PORT} in the container."
+      fr: "Le port 80 du Service correspond au ${APP_PORT} dans le conteneur."
+  - from: app
+    to: postgres
+    label: "DATABASE_URL"
+    deep: { label: "TCP 5432 · postgresql://indicat@indicat-db-rw/indicat" }
+    desc:
+      en: "The connection string points at the -rw Service, so a failover to a replica is invisible to the application."
+      fr: "La chaîne de connexion pointe vers le Service -rw, donc une bascule vers un réplica est invisible pour l'application."
+  - from: app
+    to: postgres-sts
+    label: "DATABASE_URL"
+    deep: { label: "TCP 5432 · postgresql://indicat@indicat-db/indicat" }
+    desc:
+      en: "The connection string points at the headless Service, which resolves to the single pod."
+      fr: "La chaîne de connexion pointe vers le Service headless, qui résout vers l'unique pod."
+  - from: registry
+    to: app
+    label: "pull"
+    dashed: true
+    deep: { label: "image pull · regcred if private" }
+    desc:
+      en: "Each node pulls the image when it first runs a pod of it. Tags are cached: a new build must have a new tag, which the next page does with the commit SHA."
+      fr: "Chaque nœud tire l'image la première fois qu'il en exécute un pod. Les tags sont mis en cache : un nouveau build doit avoir un nouveau tag, ce que fait la page suivante avec le SHA du commit."
+  - from: secret
+    to: app
+    label: "envFrom"
+    dashed: true
+    level: guided
+    desc:
+      en: "Every key of the Secret becomes an environment variable in the container."
+      fr: "Chaque clé du Secret devient une variable d'environnement dans le conteneur."
+  - from: migrate
+    to: postgres
+    label: "migrate"
+    dashed: true
+    level: guided
+    desc:
+      en: "Applies the schema changes before the new pods start."
+      fr: "Applique les changements de schéma avant que les nouveaux pods démarrent."
+  - from: migrate
+    to: postgres-sts
+    label: "migrate"
+    dashed: true
+    level: guided
+    desc:
+      en: "Applies the schema changes before the new pods start."
+      fr: "Applique les changements de schéma avant que les nouveaux pods démarrent."
+  - from: operator
+    to: postgres
+    label: "manages"
+    dashed: true
+    level: guided
+    desc:
+      en: "Creates and watches the PostgreSQL pods, promotes a replica when the primary dies, runs backups if configured."
+      fr: "Crée et surveille les pods PostgreSQL, promeut un réplica quand le primaire meurt, lance les sauvegardes si configurées."
+  - from: certmanager
+    to: traefik
+    label: "indicat-tls"
+    dashed: true
+    level: deep
+    desc:
+      en: "The certificate Secret, written by cert-manager and read by Traefik."
+      fr: "Le Secret du certificat, écrit par cert-manager et lu par Traefik."

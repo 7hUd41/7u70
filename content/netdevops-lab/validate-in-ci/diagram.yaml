@@ -1,0 +1,150 @@
+# The gist: a push starts a pipeline; the cheap job runs on the forge, the lab job
+# on a runner installed on the lab machine, which deploys a fresh topology, renders
+# and pushes from NetBox, tests, and destroys. Quick: five boxes. Guided adds the
+# lint job, NetBox and the artifacts. Deep adds labels, secrets, files and timers.
+title: { en: "From a pull request to a proven change", fr: "D'une pull request à un changement prouvé" }
+caption:
+  en: "A push opens a pipeline: lint on the forge's runner, then the lab job on the runner labelled ${RUNNER_LABEL} on the lab machine, which deploys a fresh topology, renders and pushes from ${NETBOX_URL}, runs the tests, publishes the artifacts and tears the lab down. main only merges what passed."
+  fr: "Un push ouvre un pipeline : lint sur le runner de la forge, puis le job lab sur le runner labellisé ${RUNNER_LABEL} de la machine de lab, qui déploie une topologie neuve, rend et pousse depuis ${NETBOX_URL}, lance les tests, publie les artefacts et démonte le lab. main ne fusionne que ce qui est passé."
+
+groups:
+  - id: forge
+    label: { en: "Your forge", fr: "Ta forge" }
+    desc:
+      en: "GitHub or GitLab: the repository at ${REPO_URL}, the hosted runner for lint, the secret, the branch protection."
+      fr: "GitHub ou GitLab : le dépôt sur ${REPO_URL}, le runner hébergé pour le lint, le secret, la protection de branche."
+  - id: host
+    label: { en: "Lab machine", fr: "Machine de lab" }
+    desc:
+      en: "The same host as on the first page, now also running a CI runner labelled ${RUNNER_LABEL}. Docker, containerlab and the images are already there."
+      fr: "Le même hôte qu'à la première page, qui fait maintenant aussi tourner un runner CI labellisé ${RUNNER_LABEL}. Docker, containerlab et les images sont déjà là."
+
+nodes:
+  - id: dev
+    kind: user
+    label: { en: "You", fr: "Toi" }
+    sub: "git push · pull request"
+    desc:
+      en: "A change is a branch and a pull request. Nobody pushes to main directly, you included."
+      fr: "Un changement, c'est une branche et une pull request. Personne ne pousse sur main directement, toi compris."
+  - id: repo
+    kind: file
+    label: { en: "Repository", fr: "Dépôt" }
+    sub: "${REPO_URL}"
+    in: forge
+    desc:
+      en: "Topology, seed script, templates, configs/, tests, Makefile and the pipeline file. main is protected."
+      fr: "Topologie, script de seed, templates, configs/, tests, Makefile et le fichier de pipeline. main est protégée."
+    deep:
+      sub: "${REPO_URL} · main protected · required checks lint + lab"
+  - id: lint
+    kind: service
+    label: { en: "lint", fr: "lint" }
+    sub: "yamllint · ruff / ansible-lint"
+    in: forge
+    level: guided
+    desc:
+      en: "Seconds on the forge's hosted runner: YAML and Python or playbooks must parse before a lab is spent on them."
+      fr: "Quelques secondes sur le runner hébergé de la forge : le YAML et le Python ou les playbooks doivent se parser avant qu'un lab soit dépensé pour eux."
+    deep:
+      sub: "ubuntu-latest / python:3.12-slim · make deps lint"
+  - id: runner
+    kind: service
+    label: { en: "lab job", fr: "job lab" }
+    sub: "runner ${RUNNER_LABEL}"
+    in: host
+    focus: true
+    desc:
+      en: "Self-hosted: deploy, render, push, test, always destroy. One at a time, 30 minutes at most, NETBOX_TOKEN from the project's secrets."
+      fr: "Auto-hébergé : deploy, render, push, test, toujours destroy. Un à la fois, 30 minutes au plus, NETBOX_TOKEN venu des secrets du projet."
+    deep:
+      sub: "self-hosted · label ${RUNNER_LABEL} · concurrency/resource_group · sudo containerlab only"
+  - id: clab
+    kind: net
+    label: { en: "Fresh lab", fr: "Lab neuf" }
+    sub: "containerlab deploy --reconfigure"
+    in: host
+    desc:
+      en: "The topology from the first page, deployed from scratch on every run, then rendered and pushed from NetBox exactly as on the third page."
+      fr: "La topologie de la première page, déployée de zéro à chaque passage, puis rendue et poussée depuis NetBox exactement comme à la troisième page."
+    deep:
+      sub: "clab-${LAB_NAME}-* · ${MGMT_SUBNET} · make deploy render push"
+  - id: tests
+    kind: service
+    label: { en: "pytest", fr: "pytest" }
+    sub: "BGP established · loopback ping"
+    in: host
+    desc:
+      en: "scrapli asks each node for its BGP state and leaf1 for a ping to leaf2's loopback; BGP gets a minute to converge."
+      fr: "scrapli demande à chaque nœud son état BGP et à leaf1 un ping vers la loopback de leaf2 ; BGP a une minute pour converger."
+    deep:
+      sub: "tests/test_lab.py · 4 tests · report.xml (JUnit)"
+  - id: netbox
+    kind: store
+    label: { en: "NetBox", fr: "NetBox" }
+    sub: "${NETBOX_URL}"
+    level: guided
+    desc:
+      en: "Read by the render step with the token from the secret. A nightly run with no code change is the drift detector between NetBox and the lab."
+      fr: "Lu par l'étape de rendu avec le jeton venu du secret. Un passage nocturne sans changement de code est le détecteur de dérive entre NetBox et le lab."
+  - id: artifacts
+    kind: file
+    label: { en: "Artifacts", fr: "Artefacts" }
+    sub: "configs/ · report.xml"
+    in: forge
+    level: guided
+    desc:
+      en: "Kept whether the run passed or failed: the rendered configs and the test report, attached to the run and to the pull request."
+      fr: "Conservés que le passage ait réussi ou non : les configs rendues et le rapport de tests, attachés au passage et à la pull request."
+
+edges:
+  - from: dev
+    to: repo
+    label: "push"
+    deep: { label: "git push · pull request" }
+    desc: { en: "The push opens the pull request and starts the pipeline.", fr: "Le push ouvre la pull request et lance le pipeline." }
+  - from: repo
+    to: runner
+    label: "pipeline"
+    max: quick
+    desc: { en: "The forge sends the lab job to the runner on the lab machine.", fr: "La forge envoie le job lab au runner de la machine de lab." }
+  - from: repo
+    to: lint
+    label: "pipeline"
+    level: guided
+    desc: { en: "The first job, on the forge's own runner.", fr: "Le premier job, sur le runner de la forge elle-même." }
+  - from: lint
+    to: runner
+    label: "if green"
+    level: guided
+    deep: { label: "needs: lint · HTTPS long-poll" }
+    desc: { en: "The lab job waits for lint and never starts on a broken file. The runner polls the forge over HTTPS; nothing inbound.", fr: "Le job lab attend le lint et ne démarre jamais sur un fichier cassé. Le runner interroge la forge en HTTPS ; rien en entrée." }
+  - from: runner
+    to: clab
+    label: "deploy · push"
+    deep: { label: "make deploy render push · sudo containerlab" }
+    desc: { en: "A fresh topology, then the configuration rendered from NetBox pushed to it.", fr: "Une topologie neuve, puis la configuration rendue depuis NetBox poussée dessus." }
+  - from: netbox
+    to: runner
+    label: "REST"
+    dashed: true
+    level: guided
+    deep: { label: "NETBOX_TOKEN secret · read only" }
+    desc: { en: "The render step reads devices, interfaces, addresses and contexts with the token from the secret.", fr: "L'étape de rendu lit équipements, interfaces, adresses et contextes avec le jeton venu du secret." }
+  - from: clab
+    to: tests
+    label: "SSH"
+    deep: { label: "scrapli · SSH TCP 22 · mgmt IPs from topology" }
+    desc: { en: "The tests connect to each node's management IP, read from the topology file.", fr: "Les tests se connectent à l'IP de management de chaque nœud, lue dans le fichier de topologie." }
+  - from: tests
+    to: artifacts
+    label: "report"
+    level: guided
+    deep: { label: "configs/ + report.xml · when: always" }
+    desc: { en: "Uploaded whether the tests passed or not; a red run is the one whose artifacts you want.", fr: "Envoyés que les tests aient réussi ou non ; un passage rouge est celui dont tu veux les artefacts." }
+  - from: tests
+    to: repo
+    label: "green → merge"
+    dashed: true
+    deep: { label: "required status checks · destroy always runs" }
+    desc: { en: "main only accepts a pull request whose lint and lab checks passed. The lab is destroyed either way.", fr: "main n'accepte qu'une pull request dont les checks lint et lab sont passés. Le lab est démonté dans tous les cas." }

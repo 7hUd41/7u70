@@ -1,0 +1,872 @@
+{/* Première passe — à valider contre nornir.readthedocs.io, github.com/wvandeun/nornir_netbox, scrapli.github.io (plateformes core et community), docs.ansible.com (netbox.netbox.nb_inventory, arista.eos.eos_config), github.com/nokia/srlinux-ansible-collection et learn.srlinux.dev avant publication. */}
+
+NetBox connaît le lab ; les nœuds, pas encore. Cette page comble l'écart : l'outil d'automatisation lit son inventaire dans NetBox, un template par OS réseau transforme les interfaces, adresses et numéros BGP de chaque équipement en texte de configuration, le texte atterrit dans `configs/` où tu peux le lire et le differ, et seulement ensuite il est poussé. À la fin, BGP est établi entre le spine et les deux leaves, les loopbacks se pinguent, et pas une adresse n'a été tapée à la main.
+
+<Run>
+
+Le script installe <When is="AUTOMATION" equals="nornir">Nornir, scrapli et leurs plugins</When><When is="AUTOMATION" equals="ansible">Ansible et les collections</When> dans l'environnement virtuel du dépôt, écrit l'inventaire, les templates et l'outillage de rendu et de push, rend, pousse et affiche l'état BGP. Lance-le **sur la machine de lab**, lab déployé et `NETBOX_TOKEN` dans l'environnement.
+
+<When is="AUTOMATION" equals="nornir">
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Lab NetDevOps — rendu et push depuis ${NETBOX_URL} avec Nornir (lab ${LAB_NAME})
+cd ${LAB_DIR}
+.venv/bin/pip install -q nornir nornir-netbox nornir-scrapli nornir-jinja2 nornir-utils scrapli-community pynetbox
+mkdir -p inventory templates configs
+cat > config.yaml <<'EOF'
+inventory:
+  plugin: NetBoxInventory2
+  options:
+    nb_url: "${NETBOX_URL}"
+    filter_parameters: { tag: "${LAB_NAME}" }
+    use_platform_slug: true
+    defaults_file: inventory/defaults.yaml
+runner:
+  plugin: threaded
+  options: { num_workers: 3 }
+EOF
+```
+
+<When is="NOS" equals="srlinux">
+
+```bash
+printf 'username: admin\npassword: NokiaSrl1!\n' > inventory/defaults.yaml
+cat > templates/nokia_srl.j2 <<'EOF'
+{% for i in interfaces %}
+set / interface {{ i.name }} admin-state enable
+set / interface {{ i.name }} subinterface 0 admin-state enable
+set / interface {{ i.name }} subinterface 0 ipv4 admin-state enable
+set / interface {{ i.name }} subinterface 0 ipv4 address {{ i.address }}
+set / network-instance default interface {{ i.name }}.0
+{% endfor %}
+set / routing-policy policy all default-action policy-result accept
+set / network-instance default protocols bgp admin-state enable
+set / network-instance default protocols bgp autonomous-system {{ bgp.asn }}
+set / network-instance default protocols bgp router-id {{ router_id }}
+set / network-instance default protocols bgp afi-safi ipv4-unicast admin-state enable
+set / network-instance default protocols bgp group {{ bgp.peer_group }} admin-state enable
+set / network-instance default protocols bgp group {{ bgp.peer_group }} export-policy [ all ]
+set / network-instance default protocols bgp group {{ bgp.peer_group }} import-policy [ all ]
+{% for p in peers %}
+set / network-instance default protocols bgp neighbor {{ p.address }} admin-state enable
+set / network-instance default protocols bgp neighbor {{ p.address }} peer-as {{ p.asn }}
+set / network-instance default protocols bgp neighbor {{ p.address }} peer-group {{ bgp.peer_group }}
+{% endfor %}
+EOF
+```
+
+</When>
+
+<When is="NOS" equals="ceos">
+
+```bash
+printf 'username: admin\npassword: admin\n' > inventory/defaults.yaml
+cat > templates/arista_eos.j2 <<'EOF'
+hostname {{ hostname }}
+ip routing
+{% for i in interfaces %}
+interface {{ i.name }}
+{% if not i.loopback %}
+   no switchport
+{% endif %}
+   ip address {{ i.address }}
+{% endfor %}
+router bgp {{ bgp.asn }}
+   router-id {{ router_id }}
+   neighbor {{ bgp.peer_group }} peer group
+{% for p in peers %}
+   neighbor {{ p.address }} peer group {{ bgp.peer_group }}
+   neighbor {{ p.address }} remote-as {{ p.asn }}
+{% endfor %}
+{% for i in interfaces if i.loopback %}
+   network {{ i.address }}
+{% endfor %}
+EOF
+```
+
+</When>
+
+```bash
+cat > render.py <<'EOF'
+import os
+import pynetbox
+from nornir import InitNornir
+from nornir_jinja2.plugins.tasks import template_file
+from nornir_utils.plugins.functions import print_result
+from nornir_utils.plugins.tasks.files import write_file
+
+os.environ.setdefault("NB_TOKEN", os.environ["NETBOX_TOKEN"])
+nb = pynetbox.api("${NETBOX_URL}", token=os.environ["NETBOX_TOKEN"])
+
+def facts(host):
+    dev = nb.dcim.devices.get(host.data["id"])
+    interfaces, peers, router_id = [], [], None
+    for i in nb.dcim.interfaces.filter(device_id=dev.id, mgmt_only=False):
+        ip = nb.ipam.ip_addresses.get(interface_id=i.id)
+        if ip is None:
+            continue
+        loopback = i.type.value == "virtual"
+        interfaces.append({"name": i.name, "address": ip.address, "loopback": loopback})
+        if loopback:
+            router_id = ip.address.split("/")[0]
+        for peer in i.link_peers:
+            peer_dev = nb.dcim.devices.get(peer.device.id)
+            peer_ip = nb.ipam.ip_addresses.get(interface_id=peer.id)
+            peers.append({"name": peer_dev.name, "address": peer_ip.address.split("/")[0],
+                          "asn": peer_dev.config_context["bgp"]["asn"]})
+    return {"hostname": dev.name, "interfaces": interfaces, "peers": peers,
+            "router_id": router_id, "bgp": dev.config_context["bgp"]}
+
+def render(task):
+    cfg = task.run(template_file, template=f"{task.host.platform}.j2", path="templates", **facts(task.host)).result
+    task.run(write_file, filename=f"configs/{task.host.name}.cfg", content=cfg)
+
+nr = InitNornir(config_file="config.yaml")
+print_result(nr.run(task=render), severity_level=30)
+EOF
+cat > push.py <<'EOF'
+import os, sys
+from nornir import InitNornir
+from nornir_scrapli.tasks import send_command, send_configs
+from nornir_utils.plugins.functions import print_result
+
+os.environ.setdefault("NB_TOKEN", os.environ["NETBOX_TOKEN"])
+mode = sys.argv[1] if len(sys.argv) > 1 else "--dry-run"
+
+def push(task):
+    lines = open(f"configs/{task.host.name}.cfg").read().splitlines()
+    if mode == "--dry-run":
+        return "\n".join(lines)
+    if task.host.platform == "nokia_srl":
+        tail = ["diff", "discard now"] if mode == "--diff" else ["commit now"]
+        task.run(send_configs, configs=lines + tail)
+    else:
+        task.run(send_configs, configs=lines)
+        task.run(send_command, command="write memory")
+
+print_result(InitNornir(config_file="config.yaml").run(task=push))
+EOF
+.venv/bin/python render.py
+.venv/bin/python push.py --dry-run
+.venv/bin/python push.py --commit
+git add config.yaml inventory templates render.py push.py && git -c user.name=lab -c user.email=lab@localhost commit -qm "render and push from NetBox" || true
+```
+
+</When>
+
+<When is="AUTOMATION" equals="ansible">
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Lab NetDevOps — rendu et push depuis ${NETBOX_URL} avec Ansible (lab ${LAB_NAME})
+cd ${LAB_DIR}
+.venv/bin/pip install -q ansible pynetbox netaddr
+.venv/bin/ansible-galaxy collection install -q netbox.netbox ansible.netcommon ansible.utils arista.eos nokia.srlinux
+mkdir -p inventory group_vars templates configs
+cat > inventory/netbox.yml <<'EOF'
+plugin: netbox.netbox.nb_inventory
+api_endpoint: "${NETBOX_URL}"
+validate_certs: true
+config_context: true
+interfaces: true
+query_filters:
+  - tag: "${LAB_NAME}"
+group_by: [device_roles, platforms]
+EOF
+cat > ansible.cfg <<'EOF'
+[defaults]
+inventory = inventory/netbox.yml
+host_key_checking = False
+interpreter_python = auto_silent
+EOF
+```
+
+<When is="NOS" equals="srlinux">
+
+```bash
+cat > group_vars/platforms_nokia_srl.yml <<'EOF'
+ansible_connection: ansible.netcommon.httpapi
+ansible_network_os: nokia.srlinux.srlinux
+ansible_httpapi_use_ssl: true
+ansible_httpapi_validate_certs: false
+ansible_httpapi_port: 443
+ansible_user: admin
+ansible_password: NokiaSrl1!
+EOF
+cat > templates/nokia_srl.j2 <<'EOF'
+{
+  "interface": [
+{% for i in fabric %}
+    {"name": "{{ i.name }}", "admin-state": "enable", "subinterface": [{"index": 0, "admin-state": "enable",
+      "ipv4": {"admin-state": "enable", "address": [{"ip-prefix": "{{ i.address }}"}]}}]}{{ "," if not loop.last }}
+{% endfor %}
+  ],
+  "routing-policy": {"policy": [{"name": "all", "default-action": {"policy-result": "accept"}}]},
+  "network-instance": [{"name": "default",
+    "interface": [{% for i in fabric %}{"name": "{{ i.name }}.0"}{{ "," if not loop.last }}{% endfor %}],
+    "protocols": {"bgp": {"admin-state": "enable", "autonomous-system": {{ config_context.bgp.asn }}, "router-id": "{{ router_id }}",
+      "afi-safi": [{"afi-safi-name": "ipv4-unicast", "admin-state": "enable"}],
+      "group": [{"group-name": "{{ config_context.bgp.peer_group }}", "admin-state": "enable", "export-policy": ["all"], "import-policy": ["all"]}],
+      "neighbor": [{% for p in peers %}{"peer-address": "{{ p.address }}", "admin-state": "enable", "peer-as": {{ p.asn }}, "peer-group": "{{ config_context.bgp.peer_group }}"}{{ "," if not loop.last }}{% endfor %}]
+    }}}]
+}
+EOF
+cat > push.yml <<'EOF'
+- hosts: platforms_nokia_srl
+  gather_facts: false
+  tasks:
+    - name: Push the rendered configuration over JSON-RPC
+      nokia.srlinux.config:
+        update:
+          - path: /
+            value: "{{ lookup('file', 'configs/' ~ inventory_hostname ~ '.cfg') | from_json }}"
+        save_when: changed
+EOF
+```
+
+</When>
+
+<When is="NOS" equals="ceos">
+
+```bash
+cat > group_vars/platforms_arista_eos.yml <<'EOF'
+ansible_connection: ansible.netcommon.network_cli
+ansible_network_os: arista.eos.eos
+ansible_user: admin
+ansible_password: admin
+ansible_become: true
+ansible_become_method: enable
+EOF
+cat > templates/arista_eos.j2 <<'EOF'
+hostname {{ inventory_hostname }}
+ip routing
+{% for i in fabric %}
+interface {{ i.name }}
+{% if i.type.value != 'virtual' %}
+   no switchport
+{% endif %}
+   ip address {{ i.address }}
+{% endfor %}
+router bgp {{ config_context.bgp.asn }}
+   router-id {{ router_id }}
+   neighbor {{ config_context.bgp.peer_group }} peer group
+{% for p in peers %}
+   neighbor {{ p.address }} peer group {{ config_context.bgp.peer_group }}
+   neighbor {{ p.address }} remote-as {{ p.asn }}
+{% endfor %}
+{% for i in fabric if i.type.value == 'virtual' %}
+   network {{ i.address }}
+{% endfor %}
+EOF
+cat > push.yml <<'EOF'
+- hosts: platforms_arista_eos
+  gather_facts: false
+  tasks:
+    - name: Push the rendered configuration
+      arista.eos.eos_config:
+        src: "configs/{{ inventory_hostname }}.cfg"
+        save_when: changed
+      diff: true
+EOF
+```
+
+</When>
+
+```bash
+cat > render.yml <<'EOF'
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: Fabric interfaces (everything but management, with an address)
+      set_fact:
+        fabric: "{{ interfaces | rejectattr('mgmt_only') | selectattr('ip_addresses') | list }}"
+    - name: Attach the first address to each interface
+      set_fact:
+        addressed: "{{ (addressed | default([])) + [i | combine({'address': i.ip_addresses[0].address})] }}"
+      loop: "{{ fabric }}"
+      loop_control: { loop_var: i }
+    - name: Router ID from the loopback, BGP peers from the cables
+      set_fact:
+        fabric: "{{ addressed }}"
+        router_id: "{{ (addressed | selectattr('type.value', 'equalto', 'virtual') | first).address | ansible.utils.ipaddr('address') }}"
+        peers: "{{ (peers | default([])) + [{'name': p.device.name, 'asn': hostvars[p.device.name].config_context.bgp.asn,
+                  'address': (hostvars[p.device.name].interfaces | selectattr('name', 'equalto', p.name) | first).ip_addresses[0].address | ansible.utils.ipaddr('address')}] }}"
+      loop: "{{ addressed | map(attribute='link_peers') | flatten }}"
+      loop_control: { loop_var: p }
+    - name: Render
+      template:
+        src: "templates/{{ platforms[0] }}.j2"
+        dest: "configs/{{ inventory_hostname }}.cfg"
+      delegate_to: localhost
+EOF
+.venv/bin/ansible-playbook render.yml
+.venv/bin/ansible-playbook push.yml --check --diff
+.venv/bin/ansible-playbook push.yml
+git add ansible.cfg inventory group_vars templates render.yml push.yml && git -c user.name=lab -c user.email=lab@localhost commit -qm "render and push from NetBox" || true
+```
+
+</When>
+
+<Warn>Le push remplace la configuration des interfaces et de BGP sur chaque équipement tagué <V name="LAB_NAME" /> dans NetBox. Le filtre sur le tag est la seule chose entre ce script et tout ce que ton NetBox connaît d'autre : regarde `configs/` avant de pousser, à chaque fois.</Warn>
+
+</Run>
+
+## Avant de commencer
+
+<Guided>Le lab de la première page est déployé et le script de seed de la deuxième a tourné. Tout se passe ici dans <V name="LAB_DIR" /> sur la machine de lab, dans le même environnement virtuel, avec `NETBOX_TOKEN` dans l'environnement. Les identifiants par défaut des nœuds sont <When is="NOS" equals="srlinux">`admin` / `NokiaSrl1!`</When><When is="NOS" equals="ceos">`admin` / `admin`</When>.</Guided>
+
+<When is="AUTOMATION" equals="nornir">
+
+```bash
+cd ${LAB_DIR} && source .venv/bin/activate
+pip install nornir nornir-netbox nornir-scrapli nornir-jinja2 nornir-utils scrapli-community pynetbox
+mkdir -p inventory templates configs
+export NETBOX_TOKEN=${NETBOX_TOKEN}
+```
+
+<Deep>Cinq petits paquets, chacun fait une chose : `nornir` exécute des tâches sur un inventaire en parallèle ; `nornir-netbox` construit cet inventaire depuis NetBox ; `nornir-scrapli` se connecte en SSH et connaît les prompts et les modes de chaque plateforme ; `nornir-jinja2` rend les templates ; `nornir-utils` affiche les résultats et écrit des fichiers. `scrapli-community` ajoute la plateforme `nokia_srl`, que scrapli seul ne livre pas ; `arista_eos` est dans le cœur. `pynetbox` reste pour la seule chose qu'un plugin d'inventaire ne donne pas : l'arbre des interfaces, adresses et bouts de câble.</Deep>
+
+<Check cmd="pip show nornir nornir-scrapli | grep -c '^Name:'" expect="2" />
+
+</When>
+
+<When is="AUTOMATION" equals="ansible">
+
+```bash
+cd ${LAB_DIR} && source .venv/bin/activate
+pip install ansible pynetbox netaddr
+ansible-galaxy collection install netbox.netbox ansible.netcommon ansible.utils arista.eos nokia.srlinux
+mkdir -p inventory group_vars templates configs
+export NETBOX_TOKEN=${NETBOX_TOKEN}
+```
+
+<Deep>`netbox.netbox` apporte le plugin d'inventaire ; `ansible.netcommon` les plugins de connexion réseau (`network_cli`, `httpapi`) ; `ansible.utils` le filtre `ipaddr` (qui a besoin de `netaddr`) ; `arista.eos` le module `eos_config` et `nokia.srlinux` les modules JSON-RPC pour SR Linux. `ansible` le paquet, pas `ansible-core` seul, pour que les collections déjà embarquées par une installation fraîche ne te surprennent pas avec des versions plus anciennes.</Deep>
+
+<Check cmd="ansible-galaxy collection list 2>/dev/null | grep -c 'netbox.netbox\|arista.eos\|nokia.srlinux'" expect="3" />
+
+</When>
+
+## L'inventaire depuis NetBox
+
+<Guided>Pas de fichier `hosts` : l'inventaire, *c'est* NetBox. Le plugin demande tous les équipements tagués <V name="LAB_NAME" />, prend l'IP primaire comme adresse de connexion et le slug de la plateforme comme nom de driver. Change un équipement dans NetBox et le prochain passage le voit.</Guided>
+
+<When is="AUTOMATION" equals="nornir">
+
+<Tabs group="nornir-inventory">
+
+<Tab label="config.yaml">
+
+```yaml title="${LAB_DIR}/config.yaml" {2,4-6}
+inventory:
+  plugin: NetBoxInventory2
+  options:
+    nb_url: "${NETBOX_URL}"
+    filter_parameters: { tag: "${LAB_NAME}" }
+    use_platform_slug: true
+    defaults_file: inventory/defaults.yaml
+runner:
+  plugin: threaded
+  options: { num_workers: 3 }
+```
+
+</Tab>
+
+<Tab label="inventory/defaults.yaml">
+
+<When is="NOS" equals="srlinux">
+
+```yaml title="${LAB_DIR}/inventory/defaults.yaml"
+username: admin
+password: NokiaSrl1!
+```
+
+</When>
+
+<When is="NOS" equals="ceos">
+
+```yaml title="${LAB_DIR}/inventory/defaults.yaml"
+username: admin
+password: admin
+```
+
+</When>
+
+</Tab>
+
+</Tabs>
+
+<Note>Le jeton n'est pas dans le fichier : `nornir-netbox` lit `NB_TOKEN` dans l'environnement quand `nb_token` est absent, et les scripts plus bas y copient `NETBOX_TOKEN`. Confirme les noms des options (`use_platform_slug`, `defaults_file`, `filter_parameters`) dans le README du plugin pour ta version.</Note>
+
+```bash
+export NB_TOKEN=$NETBOX_TOKEN
+python -c 'from nornir import InitNornir; nr = InitNornir(config_file="config.yaml"); [print(h.name, h.hostname, h.platform) for h in nr.inventory.hosts.values()]'
+```
+
+<Deep>`NetBoxInventory2` fait un appel à `/api/dcim/devices/` avec ton filtre et un hôte par résultat : `hostname` est l'IP primaire sans son masque, `platform` le slug (`nokia_srl` ou `arista_eos`, que scrapli prend comme nom de driver : c'est pour ça que le slug a été choisi à la page précédente), et tout le JSON de l'équipement, config context compris, est dans `host.data`. Les identifiants viennent de `defaults.yaml`, la couche la plus basse de l'inventaire Nornir ; un fichier de groupes pourrait les surcharger par rôle. Des identifiants de lab par défaut dans git, très bien ; les vrais passent par des variables d'environnement dans un `defaults` que tu génères.</Deep>
+
+<Check cmd={"cd ${LAB_DIR} && NB_TOKEN=$NETBOX_TOKEN .venv/bin/python -c 'from nornir import InitNornir; print(len(InitNornir(config_file=\"config.yaml\").inventory.hosts))'"} expect="3" />
+
+</When>
+
+<When is="AUTOMATION" equals="ansible">
+
+<Tabs group="ansible-inventory">
+
+<Tab label="inventory/netbox.yml">
+
+```yaml title="${LAB_DIR}/inventory/netbox.yml" {1,4-7}
+plugin: netbox.netbox.nb_inventory
+api_endpoint: "${NETBOX_URL}"
+validate_certs: true
+config_context: true
+interfaces: true
+query_filters:
+  - tag: "${LAB_NAME}"
+group_by: [device_roles, platforms]
+```
+
+</Tab>
+
+<Tab label="ansible.cfg">
+
+```ini title="${LAB_DIR}/ansible.cfg"
+[defaults]
+inventory = inventory/netbox.yml
+host_key_checking = False
+interpreter_python = auto_silent
+```
+
+</Tab>
+
+<Tab label="group_vars">
+
+<When is="NOS" equals="srlinux">
+
+```yaml title="${LAB_DIR}/group_vars/platforms_nokia_srl.yml"
+ansible_connection: ansible.netcommon.httpapi
+ansible_network_os: nokia.srlinux.srlinux
+ansible_httpapi_use_ssl: true
+ansible_httpapi_validate_certs: false
+ansible_httpapi_port: 443
+ansible_user: admin
+ansible_password: NokiaSrl1!
+```
+
+</When>
+
+<When is="NOS" equals="ceos">
+
+```yaml title="${LAB_DIR}/group_vars/platforms_arista_eos.yml"
+ansible_connection: ansible.netcommon.network_cli
+ansible_network_os: arista.eos.eos
+ansible_user: admin
+ansible_password: admin
+ansible_become: true
+ansible_become_method: enable
+```
+
+</When>
+
+</Tab>
+
+</Tabs>
+
+<Note>Le jeton vient de la variable d'environnement `NETBOX_TOKEN`, que le plugin lit par défaut. `config_context: true` et `interfaces: true` mettent le contexte rendu et la liste des interfaces (avec adresses et bouts de câble) dans les variables de chaque hôte ; confirme les noms exacts des options dans la documentation de la collection pour ta version.</Note>
+
+```bash
+ansible-inventory --graph
+ansible-inventory --host spine1 | head -40
+```
+
+<Deep>Le plugin groupe les hôtes selon ce que tu listes dans `group_by` : `device_roles_spine`, `platforms_arista_eos`… et les fichiers de `group_vars/` nommés d'après ces groupes règlent la connexion. `ansible_host` est l'IP primaire. <When is="NOS" equals="srlinux">Pour SR Linux il n'y a pas de module CLI-sur-SSH dans la collection : elle parle JSON-RPC au serveur de management sur 443, que containerlab active par défaut avec un certificat auto-signé, d'où `validate_certs: false`.</When><When is="NOS" equals="ceos">`network_cli`, c'est SSH avec un analyseur de prompt ; `become` avec `enable` est ce qui te fait passer de `>` à `#`.</When> Des identifiants de lab par défaut dans git, très bien ; les vrais vont dans Ansible Vault ou l'environnement.</Deep>
+
+<Check cmd={"cd ${LAB_DIR} && .venv/bin/ansible-inventory --list | python3 -c 'import sys, json; print(len(json.load(sys.stdin)[\"_meta\"][\"hostvars\"]))'"} expect="3" />
+
+</When>
+
+## Un template par OS réseau
+
+<Guided>Un template, c'est la configuration avec les valeurs en moins. Il reçoit, par équipement, les interfaces avec leur adresse, les numéros BGP du config context, et les pairs : pour chaque interface câblée, l'adresse et l'AS du bout d'en face. Que ce bout soit un spine ou une leaf, le template s'en moque : la source de vérité le sait déjà.</Guided>
+
+<When is="NOS" equals="srlinux">
+
+<When is="AUTOMATION" equals="nornir">
+
+```text title="${LAB_DIR}/templates/nokia_srl.j2"
+{% for i in interfaces %}
+set / interface {{ i.name }} admin-state enable
+set / interface {{ i.name }} subinterface 0 admin-state enable
+set / interface {{ i.name }} subinterface 0 ipv4 admin-state enable
+set / interface {{ i.name }} subinterface 0 ipv4 address {{ i.address }}
+set / network-instance default interface {{ i.name }}.0
+{% endfor %}
+set / routing-policy policy all default-action policy-result accept
+set / network-instance default protocols bgp admin-state enable
+set / network-instance default protocols bgp autonomous-system {{ bgp.asn }}
+set / network-instance default protocols bgp router-id {{ router_id }}
+set / network-instance default protocols bgp afi-safi ipv4-unicast admin-state enable
+set / network-instance default protocols bgp group {{ bgp.peer_group }} admin-state enable
+set / network-instance default protocols bgp group {{ bgp.peer_group }} export-policy [ all ]
+set / network-instance default protocols bgp group {{ bgp.peer_group }} import-policy [ all ]
+{% for p in peers %}
+set / network-instance default protocols bgp neighbor {{ p.address }} admin-state enable
+set / network-instance default protocols bgp neighbor {{ p.address }} peer-as {{ p.asn }}
+set / network-instance default protocols bgp neighbor {{ p.address }} peer-group {{ bgp.peer_group }}
+{% endfor %}
+```
+
+</When>
+
+<When is="AUTOMATION" equals="ansible">
+
+```text title="${LAB_DIR}/templates/nokia_srl.j2"
+{
+  "interface": [
+{% for i in fabric %}
+    {"name": "{{ i.name }}", "admin-state": "enable", "subinterface": [{"index": 0, "admin-state": "enable",
+      "ipv4": {"admin-state": "enable", "address": [{"ip-prefix": "{{ i.address }}"}]}}]}{{ "," if not loop.last }}
+{% endfor %}
+  ],
+  "routing-policy": {"policy": [{"name": "all", "default-action": {"policy-result": "accept"}}]},
+  "network-instance": [{"name": "default",
+    "interface": [{% for i in fabric %}{"name": "{{ i.name }}.0"}{{ "," if not loop.last }}{% endfor %}],
+    "protocols": {"bgp": {"admin-state": "enable", "autonomous-system": {{ config_context.bgp.asn }}, "router-id": "{{ router_id }}",
+      "afi-safi": [{"afi-safi-name": "ipv4-unicast", "admin-state": "enable"}],
+      "group": [{"group-name": "{{ config_context.bgp.peer_group }}", "admin-state": "enable", "export-policy": ["all"], "import-policy": ["all"]}],
+      "neighbor": [{% for p in peers %}{"peer-address": "{{ p.address }}", "admin-state": "enable", "peer-as": {{ p.asn }}, "peer-group": "{{ config_context.bgp.peer_group }}"}{{ "," if not loop.last }}{% endfor %}]
+    }}}]
+}
+```
+
+<Note>La collection Ansible pour SR Linux parle JSON-RPC, donc le template rend l'arbre YANG en JSON plutôt qu'en lignes CLI. Les clés sont les mêmes mots que les commandes `set`. Valide le fichier rendu avec `python3 -m json.tool configs/spine1.cfg` avant de pousser.</Note>
+
+</When>
+
+<Deep>Deux choses font marcher eBGP sur SR Linux que d'autres constructeurs font par défaut. D'abord, depuis 23.x les sessions eBGP rejettent toutes les routes en entrée et en sortie tant qu'une politique ne dit pas le contraire (`ebgp-default-policy`), d'où la politique `all` avec `default-action accept` appliquée en import et en export sur le groupe ; un vrai réseau filtrerait sur des listes de préfixes. Ensuite, `afi-safi ipv4-unicast` doit être activée au niveau BGP. La politique d'export annonce aussi les routes locales, loopback comprise, c'est pourquoi aucun `network` n'est nécessaire. `export-policy [ all ]` est la forme leaf-list de 24.x ; en 23.x c'était une valeur simple `export-policy all`. Regarde `info flat network-instance default protocols bgp` sur un nœud après le premier push et compare.</Deep>
+
+</When>
+
+<When is="NOS" equals="ceos">
+
+<When is="AUTOMATION" equals="nornir">
+
+```text title="${LAB_DIR}/templates/arista_eos.j2"
+hostname {{ hostname }}
+ip routing
+{% for i in interfaces %}
+interface {{ i.name }}
+{% if not i.loopback %}
+   no switchport
+{% endif %}
+   ip address {{ i.address }}
+{% endfor %}
+router bgp {{ bgp.asn }}
+   router-id {{ router_id }}
+   neighbor {{ bgp.peer_group }} peer group
+{% for p in peers %}
+   neighbor {{ p.address }} peer group {{ bgp.peer_group }}
+   neighbor {{ p.address }} remote-as {{ p.asn }}
+{% endfor %}
+{% for i in interfaces if i.loopback %}
+   network {{ i.address }}
+{% endfor %}
+```
+
+</When>
+
+<When is="AUTOMATION" equals="ansible">
+
+```text title="${LAB_DIR}/templates/arista_eos.j2"
+hostname {{ inventory_hostname }}
+ip routing
+{% for i in fabric %}
+interface {{ i.name }}
+{% if i.type.value != 'virtual' %}
+   no switchport
+{% endif %}
+   ip address {{ i.address }}
+{% endfor %}
+router bgp {{ config_context.bgp.asn }}
+   router-id {{ router_id }}
+   neighbor {{ config_context.bgp.peer_group }} peer group
+{% for p in peers %}
+   neighbor {{ p.address }} peer group {{ config_context.bgp.peer_group }}
+   neighbor {{ p.address }} remote-as {{ p.asn }}
+{% endfor %}
+{% for i in fabric if i.type.value == 'virtual' %}
+   network {{ i.address }}
+{% endfor %}
+```
+
+</When>
+
+<Deep>EOS active la famille IPv4 unicast pour chaque voisin par défaut, donc pas de bloc `address-family` ; le `network`, si, parce qu'EOS ne redistribue pas les routes connectées sans qu'on le lui dise. Un peer group garde au même endroit les réglages communs des voisins ; ici il ne contient encore rien, mais c'est là que les timers, mots de passe et route-maps iront plus tard. `hostname` est dans le template exprès : le nom du nœud est un fait NetBox, pas quelque chose que le lab décide.</Deep>
+
+</When>
+
+## Rendre
+
+<Guided>Le rendu écrit un fichier par équipement dans `configs/`, à partir des données de NetBox et du template. Aucun nœud n'est touché. Lis les fichiers : c'est exactement ce que tu aurais tapé à la première page, plus BGP.</Guided>
+
+<When is="AUTOMATION" equals="nornir">
+
+<Annotated>
+
+```python title="${LAB_DIR}/render.py" {8,12,14,21-22,28,35}
+import os
+import pynetbox
+from nornir import InitNornir
+from nornir_jinja2.plugins.tasks import template_file
+from nornir_utils.plugins.functions import print_result
+from nornir_utils.plugins.tasks.files import write_file
+
+os.environ.setdefault("NB_TOKEN", os.environ["NETBOX_TOKEN"])                 # (1)
+nb = pynetbox.api("${NETBOX_URL}", token=os.environ["NETBOX_TOKEN"])
+
+def facts(host):
+    dev = nb.dcim.devices.get(host.data["id"])                                 # (2)
+    interfaces, peers, router_id = [], [], None
+    for i in nb.dcim.interfaces.filter(device_id=dev.id, mgmt_only=False):     # (3)
+        ip = nb.ipam.ip_addresses.get(interface_id=i.id)
+        if ip is None:
+            continue
+        loopback = i.type.value == "virtual"
+        interfaces.append({"name": i.name, "address": ip.address, "loopback": loopback})
+        if loopback:
+            router_id = ip.address.split("/")[0]                               # (4)
+        for peer in i.link_peers:                                              # (5)
+            peer_dev = nb.dcim.devices.get(peer.device.id)
+            peer_ip = nb.ipam.ip_addresses.get(interface_id=peer.id)
+            peers.append({"name": peer_dev.name, "address": peer_ip.address.split("/")[0],
+                          "asn": peer_dev.config_context["bgp"]["asn"]})
+    return {"hostname": dev.name, "interfaces": interfaces, "peers": peers,
+            "router_id": router_id, "bgp": dev.config_context["bgp"]}          # (6)
+
+def render(task):
+    cfg = task.run(template_file, template=f"{task.host.platform}.j2", path="templates", **facts(task.host)).result
+    task.run(write_file, filename=f"configs/{task.host.name}.cfg", content=cfg)
+
+nr = InitNornir(config_file="config.yaml")
+print_result(nr.run(task=render), severity_level=30)                           # (7)
+```
+
+1. Un jeton, deux noms : le plugin de Nornir veut `NB_TOKEN`, tout le reste de cette série utilise `NETBOX_TOKEN`.
+2. L'inventaire contient déjà le JSON de l'équipement ; on le recharge via pynetbox pour avoir un objet vivant avec `config_context` et parcourir ses relations.
+3. `mgmt_only=False` est toute la raison pour laquelle l'interface de management a été marquée à la page précédente : le template ne la voit jamais.
+4. Le router-id est l'adresse de loopback, même convention sur les deux plateformes.
+5. `link_peers` est le bout d'en face du câble. On en tire l'équipement pair (pour son AS, dans son config context rendu) et l'adresse sur l'interface paire. C'est cette boucle qui rend le template indépendant du constructeur et du rôle.
+6. Le config context rendu de l'équipement lui-même : `bgp.asn` (venu du rôle ou du contexte local) et `bgp.peer_group`.
+7. Nornir lance `render` sur chaque hôte en parallèle ; `severity_level=30` n'affiche que les avertissements et les échecs, un passage vert est silencieux.
+
+</Annotated>
+
+```bash
+python render.py
+ls configs/
+cat configs/spine1.cfg
+```
+
+<Deep>Chaque appel à `facts()`, c'est une poignée de requêtes API : trois équipements prennent une seconde, trente en prennent dix. Très bien pour un lab, et c'est le moment où un vrai projet passe à une seule requête GraphQL pour tout le site (page précédente, niveau Deep), ou aux config templates de NetBox lui-même, qui rendent du Jinja2 côté serveur depuis les mêmes données. Garde les templates dans le dépôt dans tous les cas : un template dans git a un diff, un relecteur et un test ; un template dans une base a un formulaire.</Deep>
+
+</When>
+
+<When is="AUTOMATION" equals="ansible">
+
+<Annotated>
+
+```yaml title="${LAB_DIR}/render.yml" {6,15-17,22}
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: Fabric interfaces (everything but management, with an address)
+      set_fact:
+        fabric: "{{ interfaces | rejectattr('mgmt_only') | selectattr('ip_addresses') | list }}"   # (1)
+    - name: Attach the first address to each interface
+      set_fact:
+        addressed: "{{ (addressed | default([])) + [i | combine({'address': i.ip_addresses[0].address})] }}"
+      loop: "{{ fabric }}"
+      loop_control: { loop_var: i }
+    - name: Router ID from the loopback, BGP peers from the cables
+      set_fact:
+        fabric: "{{ addressed }}"
+        router_id: "{{ (addressed | selectattr('type.value', 'equalto', 'virtual') | first).address | ansible.utils.ipaddr('address') }}"   # (2)
+        peers: "{{ (peers | default([])) + [{'name': p.device.name, 'asn': hostvars[p.device.name].config_context.bgp.asn,
+                  'address': (hostvars[p.device.name].interfaces | selectattr('name', 'equalto', p.name) | first).ip_addresses[0].address | ansible.utils.ipaddr('address')}] }}"   # (3)
+      loop: "{{ addressed | map(attribute='link_peers') | flatten }}"
+      loop_control: { loop_var: p }
+    - name: Render
+      template:
+        src: "templates/{{ platforms[0] }}.j2"                                 # (4)
+        dest: "configs/{{ inventory_hostname }}.cfg"
+      delegate_to: localhost
+```
+
+1. `interfaces` vient du plugin d'inventaire ; `mgmt_only` est le drapeau posé à la page précédente, donc l'interface de management n'atteint jamais un template.
+2. Le router-id est l'adresse de loopback sans son masque ; `ipaddr('address')` l'enlève.
+3. Pour chaque bout de câble : l'AS de l'équipement d'en face dans *son* config context, et l'adresse sur *son* interface, les deux lus dans `hostvars` puisque tous les équipements du lab sont dans l'inventaire. Pas de second appel API.
+4. `platforms` est la liste des slugs de plateforme que le plugin pose par hôte : le fichier de template porte ce nom.
+
+</Annotated>
+
+```bash
+ansible-playbook render.yml
+ls configs/
+cat configs/spine1.cfg
+```
+
+<Deep>Tout ici, ce sont des filtres sur des données que le plugin d'inventaire a déjà récupérées : un appel API par passage, quel que soit le nombre d'équipements. Le prix, c'est du Jinja dans du YAML, qui cesse d'être lisible vers le troisième `selectattr` ; au-delà, un petit plugin de filtre dans `filter_plugins/` fait la même chose en Python avec un nom. `delegate_to: localhost` parce que le template est rendu sur la machine de contrôle, pas sur un switch. Confirme la forme de `interfaces` et `link_peers` dans `ansible-inventory --host spine1` pour ta version de NetBox avant de faire confiance aux filtres.</Deep>
+
+</When>
+
+<Check cmd="ls ${LAB_DIR}/configs | wc -l" expect="3" />
+
+<Check cmd={"grep -o '10\\.1\\.0\\.[13]' ${LAB_DIR}/configs/spine1.cfg | sort -u | wc -l"} expect="2" />
+
+<Details summary="Si le rendu échoue sur une clé manquante">
+Un `KeyError: 'bgp'` ou un `config_context.bgp` indéfini veut dire que l'équipement n'a pas de contexte rendu : les config contexts de la page précédente sont attachés aux rôles, vérifie le rôle de l'équipement et que les contextes sont *actifs*. Une interface sans `link_peers`, c'est un câble qui manque. Un `interfaces` vide veut dire que le filtre sur le tag n'a rien trouvé : `tag=<V name="LAB_NAME" />` doit être le slug, pas le nom.
+</Details>
+
+## Pousser
+
+<Guided>Le push envoie chaque fichier rendu à son équipement. D'abord un dry-run qui affiche ce qui serait envoyé sans rien toucher, puis pour de vrai. À partir d'ici, la configuration des nœuds est ce que NetBox dit qu'elle doit être.</Guided>
+
+<When is="AUTOMATION" equals="nornir">
+
+```python title="${LAB_DIR}/push.py" {11-15}
+import os, sys
+from nornir import InitNornir
+from nornir_scrapli.tasks import send_command, send_configs
+from nornir_utils.plugins.functions import print_result
+
+os.environ.setdefault("NB_TOKEN", os.environ["NETBOX_TOKEN"])
+mode = sys.argv[1] if len(sys.argv) > 1 else "--dry-run"
+
+def push(task):
+    lines = open(f"configs/{task.host.name}.cfg").read().splitlines()
+    if mode == "--dry-run":
+        return "\n".join(lines)
+    if task.host.platform == "nokia_srl":
+        tail = ["diff", "discard now"] if mode == "--diff" else ["commit now"]
+        task.run(send_configs, configs=lines + tail)
+    else:
+        task.run(send_configs, configs=lines)
+        task.run(send_command, command="write memory")
+
+print_result(InitNornir(config_file="config.yaml").run(task=push))
+```
+
+```bash
+python push.py --dry-run
+python push.py --commit
+```
+
+<When is="NOS" equals="srlinux">
+
+<Note>`send_configs` sur la plateforme community `nokia_srl` entre dans la configuration candidate et envoie les lignes ; le `commit now` à la fin est ce qui les applique, `diff` puis `discard now` montre le changement et le jette (`python push.py --diff`). Vérifie comment le driver community gère le mode candidat dans la documentation de scrapli-community pour ta version : s'il commite tout seul en sortant, le `commit now` explicite ne gêne pas.</Note>
+
+</When>
+
+<When is="NOS" equals="ceos">
+
+<Note>`send_configs` entre en `configure terminal`, envoie les lignes et ressort ; `write memory` sauvegarde. EOS a aussi un vrai diff : `configure session`, les mêmes lignes, `show session-config diffs`, puis `commit` ou `abort`. scrapli gère les sessions via `register_configuration_session` ; branche-le quand un push aveugle cessera d'être acceptable, c'est-à-dire avant la production.</Note>
+
+</When>
+
+<Deep>scrapli est un screen-scraper fait avec soin : il connaît les prompts et les niveaux de privilège de chaque plateforme, envoie une ligne, attend le prompt, cherche dans la sortie les chaînes d'erreur de la plateforme et fait échouer la tâche à la première, donc une faute dans un template arrête le push sur cet équipement au lieu d'en appliquer la moitié en silence. Nornir traite les hôtes en parallèle, trois threads ici, et `print_result` affiche la sortie par hôte avec les échecs en rouge. Un hôte en échec n'arrête pas les autres ; `nr.data.failed_hosts` les liste pour rejouer.</Deep>
+
+</When>
+
+<When is="AUTOMATION" equals="ansible">
+
+<When is="NOS" equals="srlinux">
+
+```yaml title="${LAB_DIR}/push.yml" {5-9}
+- hosts: platforms_nokia_srl
+  gather_facts: false
+  tasks:
+    - name: Push the rendered configuration over JSON-RPC
+      nokia.srlinux.config:
+        update:
+          - path: /
+            value: "{{ lookup('file', 'configs/' ~ inventory_hostname ~ '.cfg') | from_json }}"
+        save_when: changed
+```
+
+<Note>`nokia.srlinux.config` envoie le JSON en `update` à la racine de la configuration via JSON-RPC et commite ; `--check --diff` demande le diff au nœud sans commiter. Confirme les noms des paramètres (`update`, `save_when`) et le support du mode check dans le README de la collection pour ta version, le module était jeune au moment d'écrire ces lignes.</Note>
+
+</When>
+
+<When is="NOS" equals="ceos">
+
+```yaml title="${LAB_DIR}/push.yml" {5-8}
+- hosts: platforms_arista_eos
+  gather_facts: false
+  tasks:
+    - name: Push the rendered configuration
+      arista.eos.eos_config:
+        src: "configs/{{ inventory_hostname }}.cfg"
+        save_when: changed
+      diff: true
+```
+
+<Note>`eos_config` compare le fichier à la configuration courante ligne par ligne et n'envoie que ce qui diffère ; `--check --diff` montre cette différence sans l'envoyer. `save_when: changed` écrit `startup-config` seulement quand quelque chose a été poussé.</Note>
+
+</When>
+
+```bash
+ansible-playbook push.yml --check --diff
+ansible-playbook push.yml
+```
+
+<Deep>`--check` est le dry-run d'Ansible : les modules qui le supportent calculent ce qu'ils changeraient et le rapportent ; avec `--diff` ils l'affichent. Les modules de configuration réseau le font, ce qui fait de la paire la première commande standard de tout push. Le playbook vise le groupe de plateforme, pas `all` : un équipement d'une autre plateforme tagué dans le lab par erreur ne reçoit aucune config plutôt qu'une mauvaise. Lance avec `-v` pour voir les lignes envoyées par chaque module, et `-l spine1` pour pousser sur un seul équipement.</Deep>
+
+</When>
+
+## Vérifier BGP
+
+<Guided>Deux sessions sur le spine, une sur chaque leaf, toutes *Established* ; puis un ping de la loopback de leaf1 vers celle de leaf2, qui traverse le spine et prouve que les deux loopbacks sont annoncées. Avec le <V name="LOOPBACK_PREFIX" /> par défaut, leaf1 est `10.0.0.2` et leaf2 est `10.0.0.3`.</Guided>
+
+<When is="NOS" equals="srlinux">
+
+```text
+A:spine1# show network-instance default protocols bgp neighbor
+A:leaf1# show network-instance default route-table ipv4-unicast summary
+A:leaf1# ping -c 3 10.0.0.3 -I 10.0.0.2 network-instance default
+```
+
+<Check cmd={"docker exec clab-${LAB_NAME}-spine1 sr_cli 'info from state network-instance default protocols bgp neighbor * session-state' | grep -c 'session-state established'"} expect="2" />
+
+<Check cmd={"docker exec clab-${LAB_NAME}-leaf1 sr_cli 'ping -c 3 10.0.0.3 -I 10.0.0.2 network-instance default' | grep -o '3 received'"} expect="3 received" />
+
+</When>
+
+<When is="NOS" equals="ceos">
+
+```text
+spine1#show ip bgp summary
+leaf1#show ip route bgp
+leaf1#ping 10.0.0.3 source 10.0.0.2 repeat 3
+```
+
+<Check cmd={"docker exec clab-${LAB_NAME}-spine1 Cli -p 15 -c 'show ip bgp summary' | grep -c Estab"} expect="2" />
+
+<Check cmd={"docker exec clab-${LAB_NAME}-leaf1 Cli -p 15 -c 'ping 10.0.0.3 source 10.0.0.2 repeat 3' | grep -o '3 received'"} expect="3 received" />
+
+</When>
+
+<Details summary="Si une session reste en Active ou Connect">
+Par ordre de probabilité : le /31 ne pingue pas (la partie interfaces du push a échoué, regarde la sortie du push pour cet hôte) ; l'AS du pair est faux (compare `configs/leaf1.cfg` avec ce que le spine attend : l'AS de la leaf est dans son contexte *local*) ; <When is="NOS" equals="srlinux">la famille `ipv4-unicast` ou le groupe n'est pas en `admin-state enable` ;</When><When is="NOS" equals="ceos">`ip routing` manque, donc l'adresse du voisin est injoignable depuis la table de routage ;</When> ou la session est montée mais aucune route ne passe : la politique d'export manque d'un côté. Corrige le template ou NetBox, jamais le nœud, puis rends et pousse à nouveau.
+</Details>
+
+## Terminé
+
+Le lab tourne maintenant avec une configuration que personne n'a tapée : NetBox porte l'intention, les templates portent la syntaxe constructeur, `configs/` porte le résultat, et le push a mis les nœuds en conformité. Change une loopback dans NetBox, relance le rendu et le push, et la fabric suit. Toute la chaîne est dans git :
+
+```bash
+cd ${LAB_DIR} && git add -A && git commit -m "render and push from NetBox" && git log --oneline | head -3
+```
+
+La dernière page fait tourner cette chaîne toute seule : un pipeline qui linte le dépôt, déploie un lab neuf, rend et pousse, teste BGP et les pings, et démonte le lab, à chaque changement.

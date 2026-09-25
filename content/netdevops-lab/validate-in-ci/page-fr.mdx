@@ -1,0 +1,736 @@
+{/* Première passe — à valider contre docs.github.com (runners auto-hébergés, syntaxe des workflows, protection de branche), docs.gitlab.com (enregistrement d'un runner, .gitlab-ci.yml, branches protégées), containerlab.dev et scrapli.github.io avant publication. */}
+
+Trois pages d'outillage et toujours un point faible : un humain le lance, sur un lab qui est, ou pas, dans l'état qu'il croit. Cette page confie ça à la machine, à chaque changement : un pipeline linte le dépôt, déploie un lab neuf sur un runner installé sur la machine de lab, rend et pousse depuis NetBox, vérifie BGP et les pings avec pytest, publie les configs rendues et le rapport de tests, et démonte le lab quoi qu'il arrive. Puis `main` est protégée, pour que rien n'y arrive que le pipeline n'ait prouvé.
+
+<Run>
+
+Le script ajoute le Makefile, la configuration de lint, les tests et le fichier de pipeline à <V name="LAB_DIR" />, lance le tout une fois en local, et pousse vers <V name="REPO_URL" />. Lance-le **sur la machine de lab**, avec `NETBOX_TOKEN` dans l'environnement. L'enregistrement du runner et la protection de branche passent par l'interface de la forge et sont laissés aux étapes.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Lab NetDevOps — CI pour ${LAB_NAME}, label de runner ${RUNNER_LABEL}
+cd ${LAB_DIR}
+mkdir -p tests
+cat > .yamllint <<'EOF'
+extends: default
+rules:
+  line-length: { max: 200 }
+  truthy: { check-keys: false }
+  document-start: disable
+  comments: { min-spaces-from-content: 1 }
+EOF
+```
+
+<When is="AUTOMATION" equals="nornir">
+
+```bash
+printf '%s\n' nornir nornir-netbox nornir-scrapli nornir-jinja2 nornir-utils scrapli-community pynetbox pytest pyyaml yamllint ruff > requirements.txt
+printf 'line-length = 160\n[lint]\nignore = ["E401", "E702", "E731"]\n' > ruff.toml
+cat > Makefile <<'EOF'
+.RECIPEPREFIX = >
+VENV = .venv/bin
+.PHONY: deps lint deploy render push test destroy
+deps:
+> python3 -m venv .venv && $(VENV)/pip install -q -r requirements.txt
+lint:
+> $(VENV)/yamllint . && $(VENV)/ruff check .
+deploy:
+> sudo containerlab deploy -t topology.clab.yml --reconfigure
+render:
+> $(VENV)/python render.py
+push:
+> $(VENV)/python push.py --commit
+test:
+> $(VENV)/pytest -q tests --junitxml=report.xml
+destroy:
+> sudo containerlab destroy -t topology.clab.yml --cleanup
+EOF
+```
+
+</When>
+
+<When is="AUTOMATION" equals="ansible">
+
+```bash
+printf '%s\n' ansible pynetbox netaddr scrapli scrapli-community pytest pyyaml yamllint ansible-lint > requirements.txt
+printf 'collections:\n  - netbox.netbox\n  - ansible.netcommon\n  - ansible.utils\n  - arista.eos\n  - nokia.srlinux\n' > requirements.yml
+printf 'profile: min\n' > .ansible-lint
+cat > Makefile <<'EOF'
+.RECIPEPREFIX = >
+VENV = .venv/bin
+.PHONY: deps lint deploy render push test destroy
+deps:
+> python3 -m venv .venv && $(VENV)/pip install -q -r requirements.txt
+> $(VENV)/ansible-galaxy collection install -q -r requirements.yml
+lint:
+> $(VENV)/yamllint . && $(VENV)/ansible-lint
+deploy:
+> sudo containerlab deploy -t topology.clab.yml --reconfigure
+render:
+> $(VENV)/ansible-playbook render.yml
+push:
+> $(VENV)/ansible-playbook push.yml
+test:
+> $(VENV)/pytest -q tests --junitxml=report.xml
+destroy:
+> sudo containerlab destroy -t topology.clab.yml --cleanup
+EOF
+```
+
+</When>
+
+```bash
+cat > tests/test_lab.py <<'EOF'
+import ipaddress
+import time
+
+import pytest
+import yaml
+from scrapli import Scrapli
+
+NODES = yaml.safe_load(open("topology.clab.yml"))["topology"]["nodes"]
+LOOPBACKS = list(ipaddress.ip_network("${LOOPBACK_PREFIX}").hosts())
+PEERS = {"spine1": 2, "leaf1": 1, "leaf2": 1}
+EOF
+```
+
+<When is="NOS" equals="srlinux">
+
+```bash
+cat >> tests/test_lab.py <<'EOF'
+PLATFORM, AUTH = "nokia_srl", ("admin", "NokiaSrl1!")
+BGP = ("info from state network-instance default protocols bgp neighbor * session-state", "session-state established")
+PING = "ping -c 3 {dst} -I {src} network-instance default"
+EOF
+```
+
+</When>
+
+<When is="NOS" equals="ceos">
+
+```bash
+cat >> tests/test_lab.py <<'EOF'
+PLATFORM, AUTH = "arista_eos", ("admin", "admin")
+BGP = ("show ip bgp summary", "Estab")
+PING = "ping {dst} source {src} repeat 3"
+EOF
+```
+
+</When>
+
+```bash
+cat >> tests/test_lab.py <<'EOF'
+
+
+def run(node, command):
+    with Scrapli(host=NODES[node]["mgmt-ipv4"], platform=PLATFORM, auth_username=AUTH[0],
+                 auth_password=AUTH[1], auth_strict_key=False) as conn:
+        return conn.send_command(command).result
+
+
+def eventually(check, tries=12, wait=5):
+    for _ in range(tries):
+        if check():
+            return True
+        time.sleep(wait)
+    return False
+
+
+@pytest.mark.parametrize("node", list(NODES))
+def test_bgp_established(node):
+    assert eventually(lambda: run(node, BGP[0]).count(BGP[1]) >= PEERS[node])
+
+
+def test_loopback_ping():
+    assert "3 received" in run("leaf1", PING.format(dst=LOOPBACKS[2], src=LOOPBACKS[1]))
+EOF
+```
+
+<When is="CI" equals="github">
+
+```bash
+mkdir -p .github/workflows
+cat > .github/workflows/lab.yml <<'EOF'
+name: lab
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * *"
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: make deps lint
+  lab:
+    needs: lint
+    runs-on: [self-hosted, ${RUNNER_LABEL}]
+    timeout-minutes: 30
+    concurrency: { group: lab-${LAB_NAME}, cancel-in-progress: false }
+    env: { NETBOX_TOKEN: "${{ secrets.NETBOX_TOKEN }}" }
+    steps:
+      - uses: actions/checkout@v4
+      - run: make deps deploy
+      - run: make render push
+      - run: make test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: "lab-${{ github.sha }}", path: "configs/\nreport.xml" }
+      - if: always()
+        run: make destroy
+EOF
+```
+
+</When>
+
+<When is="CI" equals="gitlab">
+
+```bash
+cat > .gitlab-ci.yml <<'EOF'
+stages: [lint, lab]
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+lint:
+  stage: lint
+  image: python:3.12-slim
+  before_script: [apt-get update -qq && apt-get install -y -qq make git]
+  script: [make deps lint]
+lab:
+  stage: lab
+  tags: [${RUNNER_LABEL}]
+  timeout: 30m
+  resource_group: lab-${LAB_NAME}
+  script:
+    - make deps deploy
+    - make render push
+    - make test
+  after_script: [make destroy]
+  artifacts:
+    when: always
+    paths: [configs/]
+    reports: { junit: report.xml }
+EOF
+```
+
+</When>
+
+```bash
+make deps lint deploy render push test; make destroy
+git add -A && git -c user.name=lab -c user.email=lab@localhost commit -qm "ci: lint, lab and tests" || true
+git remote get-url origin >/dev/null 2>&1 || git remote add origin ${REPO_URL}
+git branch -M main && git push -u origin main
+```
+
+<Warn>Le job lab tourne sur la machine de lab avec des droits sudo sur containerlab. Cette machine seulement, cette commande seulement : garde la règle sudoers limitée à `containerlab`, et n'enregistre jamais ce runner sur un dépôt public, où la pull request de n'importe qui pourrait y exécuter du code.</Warn>
+
+</Run>
+
+## Avant de commencer
+
+<Guided>Le dépôt des pages précédentes, un projet vide créé sur <When is="CI" equals="github">GitHub</When><When is="CI" equals="gitlab">GitLab</When> à <V name="REPO_URL" /> (privé), et les droits d'admin dessus pour enregistrer un runner, ajouter un secret et protéger une branche. La machine de lab a besoin de HTTPS sortant vers la forge ; rien en entrée. Toutes les commandes tournent sur la machine de lab, dans <V name="LAB_DIR" />.</Guided>
+
+```bash
+cd ${LAB_DIR}
+git remote add origin ${REPO_URL}
+git branch -M main
+git push -u origin main
+```
+
+<Check cmd="git -C ${LAB_DIR} remote get-url origin" expect="${REPO_URL}" />
+
+<Deep>Pourquoi pousser le dépôt avant que le pipeline existe ? Parce que l'enregistrement du runner se fait par projet et que le secret vit dans le projet : les deux ont besoin qu'il existe. Pousser un dépôt sans jeton ne risque rien ; le seul secret de cette série est `NETBOX_TOKEN`, qui n'a jamais été dans un fichier. Vérifie quand même avec `git grep -i token` avant le premier push.</Deep>
+
+## L'arborescence du dépôt
+
+<Guided>Le pipeline doit lancer les mêmes commandes que toi à la main, sinon il teste autre chose. Un `Makefile` les nomme une fois : `deps`, `lint`, `deploy`, `render`, `push`, `test`, `destroy`. Le fichier de pipeline se lit alors comme une liste de cibles, et un collègue lit le Makefile avant le pipeline.</Guided>
+
+```text
+${LAB_DIR}/
+├── topology.clab.yml        # page 1
+├── sot/seed.py              # page 2
+├── templates/, configs/     # page 3
+├── render.py · push.py      # page 3 (ou render.yml · push.yml, inventory/, group_vars/)
+├── tests/test_lab.py        # cette page
+├── Makefile · requirements.txt · .yamllint
+└── .github/workflows/lab.yml  ou  .gitlab-ci.yml
+```
+
+<When is="AUTOMATION" equals="nornir">
+
+<Tabs group="layout">
+
+<Tab label="Makefile">
+
+```makefile title="${LAB_DIR}/Makefile"
+.RECIPEPREFIX = >
+VENV = .venv/bin
+.PHONY: deps lint deploy render push test destroy
+deps:
+> python3 -m venv .venv && $(VENV)/pip install -q -r requirements.txt
+lint:
+> $(VENV)/yamllint . && $(VENV)/ruff check .
+deploy:
+> sudo containerlab deploy -t topology.clab.yml --reconfigure
+render:
+> $(VENV)/python render.py
+push:
+> $(VENV)/python push.py --commit
+test:
+> $(VENV)/pytest -q tests --junitxml=report.xml
+destroy:
+> sudo containerlab destroy -t topology.clab.yml --cleanup
+```
+
+</Tab>
+
+<Tab label="requirements.txt">
+
+```text title="${LAB_DIR}/requirements.txt"
+nornir
+nornir-netbox
+nornir-scrapli
+nornir-jinja2
+nornir-utils
+scrapli-community
+pynetbox
+pytest
+pyyaml
+yamllint
+ruff
+```
+
+</Tab>
+
+<Tab label="ruff.toml">
+
+```toml title="${LAB_DIR}/ruff.toml"
+line-length = 160
+[lint]
+ignore = ["E401", "E702", "E731"]
+```
+
+</Tab>
+
+</Tabs>
+
+</When>
+
+<When is="AUTOMATION" equals="ansible">
+
+<Tabs group="layout">
+
+<Tab label="Makefile">
+
+```makefile title="${LAB_DIR}/Makefile"
+.RECIPEPREFIX = >
+VENV = .venv/bin
+.PHONY: deps lint deploy render push test destroy
+deps:
+> python3 -m venv .venv && $(VENV)/pip install -q -r requirements.txt
+> $(VENV)/ansible-galaxy collection install -q -r requirements.yml
+lint:
+> $(VENV)/yamllint . && $(VENV)/ansible-lint
+deploy:
+> sudo containerlab deploy -t topology.clab.yml --reconfigure
+render:
+> $(VENV)/ansible-playbook render.yml
+push:
+> $(VENV)/ansible-playbook push.yml
+test:
+> $(VENV)/pytest -q tests --junitxml=report.xml
+destroy:
+> sudo containerlab destroy -t topology.clab.yml --cleanup
+```
+
+</Tab>
+
+<Tab label="requirements">
+
+```text title="${LAB_DIR}/requirements.txt"
+ansible
+pynetbox
+netaddr
+scrapli
+scrapli-community
+pytest
+pyyaml
+yamllint
+ansible-lint
+```
+
+```yaml title="${LAB_DIR}/requirements.yml"
+collections:
+  - netbox.netbox
+  - ansible.netcommon
+  - ansible.utils
+  - arista.eos
+  - nokia.srlinux
+```
+
+</Tab>
+
+<Tab label=".ansible-lint">
+
+```yaml title="${LAB_DIR}/.ansible-lint"
+profile: min
+```
+
+</Tab>
+
+</Tabs>
+
+</When>
+
+<Note>`.RECIPEPREFIX = >` permet de commencer les recettes par `>` au lieu d'une tabulation, ce qui survit au copier-coller et aux pages web ; il faut GNU make 4.0 ou plus, ce que toute distribution actuelle a. `--reconfigure` au déploiement détruit d'abord un lab du même nom, donc un job qui a planté avant son `destroy` ne bloque pas le suivant.</Note>
+
+<Deep>`configs/` est commité exprès : une pull request qui change un template ou une valeur NetBox montre le diff de configuration résultant dans la revue, ce qui est la chose la plus utile qu'un relecteur d'automatisation réseau puisse regarder. Le pipeline rend à nouveau et ferait échouer `test` si les fichiers commités mentaient. `report.xml` et `.venv/` ne sont pas commités ; ajoute-les au `.gitignore`.</Deep>
+
+```bash
+printf 'report.xml\n' >> .gitignore
+```
+
+## Linter en local
+
+<Guided>Le lint est l'étape pas chère : quelques secondes, pas de lab, pas de NetBox. Il attrape le YAML avec une tabulation dedans et le Python avec un import inutilisé avant qu'un runner passe cinq minutes à démarrer trois switches pour rien. Lance-le en local jusqu'à ce qu'il soit vert, et garde-le vert.</Guided>
+
+```yaml title="${LAB_DIR}/.yamllint"
+extends: default
+rules:
+  line-length: { max: 200 }
+  truthy: { check-keys: false }
+  document-start: disable
+  comments: { min-spaces-from-content: 1 }
+```
+
+```bash
+make deps
+make lint
+```
+
+<When is="AUTOMATION" equals="nornir">
+
+<Deep>`ruff` est le linter Python rapide ; ses règles par défaut sont les erreurs de syntaxe, les noms non définis et les imports inutilisés, exactement la classe d'erreurs qui fait échouer un rendu à la dernière ligne. Trois règles de style sont relâchées dans `ruff.toml` parce que les scripts des pages précédentes sont volontairement compacts (`import a, b`, `a(); b()`, `slug = lambda …`) ; lance `ruff format` une fois et retire les exceptions si ça te gêne. `truthy: check-keys: false` est pour la clé `on:` de GitHub, que yamllint lit sinon comme un booléen.</Deep>
+
+</When>
+
+<When is="AUTOMATION" equals="ansible">
+
+<Deep>`ansible-lint` avec le profil `min` vérifie que les playbooks se parsent et se chargent ; le profil `production` par défaut veut aussi des noms de modules pleinement qualifiés (`ansible.builtin.set_fact`), des plays nommés et quelques dizaines de règles de style. Commence avec `min`, lance `ansible-lint --profile production` à la main, corrige ce qu'il liste, et monte le profil dans `.ansible-lint` quand ça passe. `truthy: check-keys: false` est pour la clé `on:` des workflows GitHub, que yamllint lit sinon comme un booléen ; sans effet ici.</Deep>
+
+</When>
+
+<Check cmd="cd ${LAB_DIR} && make lint >/dev/null && echo lint OK" expect="lint OK" />
+
+## Un runner sur la machine de lab
+
+<Guided>L'étape lab ne peut pas tourner sur les runners partagés de la forge : il lui faut Docker avec root, les images d'OS réseau, et un chemin vers NetBox. Donc un runner est installé sur la machine de lab elle-même, avec le label <V name="RUNNER_LABEL" />, et seuls les jobs qui demandent ce label y atterrissent. Il doit pouvoir lancer containerlab avec sudo, et rien d'autre avec sudo.</Guided>
+
+```bash
+echo "$USER ALL=(ALL) NOPASSWD: /usr/bin/containerlab" | sudo tee /etc/sudoers.d/containerlab
+sudo chmod 440 /etc/sudoers.d/containerlab
+```
+
+<When is="CI" equals="github">
+
+Dans le dépôt : **Settings → Actions → Runners → New self-hosted runner**, Linux x64. Copie les commandes de téléchargement et de configuration de cette page (elles portent un jeton à usage unique), et ajoute le label :
+
+```bash
+mkdir -p ~/actions-runner && cd ~/actions-runner
+# curl … | tar xzf …   ← les deux lignes de l'interface, avec la version du moment
+./config.sh --url ${REPO_URL} --token <jeton à usage unique de l'interface> --labels ${RUNNER_LABEL} --unattended
+sudo ./svc.sh install && sudo ./svc.sh start
+```
+
+<Note>Le jeton de la page du runner expire dans l'heure ; si `config.sh` le refuse, recharge la page. `--url` prend l'URL du dépôt sans `.git`. Le runner apparaît en *Idle* dans la liste une fois le service démarré.</Note>
+
+<Deep>Le runner est un service qui interroge GitHub en HTTPS et exécute les jobs sous l'utilisateur qui l'a installé : ton utilisateur de lab, membre du groupe `docker`, avec la règle sudoers ci-dessus. Il récupère le dépôt sous `~/actions-runner/_work/`, donc `topology.clab.yml` et le dossier du lab vivent là pendant un job, pas dans <V name="LAB_DIR" />. Un runner au niveau du dépôt est le plus simple ; un runner au niveau de l'organisation avec un groupe de runners permettrait à plusieurs dépôts de lab de partager la machine. Jamais sur un dépôt public : les pull requests venues de forks peuvent exécuter du code arbitraire sur ta machine.</Deep>
+
+<Check cmd="systemctl list-units 'actions.runner.*' --no-legend | grep -c running" expect="1" />
+
+</When>
+
+<When is="CI" equals="gitlab">
+
+Dans le projet : **Settings → CI/CD → Runners → New project runner**, tag <V name="RUNNER_LABEL" />, puis sur la machine de lab :
+
+```bash
+curl -L https://packages.gitlab.com/install/repositories/runner/gitlab-runner/script.deb.sh | sudo bash
+sudo apt install -y gitlab-runner
+sudo gitlab-runner register --non-interactive --url https://gitlab.com --token <glrt-… de l'interface> \
+  --executor shell --description "lab ${LAB_NAME}"
+sudo usermod -aG docker gitlab-runner
+echo "gitlab-runner ALL=(ALL) NOPASSWD: /usr/bin/containerlab" | sudo tee /etc/sudoers.d/containerlab-runner
+```
+
+<Note>Depuis GitLab 16 les tags se définissent dans l'interface à la création du runner, et `register` prend le jeton d'authentification `glrt-` ; `--tag-list` en ligne de commande est ignoré avec ces jetons. GitLab auto-hébergé : remplace l'URL. Le runner affiche un point vert dans la liste une fois enregistré.</Note>
+
+<Deep>L'exécuteur `shell` lance le job sous l'utilisateur `gitlab-runner` directement sur la machine, ce dont containerlab a besoin ; l'exécuteur `docker` mettrait le job dans un conteneur, et containerlab dans un conteneur a besoin du socket Docker de l'hôte et de privilèges, faisable mais c'est une page à part. Le dépôt est récupéré sous `/home/gitlab-runner/builds/`, donc le lab tourne là pendant un job, pas dans <V name="LAB_DIR" />. `resource_group` dans le fichier de pipeline sérialise les jobs lab : un lab à la fois sur la machine.</Deep>
+
+<Check cmd="systemctl is-active gitlab-runner" expect="active" />
+
+</When>
+
+## Les tests
+
+<Guided>Les tests disent ce que « ça marche » veut dire pour ce lab : chaque nœud a ses sessions BGP établies, et la loopback de leaf1 atteint celle de leaf2. pytest les exécute, scrapli interroge les nœuds, et BGP a jusqu'à une minute pour converger après le push. Les IP de management viennent du fichier de topologie, donc un nœud renommé ou ajouté est testé sans toucher aux tests.</Guided>
+
+<Annotated>
+
+```python title="${LAB_DIR}/tests/test_lab.py" {8,10-11,20,28-30,33-34}
+import ipaddress
+import time
+
+import pytest
+import yaml
+from scrapli import Scrapli
+
+NODES = yaml.safe_load(open("topology.clab.yml"))["topology"]["nodes"]   # (1)
+LOOPBACKS = list(ipaddress.ip_network("${LOOPBACK_PREFIX}").hosts())
+PEERS = {"spine1": 2, "leaf1": 1, "leaf2": 1}                            # (2)
+PLATFORM, AUTH, BGP, PING = …                                             # (3)
+
+
+def run(node, command):
+    with Scrapli(host=NODES[node]["mgmt-ipv4"], platform=PLATFORM, auth_username=AUTH[0],
+                 auth_password=AUTH[1], auth_strict_key=False) as conn:
+        return conn.send_command(command).result
+
+
+def eventually(check, tries=12, wait=5):                                  # (4)
+    for _ in range(tries):
+        if check():
+            return True
+        time.sleep(wait)
+    return False
+
+
+@pytest.mark.parametrize("node", list(NODES))                             # (5)
+def test_bgp_established(node):
+    assert eventually(lambda: run(node, BGP[0]).count(BGP[1]) >= PEERS[node])
+
+
+def test_loopback_ping():                                                 # (6)
+    assert "3 received" in run("leaf1", PING.format(dst=LOOPBACKS[2], src=LOOPBACKS[1]))
+```
+
+1. Le même fichier que containerlab déploie : noms des nœuds et IP de management fixées. Une seule source pour la topologie, même dans les tests.
+2. Ce que « établi » veut dire par nœud : le spine a deux voisins, chaque leaf un. Le seul endroit où les tests connaissent la forme de la fabric.
+3. Le bloc plateforme, par OS réseau, montré plus bas : le driver scrapli, les identifiants, la commande qui montre l'état BGP et la chaîne à compter, la commande de ping.
+4. Réessayer jusqu'à une minute : le push rend la main avant que BGP converge, et un test qui échoue sur un délai est un test auquel personne ne fait confiance.
+5. Un test par nœud, nommé d'après lui dans le rapport : `test_bgp_established[leaf2]` en échec te dit où regarder.
+6. Ping de la loopback de leaf1 vers celle de leaf2, à travers le spine : les deux loopbacks annoncées, les deux /31 montés, en une ligne.
+
+</Annotated>
+
+<When is="NOS" equals="srlinux">
+
+```python
+PLATFORM, AUTH = "nokia_srl", ("admin", "NokiaSrl1!")
+BGP = ("info from state network-instance default protocols bgp neighbor * session-state", "session-state established")
+PING = "ping -c 3 {dst} -I {src} network-instance default"
+```
+
+</When>
+
+<When is="NOS" equals="ceos">
+
+```python
+PLATFORM, AUTH = "arista_eos", ("admin", "admin")
+BGP = ("show ip bgp summary", "Estab")
+PING = "ping {dst} source {src} repeat 3"
+```
+
+</When>
+
+```bash
+make deploy render push
+make test
+```
+
+<Deep>Les tests grattent la sortie CLI, ce qui est le minimum honnête : un `count()` sur une chaîne d'état. L'étape suivante, c'est l'état structuré : SR Linux répond en gNMI et JSON-RPC avec les mêmes chemins YANG que la commande `info from state`, EOS répond en eAPI avec du JSON pour n'importe quel `show`, et le `textfsm_parse_output()` de scrapli transforme les tableaux en dictionnaires. Un test affirme alors `state == "established"` par voisin plutôt que de compter des mots. Ce que les tests ne vérifient volontairement pas : tout ce que la source de vérité ne dit pas. Si une leaf gagne une troisième interface dans la topologie mais pas dans NetBox, aucun test n'échoue ; le modèle est la spec.</Deep>
+
+<Check cmd={"cd ${LAB_DIR} && .venv/bin/pytest -q tests 2>/dev/null | tail -1 | grep -o '[0-9]* passed'"} expect="4 passed" />
+
+<Details summary="Si le test BGP expire">
+Relance `make test` : s'il passe, la fabric convergeait encore, et un `tries=24` est la correction. S'il échoue encore, l'état sur le nœud est ce qu'il est : <When is="NOS" equals="srlinux">`docker exec clab-${LAB_NAME}-spine1 sr_cli 'show network-instance default protocols bgp neighbor'`</When><When is="NOS" equals="ceos">`docker exec clab-${LAB_NAME}-spine1 Cli -p 15 -c 'show ip bgp summary'`</When>, puis la boîte de dépannage de la page précédente. Un test qui n'arrive pas à se connecter du tout (`ScrapliAuthenticationFailed`, timeouts), c'est une IP de management qui ne correspond pas à la topologie, ou un nœud qui démarre encore : `make deploy` rend la main avant que <When is="NOS" equals="srlinux">SR Linux</When><When is="NOS" equals="ceos">cEOS</When> accepte SSH.
+</Details>
+
+## Le pipeline
+
+<Guided>Deux jobs. *lint* tourne sur le runner hébergé de la forge en quelques secondes ; *lab* tourne sur le tien seulement si lint est passé, et finit toujours par `destroy`, que les tests aient réussi ou non. Il tourne à chaque pull request, à chaque push sur `main`, et une fois par nuit. Le jeton NetBox est un secret du projet, injecté comme variable d'environnement.</Guided>
+
+<When is="CI" equals="github">
+
+Dans le dépôt : **Settings → Secrets and variables → Actions → New repository secret**, nom `NETBOX_TOKEN`.
+
+<Annotated>
+
+```yaml title="${LAB_DIR}/.github/workflows/lab.yml" {3-7,17-18,20-21,29-31}
+name: lab
+on:
+  pull_request:                                            # (1)
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * *"
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: make deps lint
+  lab:
+    needs: lint                                            # (2)
+    runs-on: [self-hosted, ${RUNNER_LABEL}]                # (3)
+    timeout-minutes: 30
+    concurrency: { group: lab-${LAB_NAME}, cancel-in-progress: false }   # (4)
+    env: { NETBOX_TOKEN: "${{ secrets.NETBOX_TOKEN }}" }   # (5)
+    steps:
+      - uses: actions/checkout@v4
+      - run: make deps deploy
+      - run: make render push
+      - run: make test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: "lab-${{ github.sha }}", path: "configs/\nreport.xml" }   # (6)
+      - if: always()
+        run: make destroy                                  # (7)
+```
+
+1. Trois déclencheurs : chaque pull request (la revue), chaque push sur `main` (la trace), et 03 h 17 chaque nuit (le contrôle de dérive contre le vrai NetBox, voir plus bas).
+2. `lab` attend `lint` et ne démarre pas s'il a échoué : pas de temps de runner pour un fichier qui ne se parse pas.
+3. Les deux labels doivent correspondre : `self-hosted` et le tien. Un job qui demande un label qu'aucun runner n'a reste en attente jusqu'à son timeout.
+4. Un job lab à la fois sur la machine, les autres attendent : deux topologies du même nom ne peuvent pas coexister. `cancel-in-progress: false` laisse un job en cours finir son `destroy`.
+5. Le secret, masqué dans les logs, présent seulement dans ce job. Le même nom de variable que les scripts lisent aux pages précédentes.
+6. Les configs rendues et le rapport JUnit, conservés que les tests aient réussi ou non : un passage rouge est celui dont tu veux les artefacts.
+7. `if: always()` est tout l'intérêt de l'étape : un test en échec ne doit pas laisser trois conteneurs manger la mémoire du runner jusqu'à demain.
+
+</Annotated>
+
+```bash
+git add -A && git commit -m "ci: lint, lab and tests" && git push
+```
+
+<Note>La clé `on:` et les expressions `${{ … }}` sont la syntaxe de GitHub ; les valeurs `${RUNNER_LABEL}` et `${LAB_NAME}` sont les tiennes, remplies par cette page. Confirme les versions des actions (`checkout@v4`, `upload-artifact@v4`) sur la marketplace, elles bougent.</Note>
+
+<Check cmd={"cd ${LAB_DIR} && python3 -c 'import yaml; print(sorted(yaml.safe_load(open(\".github/workflows/lab.yml\"))[\"jobs\"]))'"} expect="['lab', 'lint']" />
+
+<Check cmd={"gh run list --workflow lab.yml -L 1 --json conclusion -q '.[0].conclusion'"} expect="success" />
+
+</When>
+
+<When is="CI" equals="gitlab">
+
+Dans le projet : **Settings → CI/CD → Variables → Add variable**, clé `NETBOX_TOKEN`, *masked*, *protected*.
+
+<Annotated>
+
+```yaml title="${LAB_DIR}/.gitlab-ci.yml" {3-6,14,16,21,23-25}
+stages: [lint, lab]
+workflow:
+  rules:                                                   # (1)
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+lint:
+  stage: lint
+  image: python:3.12-slim
+  before_script: [apt-get update -qq && apt-get install -y -qq make git]
+  script: [make deps lint]
+lab:
+  stage: lab                                               # (2)
+  tags: [${RUNNER_LABEL}]                                  # (3)
+  timeout: 30m
+  resource_group: lab-${LAB_NAME}                          # (4)
+  script:
+    - make deps deploy
+    - make render push
+    - make test
+  after_script: [make destroy]                             # (5)
+  artifacts:
+    when: always                                           # (6)
+    paths: [configs/]
+    reports: { junit: report.xml }
+```
+
+1. Trois déclencheurs : les merge requests (la revue), les pushes sur `main` (la trace), et une planification que tu crées dans **Build → Pipeline schedules** pour le contrôle de dérive nocturne. Tout le reste, les branches sans MR par exemple, ne lance rien.
+2. Les stages s'enchaînent dans l'ordre ; `lab` ne démarre pas si `lint` a échoué.
+3. Seul un runner portant ce tag prend le job. Un tag qu'aucun runner n'a laisse le job *stuck*.
+4. Un job lab à la fois sur la machine ; les autres font la queue. Deux topologies du même nom ne peuvent pas coexister.
+5. `after_script` tourne que `script` ait réussi ou non : le lab est toujours démonté.
+6. Les configs rendues et le rapport JUnit, conservés aussi en cas d'échec, et le rapport s'affiche comme onglet de tests sur la merge request.
+
+</Annotated>
+
+```bash
+git add -A && git commit -m "ci: lint, lab and tests" && git push
+```
+
+<Note>`$CI_PIPELINE_SOURCE` et `$CI_COMMIT_BRANCH` sont des variables prédéfinies de GitLab ; `${RUNNER_LABEL}` et `${LAB_NAME}` sont les tiennes, remplies par cette page. `make` et `git` ne sont pas dans `python:3.12-slim`, d'où le `before_script` ; une petite image à toi économiserait les vingt secondes.</Note>
+
+<Check cmd={"cd ${LAB_DIR} && python3 -c 'import yaml; print(yaml.safe_load(open(\".gitlab-ci.yml\"))[\"stages\"])'"} expect="['lint', 'lab']" />
+
+<Check cmd="glab ci list --per-page 1 | grep -o success" expect="success" />
+
+</When>
+
+<Deep>Trois raffinements une fois le premier passage vert. **Ne tourner que sur les chemins qui comptent** : <When is="CI" equals="github">`on.pull_request.paths` avec `topology.clab.yml`, `templates/**`, `tests/**`, les scripts et le fichier de workflow</When><When is="CI" equals="gitlab">`rules: changes:` sur le job `lab` avec la même liste</When>, pour qu'une retouche du README ne déploie pas un lab ; garde le lint sur tout. **Mettre les images en cache** : le runner est la machine de lab, Docker a déjà l'image <When is="NOS" equals="srlinux">SR Linux</When><When is="NOS" equals="ceos">cEOS</When> de la première page et un déploiement ne tire rien ; ça, et la licence cEOS qui interdit de mettre l'image dans un registre, est la deuxième raison d'un runner auto-hébergé après Docker lui-même. **Le passage nocturne** est celui qui compte le plus : rien n'a changé dans le dépôt, donc s'il passe au rouge, c'est NetBox qui a changé, ou le tag de l'image qui a bougé, ou la machine. C'est le détecteur de dérive entre la source de vérité et le lab, et la raison pour laquelle le jeton en CI est en lecture seule.</Deep>
+
+## Protéger main
+
+<Guided>Le pipeline prouve ; la protection de branche impose. À partir de maintenant `main` ne bouge que par pull request, et une pull request ne fusionne que quand *lint* et *lab* sont verts. Personne, toi compris, ne pousse directement sur `main` : un changement qui a sauté le lab est un changement que personne n'a testé.</Guided>
+
+<When is="CI" equals="github">
+
+**Settings → Branches → Add branch ruleset** (ou *Add classic branch protection rule*) sur `main` : *Require a pull request before merging*, *Require status checks to pass* avec `lint` et `lab` comme checks requis, *Do not allow bypassing*. En ligne de commande :
+
+```bash
+gh api -X PUT repos/{owner}/{repo}/branches/main/protection --input - <<'EOF'
+{"required_status_checks": {"strict": true, "contexts": ["lint", "lab"]},
+ "enforce_admins": true, "required_pull_request_reviews": {"required_approving_review_count": 0},
+ "restrictions": null}
+EOF
+```
+
+<Note>Les status checks n'apparaissent dans le sélecteur qu'après avoir tourné une fois, c'est pour ça que le pipeline est venu d'abord. `enforce_admins: true` t'applique la règle à toi aussi ; c'est le but.</Note>
+
+<Check cmd={"gh api repos/{owner}/{repo}/branches/main/protection -q '.required_status_checks.contexts | sort | join(\",\")'"} expect="lab,lint" />
+
+</When>
+
+<When is="CI" equals="gitlab">
+
+**Settings → Repository → Protected branches** : `main`, *Allowed to push and merge* : No one, *Allowed to merge* : Maintainers. Puis **Settings → Merge requests** : *Pipelines must succeed* et *Enable merged results pipelines*. En ligne de commande :
+
+```bash
+glab api -X POST projects/:id/protected_branches -f name=main -f push_access_level=0 -f merge_access_level=40
+glab api -X PUT projects/:id -f only_allow_merge_if_pipeline_succeeds=true
+```
+
+<Note>`:id` est résolu par `glab` depuis le dépôt courant. La variable `NETBOX_TOKEN` a été marquée *protected*, donc elle n'est disponible qu'aux pipelines des branches protégées et des merge requests du projet lui-même, pas des forks.</Note>
+
+<Check cmd={"glab api projects/:id | grep -o '\"only_allow_merge_if_pipeline_succeeds\":true'"} expect='"only_allow_merge_if_pipeline_succeeds":true' />
+
+</When>
+
+<Deep>La fusion est maintenant la porte du déploiement, ce qui change la façon de travailler de l'équipe : un changement de template, de test ou de topologie, c'est une branche, une pull request, un passage du pipeline sur un lab neuf, une revue avec le diff rendu sous les yeux du relecteur, puis une fusion. NetBox lui-même est hors de cette boucle : une valeur changée là-bas est prise en compte au passage suivant, c'est à ça que sert le nocturne. L'étape d'après, au-delà de cette série, c'est le même pipeline contre du matériel de préproduction, avec le push derrière une approbation manuelle ; l'étape lab devient alors ce qui doit être vert avant même qu'on demande à un humain.</Deep>
+
+## Terminé
+
+Chaque changement du lab est maintenant prouvé avant d'atterrir : lint sur le runner hébergé, un lab neuf sur <V name="RUNNER_LABEL" /> avec la configuration rendue depuis <V name="NETBOX_URL" />, quatre tests, des artefacts, le démontage, et une branche `main` qui n'accepte que ce qui est passé. Le passage nocturne surveille la dérive de la source de vérité. D'une machine Linux et d'un fichier YAML à la première page, voilà un réseau que tu reconstruis, testes et relis comme du logiciel, et c'est ce que NetDevOps veut dire.
+
+```bash
+git checkout -b try-it && sed -i 's/tries=12/tries=24/' tests/test_lab.py && git commit -am "tests: wait longer for BGP" && git push -u origin try-it
+```
+
+Ouvre la pull request et regarde le runner faire en cinq minutes ce que les trois premières pages ont fait à la main.

@@ -1,0 +1,214 @@
+# Two flows on one server: the nightly backup (timer → script → dumps → off-site)
+# and the upgrade path (tags → upgrade.sh → services → probe). Quick shows the
+# two chains; Guided adds what the backup reads and the housekeeping job; Deep
+# adds the journal, the logs and every path and unit.
+# `desc` is what the reader gets when hovering a box or an arrow.
+title: { en: "What runs every night, and what you run on purpose", fr: "Ce qui tourne chaque nuit, et ce que tu lances exprès" }
+caption:
+  en: "A timer dumps the database and archives the files into the backup directory; with the off-site option they are pushed elsewhere. An upgrade is a tag checked out from git, applied by upgrade.sh, verified by a probe on /api/status/."
+  fr: "Un timer dumpe la base et archive les fichiers dans le répertoire de sauvegarde ; avec l'option distante ils sont poussés ailleurs. Une mise à jour, c'est un tag extrait de git, appliqué par upgrade.sh, vérifié par une sonde sur /api/status/."
+
+groups:
+  - id: timers
+    label: { en: "Scheduled on the server", fr: "Planifié sur le serveur" }
+    desc:
+      en: "What systemd and cron start on their own on the NetBox server, with nobody logged in."
+      fr: "Ce que systemd et cron lancent tout seuls sur le serveur NetBox, sans personne de connecté."
+  - id: server
+    label: { en: "NetBox server", fr: "Serveur NetBox" }
+    desc:
+      en: "The instance from the first page. Everything inside runs as root from systemd, except the probe."
+      fr: "L'instance de la première page. Tout ce qui est dedans tourne en root via systemd, sauf la sonde."
+
+nodes:
+  - id: timer
+    kind: service
+    label: { en: "Nightly timer", fr: "Timer nocturne" }
+    sub: "02:30 · netbox-backup.timer"
+    in: timers
+    desc:
+      en: "A systemd timer fires the backup service at 02:30. Persistent: a run missed while the server was off happens at boot."
+      fr: "Un timer systemd déclenche le service de sauvegarde à 02 h 30. Persistant : une exécution ratée pendant que le serveur était éteint a lieu au démarrage."
+    deep:
+      sub: "netbox-backup.timer · OnCalendar 02:30 · Persistent=true → netbox-backup.service"
+  - id: backup
+    kind: service
+    label: { en: "Backup script", fr: "Script de sauvegarde" }
+    sub: "pg_dump -Fc · tar"
+    in: server
+    focus: true
+    desc:
+      en: "One shell script: a custom-format dump of the netbox database, an archive of media and the config files, then retention of ${BACKUP_RETENTION_DAYS} days."
+      fr: "Un script shell : un dump au format custom de la base netbox, une archive de media et des fichiers de config, puis rétention de ${BACKUP_RETENTION_DAYS} jours."
+    deep:
+      sub: "/usr/local/sbin/netbox-backup.sh · pg_dump -Fc · tar -czf · find -mtime +${BACKUP_RETENTION_DAYS} -delete"
+  - id: postgres
+    kind: store
+    label: { en: "PostgreSQL", fr: "PostgreSQL" }
+    sub: "netbox database"
+    in: server
+    level: guided
+    desc:
+      en: "Every object and every change record. The dump is the backup; the restore drill proves it on a scratch database."
+      fr: "Chaque objet et chaque enregistrement de changement. Le dump est la sauvegarde ; l'exercice de restauration le prouve sur une base jetable."
+    deep:
+      sub: "db netbox · role netbox · dump via unix socket as postgres"
+  - id: files
+    kind: file
+    label: { en: "Files", fr: "Fichiers" }
+    sub: "media/ · configuration.py"
+    in: server
+    level: guided
+    desc:
+      en: "Image attachments and the files you wrote by hand. Code and venv are not saved: git and upgrade.sh bring them back."
+      fr: "Les images attachées et les fichiers écrits à la main. Code et venv ne sont pas sauvegardés : git et upgrade.sh les ramènent."
+    deep:
+      sub: "${INSTALL_DIR}/netbox/media · netbox/netbox/configuration.py · ldap_config.py · local_requirements.txt"
+  - id: bdir
+    kind: store
+    label: { en: "Backup directory", fr: "Répertoire de sauvegarde" }
+    sub: "${BACKUP_DIR}"
+    in: server
+    desc:
+      en: "Root-only, since the archive holds the database password and the secret key. Dumps and archives older than ${BACKUP_RETENTION_DAYS} days are deleted."
+      fr: "Réservé à root, puisque l'archive contient le mot de passe de la base et la clé secrète. Dumps et archives de plus de ${BACKUP_RETENTION_DAYS} jours sont supprimés."
+    deep:
+      sub: "${BACKUP_DIR} · 0700 · netbox-<stamp>.dump · netbox-files-<stamp>.tar.gz"
+  - id: offsite
+    kind: cloud
+    label: { en: "Backup host", fr: "Serveur de sauvegarde" }
+    sub: "${BACKUP_HOST}"
+    when: { flag: OFFSITE }
+    desc:
+      en: "Another machine, another site. rsync mirrors the backup directory there over SSH with a key that can do nothing else."
+      fr: "Une autre machine, un autre site. rsync y reflète le répertoire de sauvegarde en SSH avec une clé qui ne sait rien faire d'autre."
+    deep:
+      sub: "${BACKUP_USER}@${BACKUP_HOST}:${BACKUP_PATH} · rsync -az --delete · ed25519 key"
+  - id: github
+    kind: cloud
+    label: { en: "NetBox releases", fr: "Releases NetBox" }
+    sub: "git tags · ${TARGET_REF}"
+    desc:
+      en: "The upstream repository. An upgrade starts by reading the release notes of ${TARGET_REF}, then fetching its tag."
+      fr: "Le dépôt amont. Une mise à jour commence par lire les notes de version de ${TARGET_REF}, puis récupérer son tag."
+    deep:
+      sub: "github.com/netbox-community/netbox · git fetch --tags · checkout ${TARGET_REF}"
+  - id: upgrade
+    kind: service
+    label: { en: "upgrade.sh", fr: "upgrade.sh" }
+    sub: "venv · migrations · static"
+    in: server
+    desc:
+      en: "NetBox's own script: rebuilds the venv, reinstalls plugins from local_requirements.txt, migrates the database, collects static files."
+      fr: "Le script de NetBox lui-même : reconstruit le venv, réinstalle les plugins depuis local_requirements.txt, migre la base, collecte les fichiers statiques."
+    deep:
+      sub: "${INSTALL_DIR}/upgrade.sh · pip install -r local_requirements.txt · migrate · collectstatic"
+  - id: services
+    kind: server
+    label: { en: "netbox · netbox-rq", fr: "netbox · netbox-rq" }
+    sub: "systemctl restart"
+    in: server
+    desc:
+      en: "Both units restart after the upgrade: gunicorn serves the new code, the RQ worker runs the new jobs."
+      fr: "Les deux unités redémarrent après la mise à jour : gunicorn sert le nouveau code, le worker RQ exécute les nouvelles tâches."
+    deep:
+      sub: "netbox.service (gunicorn :8001) · netbox-rq.service (rqworker) · restart after upgrade"
+  - id: housekeeping
+    kind: service
+    label: { en: "Housekeeping", fr: "Entretien" }
+    sub: "cron.daily · manage.py housekeeping"
+    in: timers
+    level: guided
+    desc:
+      en: "Once a day: expired sessions, change records older than CHANGELOG_RETENTION and old job results are deleted. Keeps the dumps small."
+      fr: "Une fois par jour : sessions expirées, changements plus vieux que CHANGELOG_RETENTION et anciens résultats de tâches sont supprimés. Garde les dumps petits."
+    deep:
+      sub: "/etc/cron.daily/netbox-housekeeping → contrib/netbox-housekeeping.sh · CHANGELOG_RETENTION · JOB_RETENTION"
+  - id: journal
+    kind: file
+    label: { en: "Logs", fr: "Logs" }
+    sub: "journald · logrotate"
+    in: server
+    level: deep
+    desc:
+      en: "gunicorn and the worker log to the journal, capped by SystemMaxUse; the web server rotates its own files through logrotate."
+      fr: "gunicorn et le worker écrivent dans le journal, plafonné par SystemMaxUse ; le serveur web fait tourner ses propres fichiers via logrotate."
+    deep:
+      sub: "journalctl -u netbox / netbox-rq · SystemMaxUse=500M · /etc/logrotate.d/"
+  - id: probe
+    kind: client
+    label: { en: "Probe", fr: "Sonde" }
+    sub: "GET /api/status/"
+    level: guided
+    desc:
+      en: "A curl every minute with a read-only token. rq-workers-running at 0 is the alert that matters: the UI keeps working while webhooks and scripts silently stop."
+      fr: "Un curl toutes les minutes avec un jeton en lecture. rq-workers-running à 0 est l'alerte qui compte : l'interface continue pendant que webhooks et scripts s'arrêtent en silence."
+    deep:
+      sub: "https://${NETBOX_HOST}/api/status/ · Authorization: Token · netbox-version · rq-workers-running · optional /metrics"
+
+edges:
+  - from: timer
+    to: backup
+    label: "02:30"
+    deep: { label: "starts netbox-backup.service" }
+    desc: { en: "The timer starts the oneshot service; the service runs the script and records its output in the journal.", fr: "Le timer démarre le service oneshot ; le service exécute le script et enregistre sa sortie dans le journal." }
+  - from: backup
+    to: postgres
+    label: "pg_dump"
+    dashed: true
+    level: guided
+    deep: { label: "pg_dump -Fc netbox" }
+    desc: { en: "A consistent snapshot of the whole database, taken while NetBox keeps running.", fr: "Un instantané cohérent de toute la base, pris pendant que NetBox continue de tourner." }
+  - from: backup
+    to: files
+    label: "tar"
+    dashed: true
+    level: guided
+    deep: { label: "tar -czf · media + config" }
+    desc: { en: "The media folder and the hand-written config files, in one compressed archive.", fr: "Le dossier media et les fichiers de config écrits à la main, dans une archive compressée." }
+  - from: backup
+    to: bdir
+    label: "writes"
+    deep: { label: "dump + tar.gz · then retention" }
+    desc: { en: "Two files per night, named by date. Retention runs after the write, never before.", fr: "Deux fichiers par nuit, nommés par date. La rétention tourne après l'écriture, jamais avant." }
+  - from: bdir
+    to: offsite
+    label: "rsync over SSH"
+    when: { flag: OFFSITE }
+    deep: { label: "rsync -az --delete · ssh -i netbox-backup" }
+    desc: { en: "The folder is mirrored, so the remote side follows the same retention.", fr: "Le dossier est reflété, donc le côté distant suit la même rétention." }
+  - from: github
+    to: upgrade
+    label: "git checkout ${TARGET_REF}"
+    deep: { label: "git fetch --tags · git checkout ${TARGET_REF}" }
+    desc: { en: "The code moves to the target tag; nothing runs yet. Rollback is a checkout of the previous tag plus a database restore.", fr: "Le code passe au tag cible ; rien ne tourne encore. Le retour arrière, c'est un checkout du tag précédent plus une restauration de base." }
+  - from: upgrade
+    to: services
+    label: "restart"
+    deep: { label: "systemctl restart netbox netbox-rq" }
+    desc: { en: "Only after upgrade.sh exits cleanly. If it fails, the services still run the old code: fix or roll back first.", fr: "Seulement après une sortie propre d'upgrade.sh. S'il échoue, les services font encore tourner l'ancien code : corrige ou reviens en arrière d'abord." }
+  - from: upgrade
+    to: postgres
+    label: "migrate"
+    dashed: true
+    level: guided
+    desc: { en: "Migrations only go forward: this is why the backup is taken right before, not the night before.", fr: "Les migrations ne vont que vers l'avant : c'est pour ça que la sauvegarde est prise juste avant, pas la nuit d'avant." }
+  - from: services
+    to: probe
+    label: "/api/status/"
+    level: guided
+    deep: { label: "JSON · netbox-version · rq-workers-running" }
+    desc: { en: "The probe reads the version and the worker count after every upgrade, then every minute for good.", fr: "La sonde lit la version et le nombre de workers après chaque mise à jour, puis toutes les minutes pour de bon." }
+  - from: housekeeping
+    to: postgres
+    label: "prunes"
+    dashed: true
+    level: guided
+    deep: { label: "DELETE changelog > CHANGELOG_RETENTION · old jobs · sessions" }
+    desc: { en: "Deletes old change records, job results and sessions once a day.", fr: "Supprime une fois par jour les anciens changements, résultats de tâches et sessions." }
+  - from: services
+    to: journal
+    label: "stdout"
+    dashed: true
+    level: deep
+    desc: { en: "gunicorn and the worker write to stdout; systemd stores it in the journal, capped at 500 MB.", fr: "gunicorn et le worker écrivent sur stdout ; systemd le range dans le journal, plafonné à 500 Mo." }

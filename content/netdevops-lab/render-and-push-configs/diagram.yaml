@@ -1,0 +1,216 @@
+# The gist: NetBox on the left, the nodes on the right, and in between the two
+# steps that never touch a node until the last arrow: render to files, then push.
+# Quick: five boxes. Guided adds the inventory and the templates. Deep adds the
+# libraries, the protocols and the ports.
+title: { en: "From the model to the nodes", fr: "Du modèle aux nœuds" }
+caption:
+  en: "The inventory comes from NetBox, the template turns each device's interfaces, addresses and BGP numbers into configuration text under configs/, and only then is the text pushed to the three nodes."
+  fr: "L'inventaire vient de NetBox, le template transforme les interfaces, adresses et numéros BGP de chaque équipement en texte de configuration sous configs/, et seulement ensuite le texte est poussé sur les trois nœuds."
+
+groups:
+  - id: repo
+    label: { en: "Lab repository", fr: "Dépôt du lab" }
+    desc:
+      en: "${LAB_DIR}: templates, the render and push tooling, and the rendered configs/ folder."
+      fr: "${LAB_DIR} : les templates, l'outillage de rendu et de push, et le dossier configs/ rendu."
+  - id: lab
+    label: { en: "Lab ${LAB_NAME}", fr: "Lab ${LAB_NAME}" }
+    desc:
+      en: "The three containerlab nodes, reached on their management IPs from ${MGMT_SUBNET}."
+      fr: "Les trois nœuds containerlab, joints sur leurs IP de management dans ${MGMT_SUBNET}."
+
+nodes:
+  - id: netbox
+    kind: store
+    label: { en: "NetBox", fr: "NetBox" }
+    sub: "devices · interfaces · IPs · cables · contexts"
+    desc:
+      en: "The source of truth from the previous page: every device tagged ${LAB_NAME}, with its interfaces, addresses, cable peers and rendered config context."
+      fr: "La source de vérité de la page précédente : chaque équipement tagué ${LAB_NAME}, avec ses interfaces, adresses, bouts de câble et config context rendu."
+    deep:
+      sub: "${NETBOX_URL} · /api/dcim/devices/?tag=${LAB_NAME} · config_context · link_peers"
+  - id: inventory
+    kind: file
+    label: { en: "Inventory", fr: "Inventaire" }
+    sub: "config.yaml · NetBoxInventory2"
+    in: repo
+    level: guided
+    when: { is: AUTOMATION, equals: nornir }
+    desc:
+      en: "No hosts file: the plugin asks NetBox for the tagged devices; primary IP as hostname, platform slug as scrapli driver."
+      fr: "Pas de fichier hosts : le plugin demande à NetBox les équipements tagués ; IP primaire comme hostname, slug de plateforme comme driver scrapli."
+    deep:
+      sub: "nornir-netbox · NB_TOKEN · use_platform_slug · inventory/defaults.yaml"
+  - id: inventory-a
+    kind: file
+    label: { en: "Inventory", fr: "Inventaire" }
+    sub: "inventory/netbox.yml · nb_inventory"
+    in: repo
+    level: guided
+    when: { is: AUTOMATION, equals: ansible }
+    desc:
+      en: "No hosts file: the plugin asks NetBox for the tagged devices, groups them by role and platform, and hands each host its interfaces and config context."
+      fr: "Pas de fichier hosts : le plugin demande à NetBox les équipements tagués, les groupe par rôle et plateforme, et donne à chaque hôte ses interfaces et son config context."
+    deep:
+      sub: "netbox.netbox.nb_inventory · NETBOX_TOKEN · group_vars/platforms_* · interfaces: true"
+  - id: template
+    kind: file
+    label: { en: "Template", fr: "Template" }
+    sub: "templates/<platform>.j2"
+    in: repo
+    level: guided
+    desc:
+      en: "The vendor syntax with the values taken out. One file per platform slug; the same data feeds both."
+      fr: "La syntaxe constructeur avec les valeurs en moins. Un fichier par slug de plateforme ; les mêmes données nourrissent les deux."
+    deep:
+      sub: "Jinja2 · interfaces · router_id · peers (address, asn) · bgp.peer_group"
+  - id: render
+    kind: service
+    label: { en: "Render", fr: "Rendu" }
+    sub: "render.py"
+    in: repo
+    focus: true
+    when: { is: AUTOMATION, equals: nornir }
+    desc:
+      en: "For each host: the interfaces with an address, the loopback as router ID, the cable peers with their AS; then the template, then a file."
+      fr: "Pour chaque hôte : les interfaces avec une adresse, la loopback comme router-id, les bouts de câble avec leur AS ; puis le template, puis un fichier."
+    deep:
+      sub: "Nornir threaded · pynetbox facts() · nornir_jinja2 template_file · write_file"
+  - id: render-a
+    kind: service
+    label: { en: "Render", fr: "Rendu" }
+    sub: "render.yml"
+    in: repo
+    focus: true
+    when: { is: AUTOMATION, equals: ansible }
+    desc:
+      en: "set_fact filters over the inventory's data: fabric interfaces, router ID, peers from link_peers and hostvars; then the template module."
+      fr: "Des filtres set_fact sur les données de l'inventaire : interfaces de fabric, router-id, pairs depuis link_peers et hostvars ; puis le module template."
+    deep:
+      sub: "ansible-playbook render.yml · selectattr · hostvars[peer] · template delegate_to localhost"
+  - id: configs
+    kind: file
+    label: { en: "configs/", fr: "configs/" }
+    sub: "spine1.cfg · leaf1.cfg · leaf2.cfg"
+    in: repo
+    desc:
+      en: "One file per device, readable and diffable, exactly what will be sent. Look here before every push."
+      fr: "Un fichier par équipement, lisible et diffable, exactement ce qui sera envoyé. Regarde ici avant chaque push."
+  - id: push
+    kind: service
+    label: { en: "Push", fr: "Push" }
+    sub: "dry-run → commit"
+    in: repo
+    when: { is: AUTOMATION, equals: nornir }
+    desc:
+      en: "push.py: prints what it would send, then sends it with scrapli and commits or saves."
+      fr: "push.py : affiche ce qu'il enverrait, puis l'envoie avec scrapli et commite ou sauvegarde."
+    deep:
+      sub: "nornir_scrapli send_configs · commit now / write memory · --diff"
+  - id: push-a
+    kind: service
+    label: { en: "Push", fr: "Push" }
+    sub: "--check --diff → run"
+    in: repo
+    when: { is: AUTOMATION, equals: ansible }
+    desc:
+      en: "push.yml: check mode shows the diff, the real run sends it and saves when something changed."
+      fr: "push.yml : le mode check montre le diff, le vrai passage l'envoie et sauvegarde quand quelque chose a changé."
+    deep:
+      sub: "eos_config src= · nokia.srlinux.config update · save_when: changed"
+  - id: nodes
+    kind: net
+    label: { en: "spine1 · leaf1 · leaf2", fr: "spine1 · leaf1 · leaf2" }
+    sub: "eBGP · loopbacks"
+    in: lab
+    desc:
+      en: "After the push: two eBGP sessions on the spine, one on each leaf, all Established; the loopbacks from ${LOOPBACK_PREFIX} ping across the spine."
+      fr: "Après le push : deux sessions eBGP sur le spine, une sur chaque leaf, toutes Established ; les loopbacks de ${LOOPBACK_PREFIX} se pinguent à travers le spine."
+    deep:
+      sub: "eBGP · AS from config contexts · /31 links · ${LOOPBACK_PREFIX}"
+
+edges:
+  - from: netbox
+    to: render
+    label: "REST"
+    max: quick
+    when: { is: AUTOMATION, equals: nornir }
+    desc: { en: "Devices, interfaces, addresses and cable peers, read with the token.", fr: "Équipements, interfaces, adresses et bouts de câble, lus avec le jeton." }
+  - from: netbox
+    to: render-a
+    label: "REST"
+    max: quick
+    when: { is: AUTOMATION, equals: ansible }
+    desc: { en: "Devices, interfaces, addresses and cable peers, read with the token.", fr: "Équipements, interfaces, adresses et bouts de câble, lus avec le jeton." }
+  - from: netbox
+    to: inventory
+    label: "REST"
+    level: guided
+    deep: { label: "GET /api/dcim/devices/?tag=${LAB_NAME}" }
+    when: { is: AUTOMATION, equals: nornir }
+    desc: { en: "One call per run: the hosts, their primary IP and platform.", fr: "Un appel par passage : les hôtes, leur IP primaire et leur plateforme." }
+  - from: netbox
+    to: inventory-a
+    label: "REST"
+    level: guided
+    deep: { label: "GET /api/dcim/devices/?tag=${LAB_NAME} · interfaces · config_context" }
+    when: { is: AUTOMATION, equals: ansible }
+    desc: { en: "One call per run: the hosts with their interfaces, addresses, peers and context.", fr: "Un appel par passage : les hôtes avec leurs interfaces, adresses, pairs et contexte." }
+  - from: inventory
+    to: render
+    level: guided
+    when: { is: AUTOMATION, equals: nornir }
+    desc: { en: "Nornir runs the render task once per host, in parallel.", fr: "Nornir lance la tâche de rendu une fois par hôte, en parallèle." }
+  - from: inventory-a
+    to: render-a
+    level: guided
+    when: { is: AUTOMATION, equals: ansible }
+    desc: { en: "The playbook runs once per host, with that host's variables.", fr: "Le playbook tourne une fois par hôte, avec les variables de cet hôte." }
+  - from: template
+    to: render
+    label: "Jinja2"
+    dashed: true
+    level: guided
+    when: { is: AUTOMATION, equals: nornir }
+    desc: { en: "Chosen by platform slug: nokia_srl.j2 or arista_eos.j2.", fr: "Choisi par slug de plateforme : nokia_srl.j2 ou arista_eos.j2." }
+  - from: template
+    to: render-a
+    label: "Jinja2"
+    dashed: true
+    level: guided
+    when: { is: AUTOMATION, equals: ansible }
+    desc: { en: "Chosen by platform slug: nokia_srl.j2 or arista_eos.j2.", fr: "Choisi par slug de plateforme : nokia_srl.j2 ou arista_eos.j2." }
+  - from: render
+    to: configs
+    label: "writes"
+    when: { is: AUTOMATION, equals: nornir }
+    desc: { en: "One file per device. Nothing has touched a node yet.", fr: "Un fichier par équipement. Rien n'a encore touché un nœud." }
+  - from: render-a
+    to: configs
+    label: "writes"
+    when: { is: AUTOMATION, equals: ansible }
+    desc: { en: "One file per device. Nothing has touched a node yet.", fr: "Un fichier par équipement. Rien n'a encore touché un nœud." }
+  - from: configs
+    to: push
+    label: "reads"
+    when: { is: AUTOMATION, equals: nornir }
+    desc: { en: "The push sends the file as is: what you read is what goes out.", fr: "Le push envoie le fichier tel quel : ce que tu lis est ce qui part." }
+  - from: configs
+    to: push-a
+    label: "reads"
+    when: { is: AUTOMATION, equals: ansible }
+    desc: { en: "The push sends the file as is: what you read is what goes out.", fr: "Le push envoie le fichier tel quel : ce que tu lis est ce qui part." }
+  - from: push
+    to: nodes
+    label: "SSH"
+    guided: { label: "SSH · scrapli" }
+    deep: { label: "SSH TCP 22 · nokia_srl / arista_eos driver · candidate + commit" }
+    when: { is: AUTOMATION, equals: nornir }
+    desc: { en: "scrapli sends line by line, checks each answer for the platform's error strings, and stops that host on the first one.", fr: "scrapli envoie ligne par ligne, cherche dans chaque réponse les chaînes d'erreur de la plateforme, et arrête cet hôte à la première." }
+  - from: push-a
+    to: nodes
+    label: "SSH / JSON-RPC"
+    guided: { label: "network_cli · httpapi" }
+    deep: { label: "EOS: SSH TCP 22 network_cli · SR Linux: JSON-RPC TCP 443 httpapi" }
+    when: { is: AUTOMATION, equals: ansible }
+    desc: { en: "The module compares the file with the running config and sends only the difference.", fr: "Le module compare le fichier à la configuration courante et n'envoie que la différence." }

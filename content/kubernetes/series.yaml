@@ -1,0 +1,109 @@
+title:
+  en: Kubernetes
+  fr: Kubernetes
+summary:
+  en: >-
+    From a few Linux machines to a small production-grade k3s cluster, then a real web
+    application on it — indicat, thudal's SaaS prototype — with a database, TLS and
+    continuous deployment.
+  fr: >-
+    De quelques machines Linux à un petit cluster k3s digne de la prod, puis une vraie
+    application web dessus — indicat, le prototype SaaS de thudal — avec base de données,
+    TLS et déploiement continu.
+order:
+  - bootstrap-a-k3s-cluster
+  - deploy-indicat
+  - deploy-on-push-with-ci
+
+# Shared by every page: the reader fills these once for the whole series.
+groups:
+  - id: cluster
+    label: { en: Cluster, fr: Cluster }
+    desc: { en: The k3s nodes and how you reach them., fr: Les nœuds k3s et comment tu les atteins. }
+  - id: app
+    label: { en: Application, fr: Application }
+    desc: { en: Where indicat is published and how it is named inside the cluster., fr: Où indicat est publié et comment il est nommé dans le cluster. }
+
+vars:
+  - key: NODE_IP
+    kind: ip
+    group: cluster
+    default: 203.0.113.20
+    label: { en: First server node IP, fr: IP du premier nœud serveur }
+    hint:
+      en: The address of the first k3s server, reachable from your laptop. The API and the kubeconfig point at it.
+      fr: L'adresse du premier serveur k3s, joignable depuis ton portable. L'API et le kubeconfig pointent dessus.
+    impact:
+      en: Baked into the API certificate (--tls-san) and into the kubeconfig you copy to your laptop and to CI. Change it later and both must be redone.
+      fr: Inscrite dans le certificat de l'API (--tls-san) et dans le kubeconfig que tu copies sur ton portable et dans la CI. La changer plus tard oblige à refaire les deux.
+  - key: K3S_VERSION
+    kind: text
+    group: cluster
+    default: v1.31.4+k3s1
+    label: { en: k3s version, fr: Version de k3s }
+    hint:
+      en: The release the install script pins. Every node of the cluster must run the same one.
+      fr: La version que fige le script d'installation. Tous les nœuds du cluster doivent avoir la même.
+    impact:
+      en: Pinning keeps a re-run of the install script from silently upgrading a node. Upgrades are a deliberate step, one node at a time.
+      fr: Figer la version évite qu'une relance du script d'installation mette un nœud à jour en silence. Les mises à jour sont un acte volontaire, nœud par nœud.
+  - key: APP_DOMAIN
+    kind: domain
+    group: app
+    default: indicat.example.com
+    label: { en: Application domain, fr: Domaine de l'application }
+    hint:
+      en: The name users type. Its A record must point at the node(s) before the certificate can be issued.
+      fr: Le nom que tapent les utilisateurs. Son enregistrement A doit pointer vers le(s) nœud(s) avant que le certificat puisse être émis.
+    impact:
+      en: Used as the Ingress host and as the certificate's common name. With Let's Encrypt the name must resolve publicly, or the HTTP-01 challenge never completes.
+      fr: Utilisé comme hôte de l'Ingress et comme nom du certificat. Avec Let's Encrypt, le nom doit résoudre publiquement, sinon le défi HTTP-01 n'aboutit jamais.
+  - key: NAMESPACE
+    kind: text
+    group: app
+    default: indicat
+    label: { en: Namespace, fr: Namespace }
+    hint:
+      en: The Kubernetes namespace everything of the application lives in. Lowercase, no spaces.
+      fr: Le namespace Kubernetes où vit tout ce qui touche à l'application. Minuscules, sans espace.
+    impact:
+      en: Every kubectl command of the series carries -n with this value, and the CI ServiceAccount is only allowed inside it.
+      fr: Chaque commande kubectl de la série porte -n avec cette valeur, et le ServiceAccount de la CI n'a de droits que dedans.
+  - key: ACME_EMAIL
+    kind: email
+    group: cluster
+    default: ops@example.com
+    label: { en: Let's Encrypt email, fr: Email Let's Encrypt }
+    when: { is: TLS, equals: letsencrypt }
+    hint:
+      en: The address Let's Encrypt writes to when a certificate is about to expire without renewal.
+      fr: L'adresse à laquelle Let's Encrypt écrit quand un certificat va expirer sans avoir été renouvelé.
+    impact:
+      en: Stored in the ClusterIssuer. Not published; it only matters if cert-manager stops renewing.
+      fr: Stockée dans le ClusterIssuer. Non publiée ; elle ne sert que si cert-manager cesse de renouveler.
+
+choices:
+  - key: TOPOLOGY
+    type: select
+    label: { en: Topology, fr: Topologie }
+    default: single
+    hint:
+      en: One node is enough to learn and for a lab. Three servers survive the loss of one.
+      fr: Un nœud suffit pour apprendre et pour un lab. Trois serveurs survivent à la perte de l'un d'eux.
+    options:
+      - { value: single, label: { en: One node (lab), fr: Un nœud (lab) } }
+      - { value: ha, label: { en: Three server nodes (HA, embedded etcd), fr: Trois nœuds serveur (HA, etcd embarqué) } }
+  - key: TLS
+    type: select
+    label: { en: Certificates, fr: Certificats }
+    default: letsencrypt
+    options:
+      - { value: letsencrypt, label: { en: Let's Encrypt, fr: Let's Encrypt } }
+      - { value: selfsigned, label: { en: Self-signed, fr: Auto-signés } }
+  - key: DB
+    type: select
+    label: { en: PostgreSQL, fr: PostgreSQL }
+    default: cnpg
+    options:
+      - { value: cnpg, label: { en: PostgreSQL by CloudNativePG operator, fr: PostgreSQL par l'opérateur CloudNativePG } }
+      - { value: statefulset, label: { en: PostgreSQL as a plain StatefulSet, fr: PostgreSQL en simple StatefulSet } }

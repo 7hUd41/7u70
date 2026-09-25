@@ -1,0 +1,53 @@
+# Contract for this page. Inherits NODE_IP, K3S_VERSION, APP_DOMAIN, NAMESPACE, ACME_EMAIL
+# and the TOPOLOGY / TLS / DB choices from ../series.yaml.
+
+title:
+  en: Bootstrap a k3s cluster
+  fr: Monter un cluster k3s
+summary:
+  en: >-
+    From one to three Ubuntu machines to a working Kubernetes: k3s pinned to a version,
+    kubectl and helm on your laptop, the bundled Traefik ingress, cert-manager with a
+    ClusterIssuer, and a hello-world behind HTTPS to prove the whole chain.
+  fr: >-
+    D'une à trois machines Ubuntu à un Kubernetes qui marche : k3s figé sur une version,
+    kubectl et helm sur ton portable, l'ingress Traefik livré avec, cert-manager et un
+    ClusterIssuer, puis un hello-world derrière HTTPS pour prouver toute la chaîne.
+difficulty: intermediate
+tags: [kubernetes, k3s, traefik, cert-manager, helm]
+authors: [thudal]
+created: 2026-09-25
+minutes: 40
+validated: k3s v1.31 · Ubuntu 24.04
+
+groups:
+  - id: ha
+    label: { en: Extra server nodes, fr: Nœuds serveur supplémentaires }
+    desc: { en: The two other members of the etcd quorum., fr: Les deux autres membres du quorum etcd. }
+    when: { is: TOPOLOGY, equals: ha }
+
+vars:
+  - key: NODE2_IP
+    kind: ip
+    group: ha
+    default: 203.0.113.21
+    label: { en: Second server node IP, fr: IP du deuxième nœud serveur }
+    when: { is: TOPOLOGY, equals: ha }
+    hint:
+      en: Reachable from the first node on 6443, 2379-2380 and 8472/udp.
+      fr: Joignable depuis le premier nœud sur 6443, 2379-2380 et 8472/udp.
+    impact:
+      en: Joins the embedded etcd. With three members the cluster keeps working when any one of them is down.
+      fr: Rejoint l'etcd embarqué. Avec trois membres, le cluster continue de fonctionner quand l'un d'eux est arrêté.
+  - key: NODE3_IP
+    kind: ip
+    group: ha
+    default: 203.0.113.22
+    label: { en: Third server node IP, fr: IP du troisième nœud serveur }
+    when: { is: TOPOLOGY, equals: ha }
+    hint:
+      en: Same requirements as the second one.
+      fr: Mêmes prérequis que le deuxième.
+    impact:
+      en: Third etcd member. Two servers only would be worse than one, so it is three or one, never two.
+      fr: "Troisième membre etcd. Deux serveurs seulement seraient pires qu'un seul : c'est trois ou un, jamais deux."

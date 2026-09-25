@@ -1,0 +1,439 @@
+{/* Première passe — à valider contre docs.netbox.dev (REST API, event rules & webhooks, custom scripts, GraphQL) et pynetbox.readthedocs.io avant publication. */}
+
+Tout ce que tu as cliqué dans les pages précédentes est un appel HTTP, et NetBox ne vaut le coup que quand d'autres systèmes le lisent et l'écrivent. Cette page tourne sur **ta** machine, pas sur le serveur : un utilisateur fait pour les scripts, pynetbox ou curl pour lire et écrire, un import CSV qui survit à une mauvaise ligne, des webhooks quand un équipement change, et un script qui tourne dans NetBox à la demande.
+
+<Run>
+
+Le script crée l'utilisateur d'automatisation et son jeton avec ton jeton administrateur, puis, sous cet utilisateur, un site avec un équipement, une interface et une IP primaire<When flag="EVENTS">, et enfin un webhook et une règle d'événement sur les équipements</When>. Lance-le sur ta machine ; l'étape du script maison passe par l'interface et n'en fait pas partie.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# NetBox — automatisation de https://${NETBOX_HOST}, depuis ta machine
+api=https://${NETBOX_HOST}/api
+tok=${NETBOX_TOKEN}
+call() { curl -skf -H "Authorization: Token $tok" -H 'Content-Type: application/json' "$api$1" "${@:2}"; }
+pk() { python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])'; }
+
+uid=$(call /users/users/ -d "{\"username\": \"${AUTOMATION_USER}\", \"password\": \"$(openssl rand -base64 24)\"}" | pk)
+call /users/permissions/ -d @- >/dev/null <<EOF
+{"name": "automation: view", "actions": ["view"], "users": [$uid],
+ "object_types": ["dcim.site", "dcim.manufacturer", "dcim.devicerole", "dcim.devicetype", "dcim.device", "dcim.interface", "ipam.ipaddress"]}
+EOF
+call /users/permissions/ -d @- >/dev/null <<EOF
+{"name": "automation: catalogue", "actions": ["add", "change"], "users": [$uid],
+ "object_types": ["dcim.site", "dcim.manufacturer", "dcim.devicerole", "dcim.devicetype", "dcim.interface", "ipam.ipaddress"]}
+EOF
+call /users/permissions/ -d @- >/dev/null <<EOF
+{"name": "automation: devices of ${SITE_NAME}", "actions": ["add", "change", "delete"], "users": [$uid],
+ "object_types": ["dcim.device"], "constraints": {"site__name": "${SITE_NAME}"}}
+EOF
+key=$(openssl rand -hex 20)
+exp=$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) + d.timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%SZ"))')
+call /users/tokens/ -d "{\"user\": $uid, \"key\": \"$key\", \"expires\": \"$exp\", \"write_enabled\": true, \"description\": \"automation\"}" >/dev/null
+echo "Jeton d'automatisation, à garder comme AUTOMATION_TOKEN : $key"
+```
+
+<When flag="EVENTS">
+
+```bash
+wid=$(call /extras/webhooks/ -d "{\"name\": \"device-changes\", \"payload_url\": \"${WEBHOOK_URL}\", \"http_method\": \"POST\", \"http_content_type\": \"application/json\"}" | pk)
+call /extras/event-rules/ -d @- >/dev/null <<EOF
+{"name": "device created or updated", "object_types": ["dcim.device"], "event_types": ["object_created", "object_updated"],
+ "action_type": "webhook", "action_object_type": "extras.webhook", "action_object_id": $wid, "enabled": true}
+EOF
+```
+
+</When>
+
+```bash
+python3 -m venv ~/.venvs/netbox && ~/.venvs/netbox/bin/pip install -q pynetbox
+NB_TOKEN=$key ~/.venvs/netbox/bin/python - <<'EOF'
+import os, re, pynetbox
+nb = pynetbox.api("https://${NETBOX_HOST}", token=os.environ["NB_TOKEN"])
+slug = lambda s: re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
+def ensure(endpoint, lookup, **fields):
+    obj = endpoint.get(**lookup)
+    return obj if obj is not None else endpoint.create(**fields)
+site = ensure(nb.dcim.sites, {"slug": slug("${SITE_NAME}")}, name="${SITE_NAME}", slug=slug("${SITE_NAME}"), status="active")
+mfr = ensure(nb.dcim.manufacturers, {"slug": "generic"}, name="Generic", slug="generic")
+dtype = ensure(nb.dcim.device_types, {"slug": "generic-48p"}, manufacturer=mfr.id, model="Generic 48-port switch", slug="generic-48p")
+role = ensure(nb.dcim.device_roles, {"slug": "access-switch"}, name="Access switch", slug="access-switch", color="2196f3")
+dev = ensure(nb.dcim.devices, {"name": "sw-01", "site_id": site.id}, name="sw-01", site=site.id, role=role.id, device_type=dtype.id, status="active")
+iface = ensure(nb.dcim.interfaces, {"device_id": dev.id, "name": "Ethernet1"}, device=dev.id, name="Ethernet1", type="1000base-t")
+ip = ensure(nb.ipam.ip_addresses, {"address": "192.0.2.11/24"}, address="192.0.2.11/24", status="active",
+            assigned_object_type="dcim.interface", assigned_object_id=iface.id)
+if dev.primary_ip4 is None or dev.primary_ip4.id != ip.id:
+    dev.update({"primary_ip4": ip.id})
+print("ok:", dev.name, "at", site.name, "primary", ip.address)
+EOF
+```
+
+<Warn>Le jeton n'est affiché qu'une fois. Range-le dans tes valeurs (AUTOMATION_TOKEN) ou dans ton gestionnaire de secrets avant de fermer le terminal ; NetBox ne le remontrera pas.</Warn>
+
+</Run>
+
+## Avant de commencer
+
+<Guided>Il te faut le jeton administrateur de la page *Configurer* (NETBOX_TOKEN), Python 3.10 ou plus récent sur ta machine, et un accès réseau à **https://<V name="NETBOX_HOST" />/**. La bibliothèque pynetbox va dans un environnement virtuel sur ta machine, jamais sur le serveur : l'automatisation parle à NetBox comme n'importe quel autre système, en HTTPS.</Guided>
+
+```bash
+python3 -m venv ~/.venvs/netbox
+source ~/.venvs/netbox/bin/activate
+pip install pynetbox
+```
+
+<Check cmd="pip show pynetbox | head -1" expect="Name: pynetbox" />
+
+<Note>Avec le certificat auto-signé de la page d'installation, `curl` a besoin de `-k` et pynetbox de `nb.http_session.verify = False`. Mieux : copie `/etc/ssl/certs/netbox.crt` depuis le serveur et pointe `REQUESTS_CA_BUNDLE` (et `curl --cacert`) dessus. Même avec curl comme client, une étape plus bas utilise Python, parce qu'elle enchaîne six objets par id.</Note>
+
+<Deep>L'API REST, c'est Django REST Framework sous `/api/`, un endpoint par modèle, navigable dans un navigateur à **https://<V name="NETBOX_HOST" />/api/** et documentée sur `/api/schema/swagger-ui/`. Chaque objet visible dans l'interface y est un document JSON, avec les mêmes permissions. pynetbox est un client mince : `nb.dcim.devices` est `/api/dcim/devices/`, `.get()` un GET avec des filtres, `.create()` un POST, `.update()` un PATCH. Quand quelque chose n'est pas clair, lis le JSON brut : `curl` ne ment jamais.</Deep>
+
+## Un utilisateur d'automatisation et son jeton
+
+<Guided>Les scripts ne doivent pas tourner sous ton nom : le journal des changements dirait que tu as tout fait, et révoquer ton jeton les arrêterait. On crée un utilisateur, on lui donne exactement les droits qu'il lui faut, et on lui délivre un jeton avec une date d'expiration. Les trois sont des objets de l'API, donc trois appels `curl` avec ton jeton administrateur.</Guided>
+
+```bash
+api=https://${NETBOX_HOST}/api
+auth="Authorization: Token ${NETBOX_TOKEN}"
+curl -sk -H "$auth" -H 'Content-Type: application/json' "$api/users/users/" \
+  -d "{\"username\": \"${AUTOMATION_USER}\", \"password\": \"$(openssl rand -base64 24)\"}"
+```
+
+Note l'`id` dans la réponse ; il va dans la liste `users` des permissions. Trois permissions :
+
+<Tabs group="permissions">
+
+<Tab label="lecture">
+
+```bash
+curl -sk -H "$auth" -H 'Content-Type: application/json' "$api/users/permissions/" -d '{
+  "name": "automation: view", "actions": ["view"], "users": [ID],
+  "object_types": ["dcim.site", "dcim.manufacturer", "dcim.devicerole", "dcim.devicetype",
+                   "dcim.device", "dcim.interface", "ipam.ipaddress"]
+}'
+```
+
+</Tab>
+
+<Tab label="catalogue">
+
+```bash
+curl -sk -H "$auth" -H 'Content-Type: application/json' "$api/users/permissions/" -d '{
+  "name": "automation: catalogue", "actions": ["add", "change"], "users": [ID],
+  "object_types": ["dcim.site", "dcim.manufacturer", "dcim.devicerole", "dcim.devicetype",
+                   "dcim.interface", "ipam.ipaddress"]
+}'
+```
+
+</Tab>
+
+<Tab label="équipements, un site">
+
+```bash
+curl -sk -H "$auth" -H 'Content-Type: application/json' "$api/users/permissions/" -d '{
+  "name": "automation: devices of ${SITE_NAME}", "actions": ["add", "change", "delete"], "users": [ID],
+  "object_types": ["dcim.device"],
+  "constraints": {"site__name": "${SITE_NAME}"}
+}'
+```
+
+</Tab>
+
+</Tabs>
+
+<Deep>`constraints` est un filtre Django évalué sur l'objet. Sur *view*, *change* et *delete*, il restreint les lignes que l'utilisateur voit ; sur *add*, NetBox enregistre l'objet, vérifie qu'il correspond à la contrainte, et annule avec un 403 sinon. L'utilisateur d'automatisation peut donc créer des équipements, mais seulement à <V name="SITE_NAME" /> : un bug dans un script ne peut pas toucher un autre site. Une liste de dictionnaires fait un OU de contraintes. Les interfaces prendraient `device__site__name` ; les adresses IP n'ont pas de site, d'où la permission catalogue sans contrainte sur elles.</Deep>
+
+Maintenant le jeton, avec une expiration à 90 jours :
+
+```bash
+key=$(openssl rand -hex 20)
+exp=$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) + d.timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%SZ"))')
+curl -sk -H "$auth" -H 'Content-Type: application/json' "$api/users/tokens/" \
+  -d "{\"user\": ID, \"key\": \"$key\", \"expires\": \"$exp\", \"write_enabled\": true, \"description\": \"automation\"}"
+echo "$key"
+```
+
+Mets la clé affichée dans tes valeurs comme **AUTOMATION_TOKEN**. À partir d'ici, les appels sur les données l'utilisent.
+
+<Guided>Les jetons vivent dans la base de NetBox et sont listés sous **Admin → Jetons d'API** ; chacun appartient à un utilisateur, peut être en lecture seule (`write_enabled: false`), limité à des IP sources (`allowed_ips`), et peut expirer. Un jeton sans expiration est un mot de passe qui ne tourne jamais. Si tu préfères cliquer : **Admin → Utilisateurs → Ajouter**, puis **Jetons d'API → Ajouter** avec cet utilisateur sélectionné.</Guided>
+
+<Deep>On génère nous-mêmes la clé de 40 caractères pour que le script puisse l'afficher ; omets `key` et NetBox en génère une qu'il renvoie dans la réponse. Qu'une clé puisse être revue plus tard dépend de `ALLOW_TOKEN_RETRIEVAL` dans `configuration.py` ; le défaut sûr est que non. Note aussi `/api/users/tokens/provision/` : un POST avec un nom d'utilisateur et un mot de passe renvoie un jeton, c'est ainsi qu'un système avec un compte d'annuaire s'amorce sans administrateur. Confirme les noms des champs sur `/api/schema/swagger-ui/` pour ta version, les jetons ont changé entre 3.x et 4.x.</Deep>
+
+<Check cmd={"curl -sk -o /dev/null -w '%{http_code}' -H 'Authorization: Token ${AUTOMATION_TOKEN}' https://${NETBOX_HOST}/api/dcim/sites/"} expect="200" />
+
+<Check cmd={"curl -sk -o /dev/null -w '%{http_code}' -H 'Authorization: Token ${AUTOMATION_TOKEN}' https://${NETBOX_HOST}/api/users/users/"} expect="403" />
+
+## Lire et écrire
+
+<Guided>D'abord une lecture, puis une écriture, puis la même écriture une seconde fois pour voir qu'il ne se passe rien : le motif qui rend un script relançable sans risque est *chercher, puis créer ou modifier*, jamais une création à l'aveugle.</Guided>
+
+<When is="CLIENT" equals="pynetbox">
+
+```python title="sites.py"
+import re
+import pynetbox
+
+nb = pynetbox.api("https://${NETBOX_HOST}", token="${AUTOMATION_TOKEN}")
+
+for site in nb.dcim.sites.all():
+    print(site.id, site.name, site.status)
+
+slug = re.sub(r"[^a-z0-9]+", "-", "${SITE_NAME}".lower()).strip("-")
+site = nb.dcim.sites.get(slug=slug)
+if site is None:
+    site = nb.dcim.sites.create(name="${SITE_NAME}", slug=slug, status="active")
+    print("created", site.name)
+elif site.update({"description": "managed by ${AUTOMATION_USER}"}):
+    print("updated", site.name)
+else:
+    print("unchanged", site.name)
+```
+
+```bash
+python sites.py && python sites.py
+```
+
+<Deep>`get()` renvoie un objet ou `None`, et lève une exception si le filtre en trouve plusieurs : utilise-le avec des champs uniques (slug, nom plus site, id). `filter()` renvoie une liste paresseuse et suit la pagination de l'API pour toi, page par page ; `count()` demande au serveur sans rien rapatrier. `update()` envoie un PATCH avec seulement les champs passés et renvoie `True` si quelque chose a changé, ce qui fait afficher « unchanged » au second passage. Les objets liés se passent par id (`site=site.id`) ou par un dictionnaire de champs uniques (`site={"slug": slug}`) : NetBox résout les deux.</Deep>
+
+<Check cmd={"python -c 'import pynetbox; nb = pynetbox.api(\"https://${NETBOX_HOST}\", token=\"${AUTOMATION_TOKEN}\"); print(nb.dcim.sites.get(name=\"${SITE_NAME}\").status.value)'"} expect="active" />
+
+</When>
+
+<When is="CLIENT" equals="curl">
+
+```bash
+api=https://${NETBOX_HOST}/api
+auth="Authorization: Token ${AUTOMATION_TOKEN}"
+curl -sk -H "$auth" "$api/dcim/sites/?limit=50&brief=1" | python3 -m json.tool
+```
+
+```bash
+slug=$(echo "${SITE_NAME}" | tr 'A-Z ' 'a-z-')
+curl -sk -H "$auth" "$api/dcim/sites/?slug=$slug" | grep -q '"count": 0' && \
+curl -sk -H "$auth" -H 'Content-Type: application/json' "$api/dcim/sites/" \
+  -d "{\"name\": \"${SITE_NAME}\", \"slug\": \"$slug\", \"status\": \"active\"}"
+```
+
+<Deep>Chaque réponse de liste est une enveloppe : `count`, `next`, `previous`, `results`. `?limit=50` est la taille de page (par défaut `PAGINATE_COUNT`, 50 ; `limit=0` veut dire « le maximum », `MAX_PAGE_SIZE`, 1000 par défaut) ; `next` est l'URL de la page suivante, suis-la jusqu'à ce qu'elle soit `null`. `?brief=1` ne renvoie que id, url, display et les champs identifiants, dix fois moins de JSON quand tu n'as besoin que des id. NetBox 4 a aussi `?fields=id,name` pour choisir exactement ce que tu veux. Une écriture est un POST avec `Content-Type: application/json` ; la réponse est l'objet créé, avec son `id`. Deux appels, c'est là où curl cesse d'être agréable : la chaîne d'équipement ci-dessous est en Python.</Deep>
+
+<Check cmd={"curl -skG -H 'Authorization: Token ${AUTOMATION_TOKEN}' --data-urlencode 'name=${SITE_NAME}' https://${NETBOX_HOST}/api/dcim/sites/ | python3 -c 'import sys,json; print(json.load(sys.stdin)[\"results\"][0][\"status\"][\"value\"])'"} expect="active" />
+
+</When>
+
+## Un équipement de bout en bout
+
+<Guided>Un équipement a besoin d'un site, d'un rôle et d'un type (lui-même sous un fabricant) ; une IP a besoin d'une interface pour s'y poser ; l'équipement pointe ensuite cette IP comme primaire. Six objets, dans l'ordre des dépendances, chacun avec le motif chercher-ou-créer. Dans ton environnement, lance :</Guided>
+
+```python title="device.py"
+import re
+import pynetbox
+
+nb = pynetbox.api("https://${NETBOX_HOST}", token="${AUTOMATION_TOKEN}")
+slug = lambda s: re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
+
+def ensure(endpoint, lookup, **fields):
+    """Cherche par champs uniques, sinon crée. Relançable sans risque."""
+    obj = endpoint.get(**lookup)
+    return obj if obj is not None else endpoint.create(**fields)
+
+site = ensure(nb.dcim.sites, {"slug": slug("${SITE_NAME}")},
+              name="${SITE_NAME}", slug=slug("${SITE_NAME}"), status="active")
+mfr = ensure(nb.dcim.manufacturers, {"slug": "generic"}, name="Generic", slug="generic")
+dtype = ensure(nb.dcim.device_types, {"slug": "generic-48p"},
+               manufacturer=mfr.id, model="Generic 48-port switch", slug="generic-48p")
+role = ensure(nb.dcim.device_roles, {"slug": "access-switch"},
+              name="Access switch", slug="access-switch", color="2196f3")
+dev = ensure(nb.dcim.devices, {"name": "sw-01", "site_id": site.id},
+             name="sw-01", site=site.id, role=role.id, device_type=dtype.id, status="active")
+iface = ensure(nb.dcim.interfaces, {"device_id": dev.id, "name": "Ethernet1"},
+               device=dev.id, name="Ethernet1", type="1000base-t")
+ip = ensure(nb.ipam.ip_addresses, {"address": "192.0.2.11/24"},
+            address="192.0.2.11/24", status="active",
+            assigned_object_type="dcim.interface", assigned_object_id=iface.id)
+if dev.primary_ip4 is None or dev.primary_ip4.id != ip.id:
+    dev.update({"primary_ip4": ip.id})
+print("ok:", dev.name, "at", site.name, "primary", ip.address)
+```
+
+```bash
+python device.py
+```
+
+<Deep>Les recherches utilisent les noms de *filtres* (`site_id`, `device_id`), les créations les noms de *champs* (`site`, `device`) : l'API filtre sur des id, mais un corps de POST nomme la relation. `assigned_object_type` est la relation générique qui permet à une IP de se poser sur une interface d'équipement, une interface de VM ou rien. `primary_ip4` est posée en dernier parce que NetBox refuse une IP qui n'est pas assignée à une interface de l'équipement. Les champs à choix (`status`, `type`) prennent leur valeur, pas leur libellé : `active`, pas `Active` ; la liste des types d'interface est dans l'API navigable sous `OPTIONS`. Filtrage : `nb.dcim.devices.filter(site=slug, role="access-switch", status="active")` prend des slugs pour les objets liés et renvoie un générateur ; `tag="x"`, `q="sw-"` (recherche) et `name__isw="sw-"` (expressions de recherche) marchent aussi.</Deep>
+
+<Check cmd={"python -c 'import pynetbox; nb = pynetbox.api(\"https://${NETBOX_HOST}\", token=\"${AUTOMATION_TOKEN}\"); print(nb.dcim.devices.get(name=\"sw-01\").primary_ip4.address)'"} expect="192.0.2.11/24" />
+
+<Details summary="Si une création répond 400 ou 403">
+Un 400 vient avec un corps JSON qui nomme le champ : lis-le, il est précis (`"slug": ["This field is required."]`, `"status": ["\"Active\" is not a valid choice."]`). Un 403 sur une création que tu attendais valide, c'est la contrainte de la permission : l'équipement a été enregistré, vérifié contre `site__name`, et annulé. Compare le nom du site dans la permission avec <V name="SITE_NAME" />, orthographe et casse.
+</Details>
+
+## Import en masse depuis un CSV
+
+<Guided>Le vrai travail, c'est en général un tableur venu de quelque part. Une boucle, un `try` par ligne, un résumé à la fin : une mauvaise ligne est affichée et sautée, les autres passent. Les objets liés sont donnés par slug dans un dictionnaire ; NetBox les résout lui-même.</Guided>
+
+```csv title="devices.csv"
+name,site,role,device_type,status
+sw-02,paris-dc1,access-switch,generic-48p,planned
+sw-03,paris-dc1,access-switch,generic-48p,planned
+sw-04,paris-dc1,no-such-role,generic-48p,planned
+```
+
+```python title="import_devices.py"
+import csv
+import pynetbox
+
+nb = pynetbox.api("https://${NETBOX_HOST}", token="${AUTOMATION_TOKEN}")
+created = skipped = failed = 0
+with open("devices.csv", newline="") as f:
+    for row in csv.DictReader(f):
+        if nb.dcim.devices.get(name=row["name"], site=row["site"]) is not None:
+            skipped += 1
+            continue
+        try:
+            nb.dcim.devices.create(
+                name=row["name"], status=row["status"],
+                site={"slug": row["site"]}, role={"slug": row["role"]},
+                device_type={"slug": row["device_type"]},
+            )
+            created += 1
+        except pynetbox.RequestError as e:
+            failed += 1
+            print(f"FAILED {row['name']}: {e.error}")
+print(f"created {created}, skipped {skipped}, failed {failed}")
+```
+
+```bash
+python import_devices.py
+```
+
+<Check cmd="python import_devices.py | tail -1" expect="created 0, skipped 2, failed 1" />
+
+<Deep>Trois astuces pour le volume. Un : `?limit=0` sur les lectures préalables (`nb.dcim.devices.filter(site=slug, limit=0)`) ramène une grande page au lieu de vingt ; pour des milliers de lignes, charge une fois les noms existants dans un `set` et arrête d'appeler `get()` par ligne. Deux : `?brief=1` quand tu n'as besoin que des id, comme dans `{d.slug: d.id for d in nb.dcim.device_types.filter(brief=1)}`. Trois : l'API accepte une *liste* d'objets dans un seul POST, soit une requête au lieu de cent, mais c'est atomique : une mauvaise ligne et rien n'est créé, avec les erreurs indexées par position. Utilise-le une fois que la boucle ci-dessus a validé les données. `RequestError.error` est le JSON du serveur, le même corps que curl te montrerait. Le bouton **Importer** de l'interface prend le même CSV, c'est le bon outil pour un import unique.</Deep>
+
+<When flag="EVENTS">
+
+## Règles d'événements et webhooks
+
+<Guided>Une règle d'événement dit *quand* (quels types d'objets, quels événements) ; un webhook dit *où* (une URL, une méthode, des en-têtes). NetBox met l'appel en file et le worker RQ du serveur le livre, donc un récepteur lent ne ralentit jamais l'interface. Objets de configuration : ces deux appels utilisent ton jeton administrateur.</Guided>
+
+```bash
+api=https://${NETBOX_HOST}/api
+auth="Authorization: Token ${NETBOX_TOKEN}"
+curl -sk -H "$auth" -H 'Content-Type: application/json' "$api/extras/webhooks/" -d '{
+  "name": "device-changes", "payload_url": "${WEBHOOK_URL}",
+  "http_method": "POST", "http_content_type": "application/json"
+}'
+```
+
+Avec l'`id` du webhook comme `action_object_id` :
+
+```bash
+curl -sk -H "$auth" -H 'Content-Type: application/json' "$api/extras/event-rules/" -d '{
+  "name": "device created or updated",
+  "object_types": ["dcim.device"], "event_types": ["object_created", "object_updated"],
+  "action_type": "webhook", "action_object_type": "extras.webhook", "action_object_id": ID,
+  "enabled": true
+}'
+```
+
+<Note>Les règles d'événements ont gagné la liste `event_types` dans NetBox 4.1 ; les versions antérieures utilisaient des booléens `type_create` / `type_update`. Regarde **Opérations → Règles d'événements** dans l'interface : les objets y sont, et le formulaire montre les noms exacts des champs de ta version.</Note>
+
+Un récepteur pour voir les charges utiles. `python -m http.server` ne convient pas, il n'affiche jamais le corps des requêtes ; dix lignes de Flask le font :
+
+```python title="receiver.py"
+from urllib.parse import urlparse
+from flask import Flask, request
+
+target = urlparse("${WEBHOOK_URL}")
+app = Flask(__name__)
+
+@app.post(target.path or "/")
+def hook():
+    body = request.get_json(force=True)
+    print(body.get("event"), body.get("model"), body.get("data", {}).get("name"), flush=True)
+    return "", 204
+
+app.run(host="0.0.0.0", port=target.port or 80)
+```
+
+```bash
+pip install flask && python receiver.py
+```
+
+Depuis le serveur NetBox, prouve qu'il joint le récepteur, puis modifie un équipement et regarde le terminal :
+
+<Check cmd={"curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{\"event\": \"test\", \"model\": \"none\", \"data\": {}}' ${WEBHOOK_URL}"} expect="204" />
+
+```bash
+python -c 'import pynetbox; nb = pynetbox.api("https://${NETBOX_HOST}", token="${AUTOMATION_TOKEN}"); nb.dcim.devices.get(name="sw-01").update({"description": "hello webhook"})'
+```
+
+<Check cmd={"curl -sk -H 'Authorization: Token ${NETBOX_TOKEN}' \"https://${NETBOX_HOST}/api/extras/event-rules/?name=device%20created%20or%20updated\" | python3 -c 'import sys,json; print(json.load(sys.stdin)[\"count\"])'"} expect="1" />
+
+<Deep>La charge utile porte `event`, `model`, `timestamp`, `username`, `request_id`, `data` (l'objet tel que l'API le montre) et, sur les modifications, `snapshots` avec `prechange` et `postchange` : compare-les pour savoir ce qui a changé. `netbox-rq` doit tourner, sinon les événements s'empilent dans Redis et rien n'est livré ; `rq-workers-running` dans `/api/status/` est la vérification. Les livraisons en échec sont visibles sous **Opérations → Tâches de fond** ; le worker ne réessaie rien de lui-même, donc un récepteur doit répondre 2xx vite et travailler ensuite. Donne un `secret` au webhook et vérifie l'en-tête `X-Hook-Signature` (HMAC-SHA512 du corps) dans le récepteur avant de faire confiance à quoi que ce soit. `conditions` sur la règle filtre les événements côté serveur, `{"attr": "status.value", "value": "active"}` par exemple. Pour un coup d'œil sans Flask, `manage.py webhook_receiver` sur le serveur lui-même affiche chaque requête reçue sur le port 9000.</Deep>
+
+<Details summary="Si rien n'arrive">
+Dans l'ordre : `systemctl is-active netbox-rq` sur le serveur ; la vérification `curl` ci-dessus depuis le serveur, pas depuis ta machine (un pare-feu entre les deux est la cause habituelle) ; la règle est *activée* et liste `dcim.device` ; **Opérations → Tâches de fond** montre la tâche et son erreur. Avec un récepteur en `https://` et une CA privée, mets `ssl_verification` à `false` sur le webhook pour le test, puis corrige la CA.
+</Details>
+
+</When>
+
+## Scripts personnalisés
+
+<Guided>Une partie de l'automatisation a sa place dans NetBox : un formulaire que les utilisateurs remplissent, une tâche qui tourne avec les modèles de NetBox, un journal qu'ils peuvent lire. Un script personnalisé est une classe Python avec des variables (le formulaire) et une méthode `run()`. Celui-ci crée N équipements numérotés sur un site, et ne fait rien quand le nom existe.</Guided>
+
+```python title="create_devices.py"
+from dcim.choices import DeviceStatusChoices
+from dcim.models import Device, DeviceRole, DeviceType, Site
+from extras.scripts import IntegerVar, ObjectVar, Script, StringVar
+
+
+class CreateDevices(Script):
+    class Meta:
+        name = "Create N devices"
+        description = "Numbered devices at one site, planned status"
+        commit_default = False
+
+    site = ObjectVar(model=Site)
+    role = ObjectVar(model=DeviceRole)
+    device_type = ObjectVar(model=DeviceType)
+    prefix = StringVar(default="sw-", description="Name prefix")
+    count = IntegerVar(default=2, min_value=1, max_value=50)
+
+    def run(self, data, commit):
+        for i in range(1, data["count"] + 1):
+            name = f"{data['prefix']}{i:02d}"
+            device, created = Device.objects.get_or_create(
+                name=name, site=data["site"],
+                defaults={"role": data["role"], "device_type": data["device_type"],
+                          "status": DeviceStatusChoices.STATUS_PLANNED},
+            )
+            self.log_success(f"created {name}" if created else f"exists {name}")
+        return f"{data['count']} devices checked at {data['site']}"
+```
+
+Téléverse-le dans l'interface : **Personnalisation → Scripts → Ajouter**, choisis le fichier. Lance-le une fois depuis le formulaire avec *Commit* décoché pour voir le journal, puis depuis l'API :
+
+```bash
+api=https://${NETBOX_HOST}/api
+auth="Authorization: Token ${NETBOX_TOKEN}"
+curl -sk -H "$auth" "$api/extras/scripts/" | python3 -m json.tool | grep -E '"(id|name)"'
+```
+
+```bash
+curl -sk -H "$auth" -H 'Content-Type: application/json' "$api/extras/scripts/ID/" -d '{
+  "data": {"site": SITE_ID, "role": ROLE_ID, "device_type": TYPE_ID, "prefix": "sw-", "count": 3},
+  "commit": true
+}'
+```
+
+<Check cmd={"curl -sk -H 'Authorization: Token ${NETBOX_TOKEN}' https://${NETBOX_HOST}/api/extras/scripts/ | grep -q CreateDevices && echo found"} expect="found" />
+
+<Deep>Les scripts tournent comme tâches de fond sur le worker RQ, sous l'utilisateur qui les a lancés, avec ses permissions ; la réponse au POST est la tâche (`result.id`), interroge `/api/core/jobs/ID/` pour le `status` et le journal. `commit_default = False` fait du formulaire un essai à blanc sauf si l'utilisateur coche la case ; l'appelant de l'API décide avec `commit`. Depuis NetBox 4.0, les scripts s'enregistrent par l'interface ou se synchronisent depuis une **source de données** (un dépôt git sous **Opérations → Sources de données**), c'est ainsi qu'on les versionne : un push sur le dépôt, une synchro, et la nouvelle version est en ligne. Les lignes `self.log_*` sont le journal de la tâche ; une exception levée marque la tâche en échec et annule la transaction. Garde les scripts petits et mets la logique dont d'autres systèmes ont besoin dans une bibliothèque que les deux peuvent importer.</Deep>
+
+<Deep>GraphQL : NetBox expose `/graphql/` (`GRAPHQL_ENABLED`, actif par défaut) avec un explorateur dans le navigateur à cette URL. Une seule requête ramène un arbre d'équipement qui prendrait quatre appels REST : `curl -sk -H "$auth" -H 'Content-Type: application/json' https://${NETBOX_HOST}/graphql/ -d '{"query": "{ device_list { name site { name } primary_ip4 { address } } }"}'`. Les filtres existent (`device_list(filters: …)`) et leur syntaxe a changé en 4.3 : écris-les dans l'explorateur, qui autocomplète sur le schéma de ta version, puis colle-les dans le code. Lecture seule ; les écritures restent en REST.</Deep>
+
+## Terminé
+
+NetBox a maintenant un utilisateur fait pour les scripts, aux droits bornés à <V name="SITE_NAME" />, tu sais créer un équipement avec son interface et son IP en un passage relançable, importer un CSV sans craindre une mauvaise ligne<When flag="EVENTS">, d'autres systèmes apprennent les changements d'équipements</When>, et un script dans NetBox fait le travail répétitif depuis un formulaire ou depuis l'API. La série s'arrête ici ; les suivantes mettent tout ça à profit dans un lab NetDevOps.

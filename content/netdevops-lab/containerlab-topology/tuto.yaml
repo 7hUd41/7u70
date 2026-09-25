@@ -1,0 +1,100 @@
+# Inherits from ../series.yaml: LAB_DIR, LAB_NAME, MGMT_SUBNET, NETBOX_URL, NETBOX_TOKEN, SITE_NAME, NOS, AUTOMATION, CI.
+# The three management IPs are also declared by netbox-as-source-of-truth: same keys, the reader fills them once per series.
+
+title:
+  en: A network lab with containerlab
+  fr: Un lab réseau avec containerlab
+summary:
+  en: >-
+    Docker and containerlab on one Linux machine, a network OS image, a spine and two leaves
+    wired together, a first interface configuration, and the whole thing in a git repository.
+  fr: >-
+    Docker et containerlab sur une machine Linux, une image d'OS réseau, un spine et deux leaves
+    câblés ensemble, une première configuration d'interface, et le tout dans un dépôt git.
+difficulty: beginner
+tags: [containerlab, docker, srlinux, ceos, lab, netdevops]
+authors: [thudal]
+created: 2026-09-25
+minutes: 30
+validated: containerlab 0.60 · Ubuntu 24.04 · SR Linux 24.10 · cEOS-lab 4.32
+
+groups:
+  - id: srlinux
+    label: { en: SR Linux image, fr: Image SR Linux }
+    when: { is: NOS, equals: srlinux }
+  - id: ceos
+    label: { en: cEOS image, fr: Image cEOS }
+    when: { is: NOS, equals: ceos }
+  - id: nodes
+    label: { en: Nodes, fr: Nœuds }
+    desc: { en: The management address of each node, inside the management subnet., fr: L'adresse de management de chaque nœud, dans le sous-réseau de management. }
+
+vars:
+  - key: CLAB_VERSION
+    kind: text
+    group: lab
+    default: "0.60.0"
+    label: { en: containerlab version, fr: Version de containerlab }
+    hint:
+      en: The release the install script pins. Check the latest on github.com/srl-labs/containerlab/releases.
+      fr: La version que le script d'installation fixe. Vérifie la dernière sur github.com/srl-labs/containerlab/releases.
+    impact:
+      en: The CI runner on the last page must run the same version, or a topology that deploys here may not deploy there.
+      fr: Le runner CI de la dernière page doit avoir la même version, sinon une topologie qui se déploie ici peut ne pas se déployer là-bas.
+  - key: SRL_IMAGE
+    kind: text
+    group: srlinux
+    when: { is: NOS, equals: srlinux }
+    default: ghcr.io/nokia/srlinux:24.10.1
+    label: { en: SR Linux image, fr: Image SR Linux }
+    hint:
+      en: Public image on GitHub's registry, no account needed. Pin a tag; "latest" changes under you.
+      fr: Image publique sur le registre de GitHub, aucun compte nécessaire. Fixe un tag ; « latest » change sous tes pieds.
+    impact:
+      en: Written into the topology file and pulled by the CI runner. The CLI syntax on the next pages was written for 24.x.
+      fr: Écrite dans le fichier de topologie et tirée par le runner CI. La syntaxe CLI des pages suivantes a été écrite pour 24.x.
+  - key: CEOS_IMAGE
+    kind: text
+    group: ceos
+    when: { is: NOS, equals: ceos }
+    default: ceos:4.32.0F
+    label: { en: cEOS image tag, fr: Tag de l'image cEOS }
+    hint:
+      en: The local name you give the image when importing the tarball from arista.com.
+      fr: Le nom local que tu donnes à l'image en important l'archive depuis arista.com.
+    impact:
+      en: Written into the topology file. The image is not in any public registry, so the CI runner must have it imported by hand too.
+      fr: Écrit dans le fichier de topologie. L'image n'est dans aucun registre public, donc le runner CI doit aussi l'avoir importée à la main.
+  - key: SPINE1_MGMT
+    kind: ip
+    group: nodes
+    default: 172.20.20.11
+    label: { en: spine1 management IP, fr: IP de management de spine1 }
+    hint:
+      en: Inside the management subnet, outside the first few addresses Docker keeps for itself.
+      fr: Dans le sous-réseau de management, hors des premières adresses que Docker garde pour lui.
+    impact:
+      en: Pinned in the topology so every redeploy gives the same address; recorded in NetBox as the primary IP on the next page.
+      fr: Fixée dans la topologie pour que chaque redéploiement donne la même adresse ; enregistrée dans NetBox comme IP primaire à la page suivante.
+  - key: LEAF1_MGMT
+    kind: ip
+    group: nodes
+    default: 172.20.20.12
+    label: { en: leaf1 management IP, fr: IP de management de leaf1 }
+    hint:
+      en: Inside the management subnet.
+      fr: Dans le sous-réseau de management.
+    impact:
+      en: Same role as spine1's address.
+      fr: Même rôle que l'adresse de spine1.
+  - key: LEAF2_MGMT
+    kind: ip
+    group: nodes
+    default: 172.20.20.13
+    label: { en: leaf2 management IP, fr: IP de management de leaf2 }
+    hint:
+      en: Inside the management subnet.
+      fr: Dans le sous-réseau de management.
+    impact:
+      en: Same role as spine1's address.
+      fr: Même rôle que l'adresse de spine1.

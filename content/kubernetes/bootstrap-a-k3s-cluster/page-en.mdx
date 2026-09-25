@@ -1,0 +1,485 @@
+{/* First pass — to be validated against docs.k3s.io (installation, requirements, HA embedded etcd) and cert-manager.io/docs before publishing. */}
+
+k3s is Kubernetes in one binary: the API server, the scheduler, the kubelet, a datastore and an ingress controller, installed by one script in under a minute. This page takes <When is="TOPOLOGY" equals="single">one Ubuntu machine</When><When is="TOPOLOGY" equals="ha">three Ubuntu machines</When> to a cluster you drive from your laptop, with certificates issued automatically, and proves it with a hello-world behind HTTPS at <V name="APP_DOMAIN" />.
+
+<Run>
+
+The script does every step of this page from **your laptop**. It needs root SSH access to <When is="TOPOLOGY" equals="single">the node</When><When is="TOPOLOGY" equals="ha">the three nodes</When>, `kubectl` and `helm` already installed locally, and the DNS record for <V name="APP_DOMAIN" /> already pointing at <V name="NODE_IP" />.
+
+<When is="TOPOLOGY" equals="single">
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# k3s ${K3S_VERSION} — one server node at ${NODE_IP}
+ssh root@${NODE_IP} "swapoff -a; sed -i '/ swap / s/^/#/' /etc/fstab; \
+  curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=${K3S_VERSION} sh -s - server \
+  --tls-san ${NODE_IP} --write-kubeconfig-mode 644"
+```
+
+</When>
+
+<When is="TOPOLOGY" equals="ha">
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# k3s ${K3S_VERSION} — three server nodes, embedded etcd, first one at ${NODE_IP}
+ssh root@${NODE_IP} "swapoff -a; sed -i '/ swap / s/^/#/' /etc/fstab; \
+  curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=${K3S_VERSION} sh -s - server \
+  --cluster-init --tls-san ${NODE_IP} --write-kubeconfig-mode 644"
+TOKEN=$(ssh root@${NODE_IP} cat /var/lib/rancher/k3s/server/node-token)
+for ip in ${NODE2_IP} ${NODE3_IP}; do
+  ssh root@$ip "swapoff -a; sed -i '/ swap / s/^/#/' /etc/fstab; \
+    curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=${K3S_VERSION} K3S_TOKEN=$TOKEN sh -s - server \
+    --server https://${NODE_IP}:6443 --tls-san $ip"
+done
+```
+
+</When>
+
+```bash
+mkdir -p ~/.kube
+ssh root@${NODE_IP} cat /etc/rancher/k3s/k3s.yaml | sed "s/127.0.0.1/${NODE_IP}/" > ~/.kube/config
+chmod 600 ~/.kube/config
+kubectl wait --for=condition=Ready node --all --timeout=120s
+helm repo add jetstack https://charts.jetstack.io --force-update
+helm upgrade --install cert-manager jetstack/cert-manager \
+  --namespace cert-manager --create-namespace --set crds.enabled=true --wait
+```
+
+<When is="TLS" equals="letsencrypt">
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: ${ACME_EMAIL}
+    privateKeySecretRef:
+      name: letsencrypt-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik
+EOF
+ISSUER=letsencrypt
+```
+
+</When>
+
+<When is="TLS" equals="selfsigned">
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned
+spec:
+  selfSigned: {}
+EOF
+ISSUER=selfsigned
+```
+
+</When>
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: hello }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hello } }
+  template:
+    metadata: { labels: { app: hello } }
+    spec:
+      containers:
+        - name: whoami
+          image: traefik/whoami:v1.10
+          ports: [{ containerPort: 80 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: hello }
+spec:
+  selector: { app: hello }
+  ports: [{ port: 80, targetPort: 80 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hello
+  annotations: { cert-manager.io/cluster-issuer: $ISSUER }
+spec:
+  ingressClassName: traefik
+  tls: [{ hosts: ["${APP_DOMAIN}"], secretName: hello-tls }]
+  rules:
+    - host: ${APP_DOMAIN}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: hello, port: { number: 80 } } }
+EOF
+kubectl wait --for=condition=Ready certificate/hello-tls --timeout=180s
+echo "Done. Open https://${APP_DOMAIN}"
+```
+
+<Warn>The script disables swap and rewrites `/etc/fstab` on every node. Run it on fresh machines dedicated to the cluster, not on a server that does something else.</Warn>
+
+</Run>
+
+## Before you start
+
+<Guided>You need <When is="TOPOLOGY" equals="single">one Ubuntu 24.04 machine</When><When is="TOPOLOGY" equals="ha">three Ubuntu 24.04 machines</When> with 2 CPU and 4 GB of RAM or more, root access over SSH, and a DNS record for <V name="APP_DOMAIN" /> pointing at <V name="NODE_IP" />. Kubernetes wants three things from the OS before anything else: no swap, a synchronised clock, and a handful of open ports.</Guided>
+
+On each node, as root:
+
+```bash
+swapoff -a
+sed -i '/ swap / s/^/#/' /etc/fstab
+timedatectl set-ntp true
+```
+
+<Deep>The kubelet refuses to start with swap enabled by default (`failSwapOn`), because it cannot reason about memory limits when the kernel may page a container out. The clock matters for TLS: certificates carry a validity window and etcd members compare timestamps; a node a few minutes off gets rejected with confusing errors.</Deep>
+
+<Guided>If `ufw` is enabled on the nodes, open what k3s needs before installing. The pod and service networks (`10.42.0.0/16` and `10.43.0.0/16`) must be allowed as well, or pods cannot reach each other across nodes.</Guided>
+
+```bash
+ufw allow 22/tcp
+ufw allow 80/tcp
+ufw allow 443/tcp
+ufw allow 6443/tcp
+ufw allow from 10.42.0.0/16 to any
+ufw allow from 10.43.0.0/16 to any
+```
+
+<When is="TOPOLOGY" equals="ha">
+
+```bash
+ufw allow 10250/tcp
+ufw allow 8472/udp
+ufw allow 2379:2380/tcp
+```
+
+</When>
+
+<Deep>Port by port: 6443 is the API (your laptop, the other nodes); 10250 is the kubelet, used by `kubectl logs` and `exec` and by metrics-server; 8472/udp is flannel's VXLAN tunnel between nodes; 2379-2380 is etcd, only in the HA topology. 80 and 443 are Traefik. The k3s docs list a few more (5001 for the embedded registry, 51820/udp for WireGuard) that this page does not use.</Deep>
+
+## Install the first server
+
+<Guided>The official script downloads the binary for the version you pin, writes a systemd unit and starts it. `--tls-san` adds <V name="NODE_IP" /> to the API certificate, so a kubeconfig pointing at that address is trusted. `--write-kubeconfig-mode 644` lets a non-root user on the node read the kubeconfig.</Guided>
+
+<When is="TOPOLOGY" equals="single">
+
+```bash
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=${K3S_VERSION} sh -s - server \
+  --tls-san ${NODE_IP} --write-kubeconfig-mode 644
+```
+
+</When>
+
+<When is="TOPOLOGY" equals="ha">
+
+```bash
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=${K3S_VERSION} sh -s - server \
+  --cluster-init --tls-san ${NODE_IP} --write-kubeconfig-mode 644
+```
+
+<Deep>`--cluster-init` starts an embedded etcd instead of the default SQLite datastore. Only the first node gets it; the others join with `--server`. Without it, k3s stores its state in SQLite, which is fine for one node and impossible to replicate.</Deep>
+
+</When>
+
+<Deep>Everything lands in `/var/lib/rancher/k3s/`: the datastore under `server/db`, the node token under `server/node-token`, and the `server/manifests/` directory, where any YAML you drop is applied automatically (that is how Traefik and CoreDNS get installed). The unit is `k3s.service`; `journalctl -u k3s -f` is where you look when something is off.</Deep>
+
+<Details summary="If the node stays NotReady">
+Give it a minute: the node is Ready once flannel and CoreDNS run. If it stays NotReady, `journalctl -u k3s --no-pager | tail -50` usually names the cause: swap still on, a firewall dropping 8472/udp, or a leftover Docker or containerd install on the machine. Ubuntu cloud images with `apparmor` are fine; Raspberry Pi images need cgroups enabled in `cmdline.txt`, see the k3s docs.
+</Details>
+
+<When is="TOPOLOGY" equals="ha">
+
+## Join two more servers
+
+<Guided>The first node holds a token that authorises new members. Copy it, then run the same script on the two other nodes with `--server` pointing at the first one. They join as full servers: API, scheduler and an etcd member each.</Guided>
+
+On the first node:
+
+```bash
+cat /var/lib/rancher/k3s/server/node-token
+```
+
+On <V name="NODE2_IP" /> and <V name="NODE3_IP" />, with the token pasted in `K3S_TOKEN`:
+
+```bash
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=${K3S_VERSION} K3S_TOKEN=K10…::server:… sh -s - server \
+  --server https://${NODE_IP}:6443 --tls-san $(hostname -I | awk '{print $1}')
+```
+
+<Warn>Three servers, not two. etcd needs a majority: with two members, losing either one freezes the cluster. With three, any one can go down.</Warn>
+
+<Deep>Every server also runs the kubelet, so the three nodes take workloads. For a cluster that grows, add *agents* (`sh -s - agent --server … --token …`): they run pods and nothing else. The `--server` address is only used to join; afterwards each node talks to the local API. A fixed address in front of the three servers (a load balancer or a floating IP) is what a real HA setup adds, so that a kubeconfig does not depend on <V name="NODE_IP" /> being up.</Deep>
+
+<Check cmd="k3s kubectl get nodes --no-headers | wc -l" expect="3" />
+
+</When>
+
+## Kubeconfig, kubectl and helm on the laptop
+
+<Guided>k3s writes an admin kubeconfig on the node. It points at `127.0.0.1`; copy it to your laptop and replace the address with <V name="NODE_IP" />. From then on, everything happens from your machine.</Guided>
+
+```bash
+mkdir -p ~/.kube
+ssh root@${NODE_IP} cat /etc/rancher/k3s/k3s.yaml | sed "s/127.0.0.1/${NODE_IP}/" > ~/.kube/config
+chmod 600 ~/.kube/config
+```
+
+<Guided>If `kubectl` and `helm` are not installed yet:</Guided>
+
+```bash
+curl -LO "https://dl.k8s.io/release/$(curl -Ls https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+sudo install -m 755 kubectl /usr/local/bin/kubectl
+curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+```
+
+<Note>On macOS, `brew install kubectl helm` does the same. Keep kubectl within one minor version of the cluster (<V name="K3S_VERSION" /> is a 1.31 API): further apart, some commands misbehave silently.</Note>
+
+<Deep>The kubeconfig holds a client certificate signed by the cluster's CA: it is `cluster-admin`, with no expiry worth mentioning. Treat the file like a root password. The next pages create a narrower ServiceAccount for CI precisely so this file never leaves your laptop. If you manage several clusters, rename the context: `kubectl config rename-context default k3s-lab`.</Deep>
+
+<Check cmd="kubectl get nodes --no-headers | awk '{print $2}' | sort -u" expect="Ready" />
+
+<Details summary="If kubectl says x509: certificate is valid for …">
+The API certificate does not include <V name="NODE_IP" />: the `--tls-san` flag was missing or given another address. Re-run the install command on the first node with the right `--tls-san`; the script is idempotent and only rewrites the unit and the certificate.
+</Details>
+
+## Ingress: Traefik and ServiceLB
+
+<Guided>k3s ships an ingress controller, Traefik, and a small load-balancer, ServiceLB, that publishes any `LoadBalancer` Service on the nodes' own addresses. Together they mean: an `Ingress` object with a host name, and that host name answers on port 443 of every node. Nothing to install.</Guided>
+
+```bash
+kubectl -n kube-system get svc traefik
+```
+
+<Deep>ServiceLB (formerly klipper-lb) runs a `svclb-traefik` DaemonSet whose pods bind ports 80 and 443 on each node with `hostPort`, and the Service's `EXTERNAL-IP` column lists the node addresses. It is not a real load balancer: DNS pointing at one node is a single point of entry. In the HA topology, put the three addresses in DNS or a load balancer in front. Traefik itself is deployed by the HelmChart controller from `/var/lib/rancher/k3s/server/manifests/traefik.yaml`; to change its settings, do not edit that file (it is overwritten on upgrade) but drop a `HelmChartConfig` next to it. To use another controller, install k3s with `--disable traefik`.</Deep>
+
+<Check cmd="kubectl -n kube-system rollout status deploy/traefik" expect={'deployment "traefik" successfully rolled out'} />
+
+## cert-manager and a ClusterIssuer
+
+<Guided>cert-manager watches `Ingress` objects: when one carries its annotation, it obtains a certificate from an issuer and stores it in the Secret the Ingress names. A `ClusterIssuer` is an issuer available in every namespace: you define it once.</Guided>
+
+```bash
+helm repo add jetstack https://charts.jetstack.io --force-update
+helm upgrade --install cert-manager jetstack/cert-manager \
+  --namespace cert-manager --create-namespace --set crds.enabled=true --wait
+```
+
+<Note>`crds.enabled=true` is the chart option from cert-manager 1.15 on; older charts used `installCRDs=true`. Check the version the repo serves with `helm search repo jetstack`.</Note>
+
+<Check cmd="kubectl -n cert-manager rollout status deploy/cert-manager-webhook" expect={'deployment "cert-manager-webhook" successfully rolled out'} />
+
+<When is="TLS" equals="letsencrypt">
+
+<Annotated>
+
+```yaml title="clusterissuer.yaml" {8,13}
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory   # (1)
+    email: ${ACME_EMAIL}                                        # (2)
+    privateKeySecretRef:
+      name: letsencrypt-account-key                             # (3)
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik                           # (4)
+```
+
+1. The production endpoint. It rate-limits (five identical certificates a week): while experimenting, point a second issuer at `https://acme-staging-v02.api.letsencrypt.org/directory`, whose certificates browsers reject but which never runs out.
+2. Only used for expiry warnings.
+3. The ACME account key, generated by cert-manager on first use and kept in this Secret in the `cert-manager` namespace.
+4. HTTP-01: cert-manager creates a temporary Ingress on Traefik serving `/.well-known/acme-challenge/…`, Let's Encrypt fetches it over port 80, then signs. The name must resolve publicly to the node(s).
+
+</Annotated>
+
+```bash
+kubectl apply -f clusterissuer.yaml
+```
+
+</When>
+
+<When is="TLS" equals="selfsigned">
+
+```yaml title="clusterissuer.yaml"
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned
+spec:
+  selfSigned: {}
+```
+
+```bash
+kubectl apply -f clusterissuer.yaml
+```
+
+<Note>Browsers will warn on every certificate this issuer signs. Fine for a lab without a public name. For something users open, switch the Certificates choice to Let's Encrypt.</Note>
+
+<Deep>A nicer lab setup is a private CA: this self-signed issuer signs one `Certificate` marked `isCA: true`, a second `ClusterIssuer` of type `ca` uses that Secret, and every application certificate chains to it. Import the CA once in your browsers and the warnings go away. The cert-manager docs have the three manifests under "CA".</Deep>
+
+</When>
+
+## Storage: the local-path class
+
+<Guided>k3s comes with one StorageClass, `local-path`, marked as default: a `PersistentVolumeClaim` gets a directory on the node where the pod is scheduled. Nothing to do here; know its limits before the database of the next page relies on it.</Guided>
+
+```bash
+kubectl get storageclass
+```
+
+<Deep>Volumes live under `/var/lib/rancher/k3s/storage/` on the node. Two consequences: a pod using one is pinned to that node (the scheduler will not move it), and losing the node's disk loses the data. No snapshots, no replication, no resizing. It is perfect for a lab and acceptable for a single-node prod with backups. For anything that must survive a node, the usual next step on k3s is Longhorn, which replicates volumes across nodes; that is beyond this series.</Deep>
+
+## Hello world behind HTTPS
+
+<Guided>One Deployment, one Service, one Ingress with the cert-manager annotation: if <V name="APP_DOMAIN" /> answers with a valid certificate, the whole chain (DNS, Traefik, cert-manager, the issuer) works, and the next page can focus on the application.</Guided>
+
+```yaml title="hello.yaml"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: hello }
+  template:
+    metadata:
+      labels: { app: hello }
+    spec:
+      containers:
+        - name: whoami
+          image: traefik/whoami:v1.10
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello
+spec:
+  selector: { app: hello }
+  ports:
+    - port: 80
+      targetPort: 80
+```
+
+<When is="TLS" equals="letsencrypt">
+
+```yaml title="hello-ingress.yaml" {6,10-11}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hello
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: ["${APP_DOMAIN}"]
+      secretName: hello-tls
+  rules:
+    - host: ${APP_DOMAIN}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hello
+                port: { number: 80 }
+```
+
+</When>
+
+<When is="TLS" equals="selfsigned">
+
+```yaml title="hello-ingress.yaml" {6,10-11}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hello
+  annotations:
+    cert-manager.io/cluster-issuer: selfsigned
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: ["${APP_DOMAIN}"]
+      secretName: hello-tls
+  rules:
+    - host: ${APP_DOMAIN}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hello
+                port: { number: 80 }
+```
+
+</When>
+
+```bash
+kubectl apply -f hello.yaml -f hello-ingress.yaml
+kubectl get certificate hello-tls -w
+```
+
+<Deep>The annotation makes cert-manager create a `Certificate` named after the Secret, then an `Order`, a `Challenge`, and finally the Secret `hello-tls` with `tls.crt` and `tls.key`. Traefik watches Secrets referenced by Ingresses and serves the new certificate without a restart. `kubectl describe challenge` is the place to look when the certificate stays not Ready: it prints the exact URL Let's Encrypt failed to fetch.</Deep>
+
+<Check cmd="kubectl wait --for=condition=Ready certificate/hello-tls --timeout=120s" expect="certificate.cert-manager.io/hello-tls condition met" />
+
+<When is="TLS" equals="letsencrypt">
+
+<Check cmd="curl -sI https://${APP_DOMAIN} | head -1" expect="HTTP/2 200" />
+
+</When>
+
+<When is="TLS" equals="selfsigned">
+
+<Check cmd="curl -skI https://${APP_DOMAIN} | head -1" expect="HTTP/2 200" />
+
+</When>
+
+<Details summary="If the certificate stays not Ready">
+In order of likelihood:
+
+- <V name="APP_DOMAIN" /> does not resolve to a node yet, or resolves to a private address Let's Encrypt cannot reach. `dig +short` the name from outside.
+- Port 80 is closed somewhere (ufw, the provider's firewall): HTTP-01 needs it, even though users only use 443.
+- Rate limit hit after too many attempts: `kubectl describe order` says so. Use the staging endpoint until the setup is right.
+- The `Challenge` is `pending` with a `wrong status code 404`: Traefik is not serving the temporary Ingress, check `kubectl -n kube-system logs deploy/traefik`.
+</Details>
+
+## Upgrade, uninstall
+
+Upgrading k3s is re-running the install script with a newer version; uninstalling is one script per node.
+
+<Deep>To upgrade, change <V name="K3S_VERSION" /> and re-run the exact install command on each server, one at a time, the first node first; the script replaces the binary and restarts the unit, pods keep running. Stay within one minor version per hop (1.31 → 1.32, never 1.31 → 1.33), and read the k3s release notes for the datastore. For a cluster with many nodes, the system-upgrade-controller does this from a `Plan` object. `/usr/local/bin/k3s-uninstall.sh` removes everything from a server (`k3s-agent-uninstall.sh` on an agent), including `/var/lib/rancher/k3s` and its volumes: back up first. To move to another datastore or reset etcd, `k3s server --cluster-reset` on one node rebuilds a single-member cluster from its own copy.</Deep>
+
+## Done
+
+<When is="TOPOLOGY" equals="single">One node</When><When is="TOPOLOGY" equals="ha">Three servers with a replicated datastore</When>, driven from your laptop, an ingress on every node, certificates that issue and renew themselves, and a StorageClass for the database. The hello-world can go:
+
+```bash
+kubectl delete -f hello-ingress.yaml -f hello.yaml
+```
+
+The next page deploys indicat on this cluster: namespace, secrets, PostgreSQL, the application with its Ingress at <V name="APP_DOMAIN" />, and an autoscaler.

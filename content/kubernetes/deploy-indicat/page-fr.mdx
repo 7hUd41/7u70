@@ -1,0 +1,685 @@
+{/* Première passe — à valider contre kubernetes.io/docs (workloads, sondes, HPA), cloudnative-pg.io/documentation (Cluster, bootstrap, sauvegardes) et le dépôt indicat (commande de migration, /healthz) avant publication. */}
+
+indicat est une application web conteneurisée : une image, <V name="APP_IMAGE" />, qui écoute sur <V name="APP_PORT" />, a besoin d'un `DATABASE_URL` et d'une `SECRET_KEY` dans son environnement, et répond sur `/healthz` quand elle va bien. Cette page lui donne un namespace, ses secrets, un PostgreSQL, <V name="APP_REPLICAS" /> réplicas avec sondes et limites, des migrations qui tournent avant chaque rollout, un Ingress avec TLS sur <V name="APP_DOMAIN" />, et un autoscaler.
+
+<Run>
+
+Le script fait toutes les étapes de cette page depuis ton portable, contre le cluster de la page précédente (`~/.kube/config`). Le relancer est sans risque : chaque objet est appliqué, pas créé.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# indicat — ${APP_IMAGE} dans le namespace ${NAMESPACE}, sur https://${APP_DOMAIN}
+NS=${NAMESPACE}
+kubectl create namespace $NS --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n $NS create secret generic indicat-db-app --type=kubernetes.io/basic-auth \
+  --from-literal=username=indicat --from-literal=password="${DB_PASSWORD}" \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+<When is="DB" equals="cnpg">
+
+<When is="TOPOLOGY" equals="single">
+
+```bash
+INSTANCES=1
+```
+
+</When>
+
+<When is="TOPOLOGY" equals="ha">
+
+```bash
+INSTANCES=3
+```
+
+</When>
+
+```bash
+DBHOST=indicat-db-rw
+helm repo add cnpg https://cloudnative-pg.github.io/charts --force-update
+helm upgrade --install cnpg cnpg/cloudnative-pg --namespace cnpg-system --create-namespace --wait
+kubectl -n $NS apply -f - <<EOF
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata: { name: indicat-db }
+spec:
+  instances: $INSTANCES
+  imageName: ghcr.io/cloudnative-pg/postgresql:16
+  storage: { size: 10Gi, storageClass: local-path }
+  bootstrap: { initdb: { database: indicat, owner: indicat, secret: { name: indicat-db-app } } }
+EOF
+kubectl -n $NS wait --for=condition=Ready cluster/indicat-db --timeout=300s
+```
+
+</When>
+
+<When is="DB" equals="statefulset">
+
+```bash
+DBHOST=indicat-db
+kubectl -n $NS apply -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata: { name: indicat-db }
+spec: { clusterIP: None, selector: { app: indicat-db }, ports: [{ port: 5432 }] }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: indicat-db }
+spec:
+  serviceName: indicat-db
+  replicas: 1
+  selector: { matchLabels: { app: indicat-db } }
+  template:
+    metadata: { labels: { app: indicat-db } }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          ports: [{ containerPort: 5432 }]
+          env:
+            - { name: POSTGRES_DB, value: indicat }
+            - { name: POSTGRES_USER, value: indicat }
+            - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: indicat-db-app, key: password } } }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+          readinessProbe: { exec: { command: [pg_isready, -U, indicat] }, periodSeconds: 5 }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 10Gi } } }
+EOF
+kubectl -n $NS rollout status statefulset/indicat-db --timeout=300s
+```
+
+</When>
+
+```bash
+kubectl -n $NS create secret generic indicat-secrets \
+  --from-literal=DATABASE_URL="postgresql://indicat:${DB_PASSWORD}@$DBHOST:5432/indicat" \
+  --from-literal=SECRET_KEY="${APP_SECRET}" \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+<When flag="PRIVATE_REGISTRY">
+
+```bash
+kubectl -n $NS create secret docker-registry regcred \
+  --docker-server=$(echo ${APP_IMAGE} | cut -d/ -f1) \
+  --docker-username=${REGISTRY_USER} --docker-password="${REGISTRY_TOKEN}" \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n $NS patch serviceaccount default -p '{"imagePullSecrets":[{"name":"regcred"}]}'
+```
+
+</When>
+
+<When is="TLS" equals="letsencrypt">
+
+```bash
+ISSUER=letsencrypt
+```
+
+</When>
+
+<When is="TLS" equals="selfsigned">
+
+```bash
+ISSUER=selfsigned
+```
+
+</When>
+
+```bash
+kubectl -n $NS delete job indicat-migrate --ignore-not-found
+kubectl -n $NS apply -f - <<EOF
+apiVersion: batch/v1
+kind: Job
+metadata: { name: indicat-migrate, labels: { app: indicat-migrate } }
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: ${APP_IMAGE}
+          command: ["npm", "run", "migrate"]
+          envFrom: [{ secretRef: { name: indicat-secrets } }]
+EOF
+kubectl -n $NS wait --for=condition=complete job/indicat-migrate --timeout=300s
+kubectl -n $NS apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: indicat }
+spec:
+  replicas: ${APP_REPLICAS}
+  selector: { matchLabels: { app: indicat } }
+  strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
+  template:
+    metadata: { labels: { app: indicat } }
+    spec:
+      containers:
+        - name: indicat
+          image: ${APP_IMAGE}
+          ports: [{ containerPort: ${APP_PORT} }]
+          envFrom: [{ secretRef: { name: indicat-secrets } }]
+          readinessProbe: { httpGet: { path: /healthz, port: ${APP_PORT} }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /healthz, port: ${APP_PORT} }, initialDelaySeconds: 15, periodSeconds: 10 }
+          resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: 500m, memory: 256Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: indicat }
+spec: { selector: { app: indicat }, ports: [{ port: 80, targetPort: ${APP_PORT} }] }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: indicat
+  annotations: { cert-manager.io/cluster-issuer: $ISSUER }
+spec:
+  ingressClassName: traefik
+  tls: [{ hosts: ["${APP_DOMAIN}"], secretName: indicat-tls }]
+  rules:
+    - host: ${APP_DOMAIN}
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: indicat, port: { number: 80 } } } }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: indicat }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: indicat }
+  minReplicas: ${APP_REPLICAS}
+  maxReplicas: 6
+  metrics: [{ type: Resource, resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } } }]
+EOF
+kubectl -n $NS rollout status deploy/indicat --timeout=300s
+echo "Terminé. https://${APP_DOMAIN}/healthz"
+```
+
+<Warn>`DATABASE_URL` et `SECRET_KEY` finissent dans un Secret Kubernetes : du base64, pas du chiffrement. Quiconque peut lire les Secrets de <V name="NAMESPACE" /> peut les lire. Garde ce script hors de git, ou passe à sealed-secrets ou SOPS (voir l'étape des secrets).</Warn>
+
+</Run>
+
+## Avant de commencer
+
+<Guided>Il te faut le cluster de la page précédente joignable par `kubectl`, l'enregistrement DNS de <V name="APP_DOMAIN" /> qui pointe vers le(s) nœud(s), et l'image <V name="APP_IMAGE" /> publiée<When flag="PRIVATE_REGISTRY"> avec un jeton capable de la tirer</When>. Génère les deux secrets maintenant plutôt que de les inventer :</Guided>
+
+```bash
+openssl rand -hex 32    # APP_SECRET
+openssl rand -hex 16    # DB_PASSWORD
+```
+
+<Deep>Tout sur cette page est un fichier YAML appliqué avec `kubectl apply`, qui crée ou met à jour et ne se plaint jamais qu'une chose existe. Garde les fichiers dans un dossier `deploy/` du dépôt indicat : le pipeline de la page suivante applique le même dossier. Les manifestes sont écrits pour le namespace passé avec `-n` ; ils ne portent pas de `metadata.namespace`, exprès, pour que les mêmes fichiers servent à un namespace de staging.</Deep>
+
+## Namespace et secrets
+
+<Guided>Un namespace, c'est un dossier pour les objets : les noms n'ont besoin d'être uniques que dedans, les quotas et le RBAC s'y accrochent, et le supprimer supprime tout ce qu'il contient. Les secrets sont créés en ligne de commande pour ne jamais traîner dans un fichier.</Guided>
+
+```bash
+kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n ${NAMESPACE} create secret generic indicat-db-app --type=kubernetes.io/basic-auth \
+  --from-literal=username=indicat --from-literal=password="${DB_PASSWORD}" \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+<When is="DB" equals="cnpg">
+
+```bash
+kubectl -n ${NAMESPACE} create secret generic indicat-secrets \
+  --from-literal=DATABASE_URL="postgresql://indicat:${DB_PASSWORD}@indicat-db-rw:5432/indicat" \
+  --from-literal=SECRET_KEY="${APP_SECRET}" \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+</When>
+
+<When is="DB" equals="statefulset">
+
+```bash
+kubectl -n ${NAMESPACE} create secret generic indicat-secrets \
+  --from-literal=DATABASE_URL="postgresql://indicat:${DB_PASSWORD}@indicat-db:5432/indicat" \
+  --from-literal=SECRET_KEY="${APP_SECRET}" \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+</When>
+
+<Guided>L'hôte de base dans `DATABASE_URL` est le nom d'un Service créé à l'étape suivante ; dans le namespace, un nom de Service résout tout seul, sans suffixe de domaine.</Guided>
+
+<Deep>`--dry-run=client -o yaml | kubectl apply`, c'est l'idiome du secret idempotent : `create` seul échoue la deuxième fois. Le type `basic-auth` sur `indicat-db-app` n'est pas décoratif : CloudNativePG l'exige pour le secret de bootstrap. Pour garder des secrets dans git sans risque, deux outils : **sealed-secrets** (un contrôleur dans le cluster détient une clé privée ; tu commites des objets `SealedSecret` chiffrés avec sa clé publique, seul ce cluster peut les ouvrir) ou **SOPS** avec age ou un KMS (fichiers chiffrés de ton côté, déchiffrés par le pipeline ou par une intégration Flux/Argo). L'un ou l'autre remplace les commandes `create secret` ci-dessus ; rien d'autre sur cette page ne change.</Deep>
+
+## PostgreSQL
+
+<When is="DB" equals="cnpg">
+
+<Guided>CloudNativePG est un opérateur : tu l'installes une fois, puis tu décris une base comme un objet `Cluster`, et il crée les pods, les volumes, les Services et, avec plusieurs instances, la réplication et la bascule automatique. C'est la façon de faire tourner PostgreSQL sur Kubernetes sans le materner.</Guided>
+
+```bash
+helm repo add cnpg https://cloudnative-pg.github.io/charts --force-update
+helm upgrade --install cnpg cnpg/cloudnative-pg --namespace cnpg-system --create-namespace --wait
+```
+
+<When is="TOPOLOGY" equals="single">
+
+```yaml title="deploy/postgres.yaml" {5}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: indicat-db
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:16
+  storage:
+    size: 10Gi
+    storageClass: local-path
+  bootstrap:
+    initdb:
+      database: indicat
+      owner: indicat
+      secret:
+        name: indicat-db-app
+```
+
+</When>
+
+<When is="TOPOLOGY" equals="ha">
+
+```yaml title="deploy/postgres.yaml" {5}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: indicat-db
+spec:
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:16
+  storage:
+    size: 10Gi
+    storageClass: local-path
+  bootstrap:
+    initdb:
+      database: indicat
+      owner: indicat
+      secret:
+        name: indicat-db-app
+```
+
+<Note>Trois instances, une par nœud : l'opérateur les répartit par anti-affinité. Un primaire prend les écritures, deux réplicas répliquent en flux depuis lui ; si le nœud du primaire meurt, un réplica est promu en quelques secondes et le Service `-rw` suit.</Note>
+
+</When>
+
+```bash
+kubectl -n ${NAMESPACE} apply -f deploy/postgres.yaml
+kubectl -n ${NAMESPACE} get cluster indicat-db -w
+```
+
+<Deep>L'opérateur crée trois Services : `indicat-db-rw` (le primaire, pour les écritures), `indicat-db-ro` (les réplicas seulement) et `indicat-db-r` (n'importe quelle instance). L'application utilise `-rw`. `initdb` tourne une fois, sur le volume vide, en créant la base et le rôle propriétaire avec le mot de passe du Secret ; ensuite le Secret n'est relu qu'à la rotation. Les sauvegardes, c'est quelques lignes de plus dans le même objet : `backup.barmanObjectStore` vers un bucket S3 (ou tout stockage compatible S3) avec archivage des WAL, plus un objet `ScheduledBackup` pour la sauvegarde de base nocturne, et la restauration à un instant donné vient gratuitement. Fais-le avant que de vraies données arrivent ici : sur `local-path`, le volume meurt avec le nœud. `kubectl cnpg status indicat-db` (le plugin kubectl des releases CNPG) donne la vue complète, retard de réplication compris.</Deep>
+
+<Check cmd={"kubectl -n ${NAMESPACE} get cluster indicat-db -o jsonpath='{.status.phase}'"} expect="Cluster in healthy state" />
+
+</When>
+
+<When is="DB" equals="statefulset">
+
+<Guided>Sans opérateur, PostgreSQL est un StatefulSet : un pod au nom stable (`indicat-db-0`) et un volume qui le suit. Un Service headless donne au pod un nom DNS. C'est la chose la plus simple qui marche, et elle ne fait rien pour toi quand le pod ou le disque lâche.</Guided>
+
+```yaml title="deploy/postgres.yaml" {7,21-24,34-38}
+apiVersion: v1
+kind: Service
+metadata:
+  name: indicat-db
+spec:
+  clusterIP: None
+  selector: { app: indicat-db }
+  ports:
+    - port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: indicat-db
+spec:
+  serviceName: indicat-db
+  replicas: 1
+  selector:
+    matchLabels: { app: indicat-db }
+  template:
+    metadata:
+      labels: { app: indicat-db }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          ports:
+            - containerPort: 5432
+          env:
+            - { name: POSTGRES_DB, value: indicat }
+            - { name: POSTGRES_USER, value: indicat }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: indicat-db-app, key: password }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+          readinessProbe:
+            exec: { command: [pg_isready, -U, indicat] }
+            periodSeconds: 5
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 10Gi
+```
+
+```bash
+kubectl -n ${NAMESPACE} apply -f deploy/postgres.yaml
+kubectl -n ${NAMESPACE} rollout status statefulset/indicat-db
+```
+
+<Deep>`clusterIP: None` rend le Service headless : `indicat-db` résout directement vers l'adresse du pod, et `indicat-db-0.indicat-db` nomme toujours ce pod précis. `PGDATA` dans un sous-répertoire est le contournement classique du répertoire `lost+found` que certains volumes portent à leur racine, et qui fait refuser `initdb`. Le PVC issu de `volumeClaimTemplates` n'est pas supprimé avec le StatefulSet : `kubectl delete pvc data-indicat-db-0` est un acte séparé et volontaire. Les sauvegardes sont pour toi : un CronJob qui lance `pg_dump` vers un stockage objet est le minimum. Pas de réplication, pas de bascule ; c'est ce que le choix de l'opérateur t'achète.</Deep>
+
+<Check cmd="kubectl -n ${NAMESPACE} exec indicat-db-0 -- pg_isready -U indicat" expect="/var/run/postgresql:5432 - accepting connections" />
+
+</When>
+
+<When flag="PRIVATE_REGISTRY">
+
+## Pull secret
+
+<Guided>Le kubelet de chaque nœud tire l'image lui-même, il lui faut donc des identifiants pour le registre. Un Secret `docker-registry` les contient ; l'attacher au ServiceAccount par défaut du namespace fait que chaque pod créé dedans l'utilise, sans une ligne dans les manifestes.</Guided>
+
+```bash
+kubectl -n ${NAMESPACE} create secret docker-registry regcred \
+  --docker-server=$(echo ${APP_IMAGE} | cut -d/ -f1) \
+  --docker-username=${REGISTRY_USER} --docker-password="${REGISTRY_TOKEN}" \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n ${NAMESPACE} patch serviceaccount default -p '{"imagePullSecrets":[{"name":"regcred"}]}'
+```
+
+<Deep>Le serveur est le premier segment de <V name="APP_IMAGE" /> : `ghcr.io` pour GitHub, `registry.gitlab.com` pour GitLab. Sur GHCR le jeton est un personal access token classique avec `read:packages`, ou, mieux, un jeton fin limité à ce paquet. Un `ImagePullBackOff` sur un pod avec `401 Unauthorized` dans `kubectl describe pod` veut dire que le jeton est faux ou expiré ; les pods en cours ne sont pas touchés tant qu'ils ne redémarrent pas sur un autre nœud.</Deep>
+
+<Check cmd={"kubectl -n ${NAMESPACE} get serviceaccount default -o jsonpath='{.imagePullSecrets[0].name}'"} expect="regcred" />
+
+</When>
+
+## Migrations
+
+<Guided>Les changements de schéma doivent être appliqués avant que le nouveau code tourne. Un Job lance la même image une fois avec la commande de migration, et le rollout l'attend. Les Jobs sont immuables, donc il est supprimé et recréé à chaque déploiement.</Guided>
+
+```yaml title="deploy/migrate.yaml" {14}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: indicat-migrate
+  labels: { app: indicat-migrate }
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: ${APP_IMAGE}
+          command: ["npm", "run", "migrate"]
+          envFrom:
+            - secretRef: { name: indicat-secrets }
+```
+
+<Note>`npm run migrate` est le point d'entrée des migrations d'indicat au moment d'écrire ; vérifie le `package.json` du dépôt si ça échoue.</Note>
+
+```bash
+kubectl -n ${NAMESPACE} delete job indicat-migrate --ignore-not-found
+kubectl -n ${NAMESPACE} apply -f deploy/migrate.yaml
+kubectl -n ${NAMESPACE} wait --for=condition=complete job/indicat-migrate --timeout=300s
+```
+
+<Deep>L'alternative est un `initContainer` dans le Deployment qui lance la même commande : plus simple, mais avec plusieurs réplicas chaque nouveau pod lance les migrations en parallèle, et une lente retarde tous les pods. Le Job tourne une fois, avant tout le reste, et ses logs restent lisibles dix minutes (`ttlSecondsAfterFinished`). `backoffLimit: 2` réessaie deux fois en cas d'échec ; une migration qui échoue trois fois, ça se regarde, ça ne se relance pas.</Deep>
+
+<Check cmd="kubectl -n ${NAMESPACE} wait --for=condition=complete job/indicat-migrate --timeout=10s" expect="job.batch/indicat-migrate condition met" />
+
+## L'application
+
+<Guided>Trois fichiers pour une seule chose : le Deployment fait tourner les pods, le Service leur donne une adresse, l'Ingress publie cette adresse sur <V name="APP_DOMAIN" /> avec un certificat. Ensemble, ils sont l'application.</Guided>
+
+<Tabs group="indicat-manifests">
+
+<Tab label="deployment.yaml">
+
+<Annotated>
+
+```yaml title="deploy/deployment.yaml" {6,8,17-22}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: indicat
+spec:
+  replicas: ${APP_REPLICAS}
+  selector:
+    matchLabels: { app: indicat }
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }           # (1)
+  template:
+    metadata:
+      labels: { app: indicat }
+    spec:
+      containers:
+        - name: indicat
+          image: ${APP_IMAGE}
+          ports:
+            - containerPort: ${APP_PORT}
+          envFrom:
+            - secretRef: { name: indicat-secrets }              # (2)
+          readinessProbe:
+            httpGet: { path: /healthz, port: ${APP_PORT} }      # (3)
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: ${APP_PORT} }      # (4)
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }              # (5)
+            limits: { cpu: 500m, memory: 256Mi }
+```
+
+1. Ne jamais retirer un pod avant que son remplaçant soit Ready : un rollout ajoute un pod, l'attend, puis retire un ancien. Avec <V name="APP_REPLICAS" /> réplicas, les utilisateurs ne voient rien.
+2. Chaque clé du Secret devient une variable d'environnement : `DATABASE_URL`, `SECRET_KEY`.
+3. Readiness : tant qu'elle échoue, le pod est sorti du Service mais laissé tranquille. Démarrage lent, base perdue : pas de trafic, pas de redémarrage.
+4. Liveness : quand elle échoue, le kubelet redémarre le conteneur. D'où le délai, sinon un démarrage lent devient une boucle de redémarrages.
+5. Les requests sont ce que le scheduler réserve et ce contre quoi le HPA mesure ; les limits sont là où le conteneur est bridé (CPU) ou tué (mémoire). Mesure avec `kubectl top` après une semaine et ajuste.
+
+</Annotated>
+
+</Tab>
+
+<Tab label="service.yaml">
+
+```yaml title="deploy/service.yaml"
+apiVersion: v1
+kind: Service
+metadata:
+  name: indicat
+spec:
+  selector: { app: indicat }
+  ports:
+    - port: 80
+      targetPort: ${APP_PORT}
+```
+
+</Tab>
+
+<Tab label="ingress.yaml">
+
+<When is="TLS" equals="letsencrypt">
+
+```yaml title="deploy/ingress.yaml" {6,10-11}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: indicat
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: ["${APP_DOMAIN}"]
+      secretName: indicat-tls
+  rules:
+    - host: ${APP_DOMAIN}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: indicat
+                port: { number: 80 }
+```
+
+</When>
+
+<When is="TLS" equals="selfsigned">
+
+```yaml title="deploy/ingress.yaml" {6,10-11}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: indicat
+  annotations:
+    cert-manager.io/cluster-issuer: selfsigned
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: ["${APP_DOMAIN}"]
+      secretName: indicat-tls
+  rules:
+    - host: ${APP_DOMAIN}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: indicat
+                port: { number: 80 }
+```
+
+</When>
+
+</Tab>
+
+</Tabs>
+
+```bash
+kubectl -n ${NAMESPACE} apply -f deploy/deployment.yaml -f deploy/service.yaml -f deploy/ingress.yaml
+kubectl -n ${NAMESPACE} rollout status deploy/indicat
+```
+
+<Check cmd="kubectl -n ${NAMESPACE} get pods -l app=indicat --field-selector=status.phase=Running --no-headers | wc -l" expect="${APP_REPLICAS}" />
+
+<When is="TLS" equals="letsencrypt">
+
+<Check cmd={"curl -s -o /dev/null -w '%{http_code}' https://${APP_DOMAIN}/healthz"} expect="200" />
+
+</When>
+
+<When is="TLS" equals="selfsigned">
+
+<Check cmd={"curl -sk -o /dev/null -w '%{http_code}' https://${APP_DOMAIN}/healthz"} expect="200" />
+
+</When>
+
+<Details summary="Si les pods ne passent jamais Ready">
+Commence par les événements et les logs :
+
+```bash
+kubectl -n ${NAMESPACE} describe pod -l app=indicat | tail -20
+kubectl -n ${NAMESPACE} logs -l app=indicat --tail=50
+```
+
+Par ordre de probabilité :
+
+- `ImagePullBackOff` : mauvais nom ou tag d'image, ou pull secret manquant ou expiré.
+- `Readiness probe failed: connection refused` : le processus n'écoute pas sur <V name="APP_PORT" />, ou pas sur toutes les interfaces (`0.0.0.0`).
+- Les logs montrent une erreur de base : `DATABASE_URL` a le mauvais hôte ou mot de passe. Décode le Secret pour voir ce que voit le pod : `kubectl get secret indicat-secrets -o jsonpath='{.data.DATABASE_URL}' | base64 -d`.
+- `OOMKilled` dans le statut du pod : monte `limits.memory`.
+</Details>
+
+## Autoscaling
+
+<Guided>Le HorizontalPodAutoscaler ajoute des pods quand l'usage CPU moyen dépasse 70 % des requests, et en retire quand il redescend, entre <V name="APP_REPLICAS" /> et 6. Il a besoin de metrics-server, que k3s livre.</Guided>
+
+```yaml title="deploy/hpa.yaml"
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: indicat
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: indicat
+  minReplicas: ${APP_REPLICAS}
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+```
+
+```bash
+kubectl -n ${NAMESPACE} apply -f deploy/hpa.yaml
+```
+
+<Deep>L'utilisation est relative à `requests.cpu`, donc les 100m de request ci-dessus comptent : à 70m de moyenne par pod, le HPA monte. La descente attend cinq minutes par défaut (`behavior.scaleDown.stabilizationWindowSeconds`), pour qu'un pic ne fasse pas osciller le nombre de pods. Une fois que le HPA possède `replicas`, ne le fixe plus dans le Deployment : chaque `kubectl apply` le remettrait. Retire la ligne `replicas:` de `deployment.yaml` après le premier rollout, ou accepte qu'elle soit écrasée une minute plus tard.</Deep>
+
+<Check cmd="kubectl -n ${NAMESPACE} top pods -l app=indicat --no-headers | wc -l" expect="${APP_REPLICAS}" />
+
+## Au quotidien : rollout, rollback, logs, exec
+
+<Guided>Tout ce que tu faisais avec `systemctl` et `journalctl` a un équivalent kubectl. Les cinq que tu utiliseras chaque jour :</Guided>
+
+```bash
+kubectl -n ${NAMESPACE} rollout status deploy/indicat
+kubectl -n ${NAMESPACE} rollout history deploy/indicat
+kubectl -n ${NAMESPACE} rollout undo deploy/indicat
+kubectl -n ${NAMESPACE} logs -l app=indicat --tail=100 -f
+kubectl -n ${NAMESPACE} exec -it deploy/indicat -- sh
+```
+
+<Deep>Un Deployment garde ses ReplicaSets précédents (dix par défaut, `revisionHistoryLimit`) : `rollout undo` remonte le précédent, avec la même stratégie sans coupure. Il rétablit l'image et le template de pod, pas la base : une migration qui a supprimé une colonne n'est pas défaite par lui, c'est pourquoi les migrations doivent rester compatibles avec la version précédente (ajouter, déployer, retirer plus tard). `logs -l app=indicat` entremêle tous les pods ; `--prefix` étiquette chaque ligne du nom du pod. `exec` sur un `deploy/` choisit un pod ; pour un pod précis, nomme-le.</Deep>
+
+## Plus d'un réplica
+
+Avec <V name="APP_REPLICAS" /> pods, trois choses qui étaient gratuites sur un serveur demandent une décision : les sessions, les migrations, et ce qui se passe pendant la maintenance d'un nœud.
+
+<Deep>**Sessions.** Deux pods ne partagent pas leur mémoire. Si indicat garde les sessions en processus, un utilisateur oscille entre connecté et déconnecté au gré du round-robin du Service. Soit tu ranges les sessions en base ou dans un Redis, soit tu fais de la session un cookie signé (`SECRET_KEY` sert exactement à ça). Les sessions collantes sur l'Ingress (l'annotation `sticky` de Traefik sur le Service) sont le contournement, pas la solution. **Migrations.** Le Job tourne une fois, mais les anciens pods continuent sur le nouveau schéma jusqu'à ce que le rollout les remplace : chaque migration doit être compatible avec la version précédente. Étendre, déployer, contracter. **Perturbation.** `kubectl drain` sur un nœud (mises à jour, maintenance) évince les pods ; sans limite, il peut évincer les deux d'un coup. Un `PodDisruptionBudget` avec `minAvailable: 1` sur `app: indicat` fait attendre drain qu'un remplaçant soit Ready avant d'évincer le second pod. Cinq lignes, à avoir dès que les réplicas dépassent un :</Deep>
+
+<Deep>
+
+```yaml title="deploy/pdb.yaml"
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: indicat
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: indicat }
+```
+
+</Deep>
+
+## Terminé
+
+indicat répond sur <V name="APP_DOMAIN" /> depuis <V name="APP_REPLICAS" /> pods, avec sa base, ses secrets, des migrations qui tournent avant chaque rollout, et un autoscaler. Chaque objet est un fichier dans `deploy/`, exactement ce dont la page suivante a besoin : un pipeline qui construit l'image à chaque push, la tague avec le commit, et applique ces fichiers avec un ServiceAccount qui ne peut toucher qu'à <V name="NAMESPACE" />.

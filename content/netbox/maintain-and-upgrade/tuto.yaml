@@ -1,0 +1,109 @@
+# Inherits from ../series.yaml: NETBOX_HOST, INSTALL_DIR, OS, WEB, LDAP and the host/auth groups.
+# NETBOX_TOKEN is also declared by configure-for-your-team: same key, the reader fills it once per series.
+
+title:
+  en: Maintain and upgrade NetBox
+  fr: Maintenir et mettre à jour NetBox
+summary:
+  en: >-
+    Nightly backups you have actually restored once, an upgrade path you can roll back,
+    the housekeeping job, log rotation, and a probe that tells you NetBox is alive.
+  fr: >-
+    Des sauvegardes nocturnes que tu as restaurées au moins une fois, une mise à jour que tu
+    sais annuler, la tâche d'entretien, la rotation des logs, et une sonde qui dit si NetBox est vivant.
+difficulty: intermediate
+tags: [netbox, backup, postgresql, systemd, upgrade, monitoring]
+authors: [thudal]
+created: 2026-09-25
+minutes: 35
+validated: NetBox 4.4 · Ubuntu 24.04
+
+groups:
+  - id: maintenance
+    label: { en: Backups and upgrade, fr: Sauvegardes et mise à jour }
+  - id: offsite
+    label: { en: Off-site copy, fr: Copie distante }
+    desc: { en: Where the nightly backup is pushed over SSH., fr: Où la sauvegarde nocturne est poussée en SSH. }
+    when: { flag: OFFSITE }
+  - id: api
+    label: { en: API access, fr: Accès API }
+
+vars:
+  - key: BACKUP_DIR
+    kind: path
+    group: maintenance
+    default: /var/backups/netbox
+    label: { en: Backup directory, fr: Répertoire des sauvegardes }
+    hint:
+      en: Where the database dumps and the file archives land on the server. Root only.
+      fr: Là où atterrissent les dumps de base et les archives de fichiers sur le serveur. Root uniquement.
+    impact:
+      en: Put it on a partition with room for two weeks of dumps. A NetBox database is small (tens of MB for thousands of devices); the media folder is what grows if people attach images.
+      fr: Mets-le sur une partition avec de la place pour deux semaines de dumps. Une base NetBox est petite (quelques dizaines de Mo pour des milliers d'équipements) ; c'est le dossier media qui grossit si on attache des images.
+  - key: BACKUP_RETENTION_DAYS
+    kind: text
+    group: maintenance
+    default: "14"
+    label: { en: Retention (days), fr: Rétention (jours) }
+    hint:
+      en: Backups older than this are deleted after each nightly run. 14 covers a two-week holiday.
+      fr: Les sauvegardes plus vieilles que ça sont supprimées après chaque exécution nocturne. 14 couvre deux semaines de vacances.
+    impact:
+      en: With the off-site copy, the same retention applies on the remote side, since rsync mirrors the folder.
+      fr: Avec la copie distante, la même rétention s'applique côté distant, puisque rsync reflète le dossier.
+  - key: TARGET_REF
+    kind: text
+    group: maintenance
+    default: v4.4.1
+    label: { en: Version to upgrade to, fr: Version cible }
+    hint:
+      en: A git tag from the NetBox releases page. Read its release notes before typing it here.
+      fr: Un tag git de la page des releases de NetBox. Lis ses notes de version avant de le taper ici.
+    impact:
+      en: Checked out in the install directory, then applied by upgrade.sh. Going down a major version is not supported; a rollback restores the database.
+      fr: Extrait dans le répertoire d'installation, puis appliqué par upgrade.sh. Redescendre d'une version majeure n'est pas supporté ; un retour arrière restaure la base.
+  - key: BACKUP_HOST
+    kind: hostname
+    group: offsite
+    default: backup.example.com
+    when: { flag: OFFSITE }
+    label: { en: Backup host, fr: Serveur de sauvegarde }
+    hint:
+      en: A machine reachable over SSH from the NetBox server, on another site or at least another rack.
+      fr: Une machine joignable en SSH depuis le serveur NetBox, sur un autre site ou au moins une autre baie.
+  - key: BACKUP_USER
+    kind: user
+    group: offsite
+    default: backup
+    when: { flag: OFFSITE }
+    label: { en: SSH user on the backup host, fr: Utilisateur SSH sur le serveur de sauvegarde }
+    hint:
+      en: A dedicated account that owns the destination path and nothing else.
+      fr: Un compte dédié, propriétaire du chemin de destination et de rien d'autre.
+  - key: BACKUP_PATH
+    kind: path
+    group: offsite
+    default: /srv/backups/netbox
+    when: { flag: OFFSITE }
+    label: { en: Destination path, fr: Chemin de destination }
+    hint:
+      en: Folder on the backup host that mirrors the local backup directory. It must exist and belong to the SSH user.
+      fr: Dossier sur le serveur de sauvegarde qui reflète le répertoire local. Il doit exister et appartenir à l'utilisateur SSH.
+  - key: NETBOX_TOKEN
+    kind: secret
+    group: api
+    default: ""
+    label: { en: API token, fr: Jeton d'API }
+    hint:
+      en: A token with read access, from your profile → API tokens. Used to query /api/status/ after the upgrade and from the probe.
+      fr: Un jeton en lecture, depuis ton profil → jetons d'API. Sert à interroger /api/status/ après la mise à jour et depuis la sonde.
+    impact:
+      en: With LOGIN_REQUIRED on, /api/status/ answers 403 without a token. For a monitoring probe, create a dedicated read-only user and give the probe its token, not yours.
+      fr: Avec LOGIN_REQUIRED actif, /api/status/ répond 403 sans jeton. Pour une sonde de supervision, crée un utilisateur dédié en lecture seule et donne son jeton à la sonde, pas le tien.
+
+choices:
+  - key: OFFSITE
+    type: boolean
+    label: { en: Copy backups to another host (rsync over SSH), fr: Copier les sauvegardes sur un autre serveur (rsync en SSH) }
+    hint: { en: A backup on the same disk as the database is not a backup., fr: Une sauvegarde sur le même disque que la base n'est pas une sauvegarde. }
+    default: false

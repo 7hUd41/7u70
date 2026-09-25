@@ -1,0 +1,103 @@
+# Inherits from ../series.yaml: NETBOX_HOST, INSTALL_DIR, OS, WEB, LDAP and the host/auth groups.
+# NETBOX_TOKEN is also declared by configure-for-your-team: same key, the reader fills it once per series.
+
+title:
+  en: Automate NetBox with the API
+  fr: Automatiser NetBox par l'API
+summary:
+  en: >-
+    A scoped automation user, pynetbox or curl to read and write, a CSV import that survives
+    errors, webhooks on device changes, and a custom script run from the API.
+  fr: >-
+    Un utilisateur d'automatisation aux droits bornés, pynetbox ou curl pour lire et écrire, un import
+    CSV qui survit aux erreurs, des webhooks sur les changements d'équipements, et un script maison lancé par l'API.
+difficulty: intermediate
+tags: [netbox, api, pynetbox, python, webhooks, automation]
+authors: [thudal]
+created: 2026-09-25
+minutes: 45
+validated: NetBox 4.4 · Ubuntu 24.04 · pynetbox 7.x
+
+groups:
+  - id: api
+    label: { en: API access, fr: Accès API }
+  - id: data
+    label: { en: Sample data, fr: Données d'exemple }
+    desc: { en: What the page creates in NetBox., fr: Ce que la page crée dans NetBox. }
+  - id: events
+    label: { en: Events, fr: Événements }
+    desc: { en: Where NetBox sends webhooks., fr: Où NetBox envoie les webhooks. }
+    when: { flag: EVENTS }
+
+vars:
+  - key: NETBOX_TOKEN
+    kind: secret
+    group: api
+    default: ""
+    label: { en: API token, fr: Jeton d'API }
+    hint:
+      en: Your administrator token, as on the previous pages. It creates the automation user, its permissions, the event rules and runs the custom script.
+      fr: Ton jeton administrateur, comme sur les pages précédentes. Il crée l'utilisateur d'automatisation, ses permissions, les règles d'événements et lance le script maison.
+    impact:
+      en: A token carries the permissions of its user. Every command here sends it in the Authorization header over HTTPS; it never goes anywhere else.
+      fr: Un jeton porte les permissions de son utilisateur. Chaque commande ici l'envoie dans l'en-tête Authorization en HTTPS ; il ne va nulle part ailleurs.
+  - key: AUTOMATION_TOKEN
+    kind: secret
+    group: api
+    default: ""
+    label: { en: Automation token, fr: Jeton d'automatisation }
+    hint:
+      en: The token created for the automation user in the first step. Every read and write of data on this page uses it; the admin token only creates users, permissions, event rules and scripts.
+      fr: Le jeton créé pour l'utilisateur d'automatisation à la première étape. Toutes les lectures et écritures de données de cette page l'utilisent ; le jeton admin ne sert qu'à créer utilisateurs, permissions, règles d'événements et scripts.
+    impact:
+      en: Scoped by the permissions of the first step, with an expiry date. If a call answers 403, the permission is missing, not the token.
+      fr: Borné par les permissions de la première étape, avec une date d'expiration. Si un appel répond 403, c'est une permission qui manque, pas le jeton.
+  - key: AUTOMATION_USER
+    kind: user
+    group: api
+    default: netbox-automation
+    label: { en: Automation user, fr: Utilisateur d'automatisation }
+    hint:
+      en: A NetBox account used only by scripts. Its name shows up in the change log next to every automated change.
+      fr: Un compte NetBox utilisé uniquement par des scripts. Son nom apparaît dans le journal des changements à côté de chaque modification automatisée.
+    impact:
+      en: One user per system that writes (CI, IPAM sync, provisioning) keeps the change log readable and lets you revoke one without touching the others.
+      fr: Un utilisateur par système qui écrit (CI, synchro IPAM, provisionnement) garde le journal lisible et permet d'en révoquer un sans toucher aux autres.
+  - key: SITE_NAME
+    kind: text
+    group: data
+    default: Paris DC1
+    label: { en: Site name, fr: Nom du site }
+    hint:
+      en: The site the page creates and fills with devices. Its slug is derived from it (lowercase, dashes).
+      fr: Le site que la page crée et remplit d'équipements. Son slug en est dérivé (minuscules, tirets).
+    impact:
+      en: Also used as the constraint on the automation user's write permission, so it may only touch devices of this site.
+      fr: Sert aussi de contrainte à la permission d'écriture de l'utilisateur d'automatisation, qui ne peut toucher que les équipements de ce site.
+  - key: WEBHOOK_URL
+    kind: url
+    group: events
+    default: http://203.0.113.50:9000/netbox
+    when: { flag: EVENTS }
+    label: { en: Webhook receiver URL, fr: URL du récepteur de webhooks }
+    hint:
+      en: Where NetBox POSTs when a device changes. For the test, your own machine, on a port the NetBox server can reach.
+      fr: Là où NetBox fait un POST quand un équipement change. Pour le test, ta propre machine, sur un port que le serveur NetBox peut joindre.
+    impact:
+      en: The RQ worker on the server makes the call; a firewall between the two shows up as failed jobs in the queue, not as an error in the UI.
+      fr: C'est le worker RQ du serveur qui fait l'appel ; un pare-feu entre les deux se voit comme des tâches en échec dans la file, pas comme une erreur dans l'interface.
+
+choices:
+  - key: CLIENT
+    type: select
+    label: { en: Client, fr: Client }
+    hint: { en: pynetbox for anything beyond two calls; curl to see the raw HTTP., fr: pynetbox au-delà de deux appels ; curl pour voir le HTTP brut. }
+    default: pynetbox
+    options:
+      - { value: pynetbox, label: { en: pynetbox (Python), fr: pynetbox (Python) } }
+      - { value: curl, label: { en: curl, fr: curl } }
+  - key: EVENTS
+    type: boolean
+    label: { en: Event rules and webhooks, fr: Règles d'événements et webhooks }
+    hint: { en: NetBox calls your systems when a device changes., fr: NetBox appelle tes systèmes quand un équipement change. }
+    default: true

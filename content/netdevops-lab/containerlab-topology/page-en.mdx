@@ -1,0 +1,465 @@
+{/* First pass — to be validated against containerlab.dev (install, nokia_srlinux and ceos kinds, save/destroy), learn.srlinux.dev and arista.com (cEOS-lab) before publishing. */}
+
+A network lab used to be a rack, a week of cabling and a licence. With containerlab it is a YAML file and one command: the nodes are containers running a real network OS, the links are virtual wires between them. This page installs the tooling on **one Linux machine**, brings up a spine and two leaves, configures the first links, and puts the whole thing in git so the next pages can build on it.
+
+<Run>
+
+The script installs Docker and containerlab on the lab machine, writes the topology to <V name="LAB_DIR" />, deploys it and initialises the repository. Run it **on the lab machine** as a user with sudo. <When is="NOS" equals="ceos">The cEOS image must already be imported as <V name="CEOS_IMAGE" /> (see the image step: it cannot be downloaded without an account).</When>
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# NetDevOps lab — containerlab topology ${LAB_NAME} in ${LAB_DIR}
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker "$USER"
+sudo bash -c "$(curl -sL https://get.containerlab.dev)" -- -v ${CLAB_VERSION}
+mkdir -p ${LAB_DIR} && cd ${LAB_DIR}
+```
+
+<When is="NOS" equals="srlinux">
+
+```bash
+sudo docker pull ${SRL_IMAGE}
+cat > topology.clab.yml <<EOF
+name: ${LAB_NAME}
+mgmt:
+  network: ${LAB_NAME}-mgmt
+  ipv4-subnet: ${MGMT_SUBNET}
+topology:
+  kinds:
+    nokia_srlinux:
+      image: ${SRL_IMAGE}
+  nodes:
+    spine1: { kind: nokia_srlinux, mgmt-ipv4: ${SPINE1_MGMT} }
+    leaf1:  { kind: nokia_srlinux, mgmt-ipv4: ${LEAF1_MGMT} }
+    leaf2:  { kind: nokia_srlinux, mgmt-ipv4: ${LEAF2_MGMT} }
+  links:
+    - endpoints: ["spine1:e1-1", "leaf1:e1-1"]
+    - endpoints: ["spine1:e1-2", "leaf2:e1-1"]
+EOF
+```
+
+</When>
+
+<When is="NOS" equals="ceos">
+
+```bash
+sudo docker image inspect ${CEOS_IMAGE} >/dev/null
+cat > topology.clab.yml <<EOF
+name: ${LAB_NAME}
+mgmt:
+  network: ${LAB_NAME}-mgmt
+  ipv4-subnet: ${MGMT_SUBNET}
+topology:
+  kinds:
+    ceos:
+      image: ${CEOS_IMAGE}
+  nodes:
+    spine1: { kind: ceos, mgmt-ipv4: ${SPINE1_MGMT} }
+    leaf1:  { kind: ceos, mgmt-ipv4: ${LEAF1_MGMT} }
+    leaf2:  { kind: ceos, mgmt-ipv4: ${LEAF2_MGMT} }
+  links:
+    - endpoints: ["spine1:eth1", "leaf1:eth1"]
+    - endpoints: ["spine1:eth2", "leaf2:eth1"]
+EOF
+```
+
+</When>
+
+```bash
+printf 'clab-*/\n*.tar.xz\n.venv/\n' > .gitignore
+git init -q 2>/dev/null || true
+git add -A && git -c user.name=lab -c user.email=lab@localhost commit -qm "containerlab topology" || true
+sudo containerlab deploy -t topology.clab.yml
+sudo containerlab inspect -t topology.clab.yml
+echo "Done. Nodes: ssh admin@${SPINE1_MGMT} (and ${LEAF1_MGMT}, ${LEAF2_MGMT})"
+```
+
+<Warn>The Docker convenience script and the containerlab installer both run as root and add repositories to the machine. Fine on a lab host; read them first on anything else.</Warn>
+
+</Run>
+
+## Before you start
+
+<Guided>You need one Linux machine, physical or virtual, with **Ubuntu 22.04 or 24.04**, at least 4 vCPU and 8 GB of RAM (each node takes 1 to 2 GB), 20 GB of disk, sudo, and internet access to pull images. A VM in the cloud works; nested virtualisation is **not** needed, these are containers. Everything on this page happens on that machine, in <V name="LAB_DIR" />.</Guided>
+
+```bash
+sudo apt update && sudo apt install -y curl git
+mkdir -p ${LAB_DIR}
+```
+
+<Deep>Why one machine and not your laptop? The node images are Linux x86_64 containers; on an ARM Mac they run under emulation, when they run at all, and the CI runner of the last page must be a Linux host with Docker anyway. Setting the lab up on the same kind of machine you will run CI on removes a whole class of "works on my laptop" surprises. Keep the laptop for editing and `ssh`.</Deep>
+
+<Check cmd="lsb_release -is && docker --version >/dev/null 2>&1 || echo no-docker-yet" expect="Ubuntu
+no-docker-yet" />
+
+## Install Docker and containerlab
+
+<Guided>containerlab drives Docker: it creates the containers, the virtual wires between them and the management network. Docker comes first, from Docker's own repository (the Ubuntu package is older and lacks the buildx and compose plugins).</Guided>
+
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER
+newgrp docker
+docker run --rm hello-world | head -2
+```
+
+Then containerlab, pinned to <V name="CLAB_VERSION" />:
+
+```bash
+sudo bash -c "$(curl -sL https://get.containerlab.dev)" -- -v ${CLAB_VERSION}
+containerlab version
+```
+
+<Note>The installer's `-v` flag selects a release; without it you get the latest. Confirm the exact flag on containerlab.dev/install, the script has changed shape over the years. The same version goes on the CI runner later, so note it.</Note>
+
+<Deep>containerlab is a single Go binary that talks to the Docker API on `/var/run/docker.sock` and creates veth pairs between the containers' network namespaces for the links: that is why it needs root. It also writes `/etc/hosts` entries for each node, so `ssh admin@clab-<V name="LAB_NAME" />-spine1` works without knowing the IP. Everything it creates carries the lab name as a prefix, which is how it finds its own containers again to inspect or destroy them.</Deep>
+
+<Check cmd="containerlab version | grep -o 'version: ${CLAB_VERSION}'" expect="version: ${CLAB_VERSION}" />
+
+## Get the image
+
+<When is="NOS" equals="srlinux">
+
+<Guided>Nokia publishes SR Linux as a public container image on GitHub's registry: no account, no licence, a `docker pull`. Pin a tag; the CLI on the next pages was written for the 24.x line.</Guided>
+
+```bash
+docker pull ${SRL_IMAGE}
+```
+
+<Deep>The image is a full SR Linux: the management server, the CLI (`sr_cli`), gNMI on 57400 and JSON-RPC on 80/443, all started by containerlab with a default configuration that enables them and creates the `admin` user. Interfaces `ethernet-1/1` to `ethernet-1/N` exist as soon as a link is attached; the default chassis type (`ixrd2l`) is enough for a lab. A node needs about 1.5 GB of RAM and a minute to boot.</Deep>
+
+<Check cmd="docker image ls ${SRL_IMAGE} -q | wc -l" expect="1" />
+
+</When>
+
+<When is="NOS" equals="ceos">
+
+<Guided>Arista's cEOS-lab is free but sits behind a registration: create an account on arista.com, go to **Software downloads → cEOS-lab**, and download the 64-bit tarball for your version (`cEOS64-lab-4.32.0F.tar.xz` for the default). Copy it to the lab machine, then import it under the name you set in <V name="CEOS_IMAGE" />.</Guided>
+
+```bash
+cd ${LAB_DIR}
+docker import cEOS64-lab-4.32.0F.tar.xz ${CEOS_IMAGE}
+docker image ls ${CEOS_IMAGE}
+```
+
+<Note>`docker import`, not `docker load`: the tarball is a filesystem, not a saved image. Match the version in the file name with the tag you give the image, future you will thank you when three versions coexist.</Note>
+
+<Deep>cEOS is EOS's user space in a container, with the same CLI and the same `startup-config` at `/mnt/flash/startup-config`. containerlab sets the environment variables it needs (`CEOS=1`, `INTFTYPE=eth`…) and maps `eth1` to `Ethernet1`. Boot takes about two minutes, longer than SR Linux, and the image is under Arista's licence: do not push it to a public registry, which is also why the CI runner on the last page must import it by hand.</Deep>
+
+<Check cmd="docker image ls ${CEOS_IMAGE} -q | wc -l" expect="1" />
+
+</When>
+
+## Write the topology
+
+<Guided>One file describes the lab: a name, a management network, the nodes, the links. Names are the ones NetBox will use on the next page, so keep them: `spine1`, `leaf1`, `leaf2`. The management IPs are pinned, not left to Docker, so that every redeploy gives the same addresses and NetBox stays right.</Guided>
+
+<When is="NOS" equals="srlinux">
+
+<Annotated>
+
+```yaml title="${LAB_DIR}/topology.clab.yml" {1,4-5,9,12-14,16-17}
+name: ${LAB_NAME}                                # (1)
+
+mgmt:
+  network: ${LAB_NAME}-mgmt
+  ipv4-subnet: ${MGMT_SUBNET}                    # (2)
+
+topology:
+  kinds:
+    nokia_srlinux:
+      image: ${SRL_IMAGE}                        # (3)
+  nodes:
+    spine1: { kind: nokia_srlinux, mgmt-ipv4: ${SPINE1_MGMT} }
+    leaf1:  { kind: nokia_srlinux, mgmt-ipv4: ${LEAF1_MGMT} }   # (4)
+    leaf2:  { kind: nokia_srlinux, mgmt-ipv4: ${LEAF2_MGMT} }
+  links:
+    - endpoints: ["spine1:e1-1", "leaf1:e1-1"]  # (5)
+    - endpoints: ["spine1:e1-2", "leaf2:e1-1"]
+```
+
+1. The lab name: prefix of every container (`clab-<V name="LAB_NAME" />-spine1`), of the working folder and of the management network.
+2. A Docker bridge network created for the lab; each node gets its management interface on it. The lab host is the gateway (`.1`).
+3. Set once at the kind level, inherited by every node of that kind. Change the tag here and redeploy to test another release.
+4. A fixed management IP inside the subnet. Docker keeps the first addresses for itself; start at `.11` and you never collide.
+5. A link is two endpoints, `node:interface`. `e1-1` is containerlab's short form of `ethernet-1/1`; the endpoint name is what you will see in `show interface`.
+
+</Annotated>
+
+</When>
+
+<When is="NOS" equals="ceos">
+
+<Annotated>
+
+```yaml title="${LAB_DIR}/topology.clab.yml" {1,4-5,9,12-14,16-17}
+name: ${LAB_NAME}                                # (1)
+
+mgmt:
+  network: ${LAB_NAME}-mgmt
+  ipv4-subnet: ${MGMT_SUBNET}                    # (2)
+
+topology:
+  kinds:
+    ceos:
+      image: ${CEOS_IMAGE}                       # (3)
+  nodes:
+    spine1: { kind: ceos, mgmt-ipv4: ${SPINE1_MGMT} }
+    leaf1:  { kind: ceos, mgmt-ipv4: ${LEAF1_MGMT} }   # (4)
+    leaf2:  { kind: ceos, mgmt-ipv4: ${LEAF2_MGMT} }
+  links:
+    - endpoints: ["spine1:eth1", "leaf1:eth1"]  # (5)
+    - endpoints: ["spine1:eth2", "leaf2:eth1"]
+```
+
+1. The lab name: prefix of every container (`clab-<V name="LAB_NAME" />-spine1`), of the working folder and of the management network.
+2. A Docker bridge network created for the lab; each node gets its management interface on it. The lab host is the gateway (`.1`).
+3. Set once at the kind level, inherited by every node of that kind. Change the tag here and redeploy to test another release.
+4. A fixed management IP inside the subnet. Docker keeps the first addresses for itself; start at `.11` and you never collide.
+5. A link is two endpoints, `node:interface`. `eth1` in the container is `Ethernet1` in EOS; the numbering must be contiguous, `eth1` then `eth2`, no gaps.
+
+</Annotated>
+
+</When>
+
+<Deep>containerlab has an `inspect`-able model of everything in this file and a JSON schema for it: a wrong key fails at deploy time, not silently. Larger labs use `defaults:` and `groups:` to avoid repeating kinds, and `startup-config:` per node to boot with a given configuration; on the next pages configuration comes from NetBox instead, so the nodes boot blank on purpose. Links can also go to the host (`host:eth1`) or to a bridge, which is how you attach a real machine or a traffic generator.</Deep>
+
+<Check cmd={"cd ${LAB_DIR} && python3 -c 'import yaml; t = yaml.safe_load(open(\"topology.clab.yml\")); print(len(t[\"topology\"][\"nodes\"]), len(t[\"topology\"][\"links\"]))'"} expect="3 2" />
+
+## Deploy and look around
+
+<Guided>Deploy pulls nothing you have not pulled, creates the management network, starts the three containers and wires the links. The first boot takes one to two minutes per node; `inspect` shows the table you will keep coming back to.</Guided>
+
+```bash
+cd ${LAB_DIR}
+sudo containerlab deploy -t topology.clab.yml
+sudo containerlab inspect -t topology.clab.yml
+```
+
+<When is="NOS" equals="srlinux">
+
+Log in to a node. containerlab created `/etc/hosts` entries, and the default credentials are `admin` / `NokiaSrl1!`:
+
+```bash
+ssh admin@${SPINE1_MGMT}
+```
+
+```text
+A:spine1# show version
+A:spine1# show interface brief
+```
+
+<Deep>The `A:` prompt means the active management server; SR Linux's CLI is a view over a YANG model, so `show` output, `info` (the running config, as a tree or `info flat` as `set` lines) and the gNMI paths of the next pages are the same thing seen from three sides. `docker exec -it clab-<V name="LAB_NAME" />-spine1 sr_cli` gets you the same CLI without SSH, handy when the management network misbehaves.</Deep>
+
+</When>
+
+<When is="NOS" equals="ceos">
+
+Log in to a node. containerlab created `/etc/hosts` entries, and the default credentials are `admin` / `admin`:
+
+```bash
+ssh admin@${SPINE1_MGMT}
+```
+
+```text
+spine1>enable
+spine1#show version
+spine1#show interfaces status
+```
+
+<Deep>Same CLI as a physical EOS switch, same `show` commands, same `startup-config`. `docker exec -it clab-<V name="LAB_NAME" />-spine1 Cli` gets you there without SSH. If SSH refuses the connection during the first two minutes, the box is still booting; `docker logs` shows the agents starting.</Deep>
+
+</When>
+
+<Check cmd="docker ps --filter name=clab-${LAB_NAME}- -q | wc -l" expect="3" />
+
+<Check cmd="sudo containerlab inspect -t ${LAB_DIR}/topology.clab.yml | grep -c running" expect="3" />
+
+<Details summary="If a node stays in 'created' or restarts">
+`docker logs clab-<V name="LAB_NAME" />-spine1` tells. The usual causes: not enough RAM (the kernel kills the biggest process, `dmesg | grep -i kill`), <When is="NOS" equals="ceos">a cEOS tarball imported with `docker load` instead of `docker import`, </When>or a management subnet that overlaps a network the host already has (`ip route`; pick another <V name="MGMT_SUBNET" />). Destroy, fix, redeploy.
+</Details>
+
+## A first configuration
+
+<Guided>Nothing talks yet: the links are up at layer 2, but no interface has an address. Give each end of each link an address from a /31, the standard for point-to-point links, and ping across. spine1–leaf1 uses `10.1.0.0/31`, spine1–leaf2 uses `10.1.0.2/31`; the spine takes the even address. These are lab constants: on the next page they move into NetBox and never get typed again.</Guided>
+
+<When is="NOS" equals="srlinux">
+
+<Tabs group="first-config">
+
+<Tab label="spine1">
+
+```text
+enter candidate
+set / interface ethernet-1/1 admin-state enable
+set / interface ethernet-1/1 subinterface 0 admin-state enable
+set / interface ethernet-1/1 subinterface 0 ipv4 admin-state enable
+set / interface ethernet-1/1 subinterface 0 ipv4 address 10.1.0.0/31
+set / interface ethernet-1/2 admin-state enable
+set / interface ethernet-1/2 subinterface 0 admin-state enable
+set / interface ethernet-1/2 subinterface 0 ipv4 admin-state enable
+set / interface ethernet-1/2 subinterface 0 ipv4 address 10.1.0.2/31
+set / network-instance default interface ethernet-1/1.0
+set / network-instance default interface ethernet-1/2.0
+commit now
+```
+
+</Tab>
+
+<Tab label="leaf1">
+
+```text
+enter candidate
+set / interface ethernet-1/1 admin-state enable
+set / interface ethernet-1/1 subinterface 0 admin-state enable
+set / interface ethernet-1/1 subinterface 0 ipv4 admin-state enable
+set / interface ethernet-1/1 subinterface 0 ipv4 address 10.1.0.1/31
+set / network-instance default interface ethernet-1/1.0
+commit now
+```
+
+</Tab>
+
+<Tab label="leaf2">
+
+```text
+enter candidate
+set / interface ethernet-1/1 admin-state enable
+set / interface ethernet-1/1 subinterface 0 admin-state enable
+set / interface ethernet-1/1 subinterface 0 ipv4 admin-state enable
+set / interface ethernet-1/1 subinterface 0 ipv4 address 10.1.0.3/31
+set / network-instance default interface ethernet-1/1.0
+commit now
+```
+
+</Tab>
+
+</Tabs>
+
+<Deep>Three things a Junos or IOS engineer trips on. An address lives on a *subinterface* (`ethernet-1/1.0`), never on the interface. An interface belongs to nothing until you put its subinterface in a *network-instance*; `default` is the global routing table. And since 23.x the IPv4 stack of a subinterface is disabled until `ipv4 admin-state enable`. `enter candidate` opens a private candidate, `commit now` applies it and skips the confirmation timer; `diff` before committing shows what is about to change, which the push step of the third page relies on.</Deep>
+
+From spine1, ping leaf1 across the link:
+
+```text
+ping -c 3 10.1.0.1 network-instance default
+```
+
+<Note>SR Linux's `ping` takes the network instance as a keyword after the destination; if your release rejects the order, `ping network-instance default 10.1.0.1` is the other form. Check `ping ?`.</Note>
+
+<Check cmd={"docker exec clab-${LAB_NAME}-spine1 sr_cli 'ping -c 3 10.1.0.1 network-instance default' | grep -o '3 received'"} expect="3 received" />
+
+</When>
+
+<When is="NOS" equals="ceos">
+
+<Tabs group="first-config">
+
+<Tab label="spine1">
+
+```text
+enable
+configure
+ip routing
+interface Ethernet1
+   no switchport
+   ip address 10.1.0.0/31
+interface Ethernet2
+   no switchport
+   ip address 10.1.0.2/31
+end
+write
+```
+
+</Tab>
+
+<Tab label="leaf1">
+
+```text
+enable
+configure
+ip routing
+interface Ethernet1
+   no switchport
+   ip address 10.1.0.1/31
+end
+write
+```
+
+</Tab>
+
+<Tab label="leaf2">
+
+```text
+enable
+configure
+ip routing
+interface Ethernet1
+   no switchport
+   ip address 10.1.0.3/31
+end
+write
+```
+
+</Tab>
+
+</Tabs>
+
+<Deep>cEOS boots as a switch: every Ethernet port is a layer-2 access port in VLAN 1 and routing is off. `no switchport` turns a port into a routed interface, `ip routing` turns the router on; forget either and the ping fails with no error anywhere. `write` copies the running config to `startup-config`, which is what `containerlab save` reads back.</Deep>
+
+From spine1, ping leaf1 across the link:
+
+```text
+ping 10.1.0.1
+```
+
+<Check cmd={"docker exec clab-${LAB_NAME}-spine1 Cli -p 15 -c 'ping 10.1.0.1 repeat 3' | grep -o '3 received'"} expect="3 received" />
+
+</When>
+
+## Save, destroy, redeploy
+
+<Guided>A lab you cannot throw away is a pet. `save` copies each node's running configuration into the lab's working folder; `destroy` removes the containers and the network and keeps that folder; the next `deploy` boots the nodes with the saved configuration. `destroy --cleanup` removes the folder too, for a truly blank lab.</Guided>
+
+```bash
+cd ${LAB_DIR}
+sudo containerlab save -t topology.clab.yml
+ls clab-${LAB_NAME}/
+sudo containerlab destroy -t topology.clab.yml
+sudo containerlab deploy -t topology.clab.yml
+```
+
+<Deep><When is="NOS" equals="srlinux">For SR Linux, `save` runs `tools system configuration save` and the checkpoint ends up under `clab-<V name="LAB_NAME" />/spine1/config/`; </When><When is="NOS" equals="ceos">For cEOS, `save` runs `write` and the file is `clab-<V name="LAB_NAME" />/spine1/flash/startup-config`; </When>containerlab mounts that folder into the container, so a redeploy finds it. `containerlab redeploy` does destroy + deploy in one command. On the next pages the nodes boot blank on purpose and get their configuration from NetBox: `save` is a convenience for hand-made experiments, not the source of truth. Confirm the exact paths for your version on containerlab.dev, kinds section.</Deep>
+
+<Check cmd="sudo containerlab inspect -t ${LAB_DIR}/topology.clab.yml | grep -c running" expect="3" />
+
+## The lab in git
+
+<Guided>The topology file is code: version it from day one. The working folder containerlab creates (`clab-<V name="LAB_NAME" />/`) holds runtime files and saved configs and is ignored; the cEOS tarball, if any, is ignored too.</Guided>
+
+```text title="${LAB_DIR}/.gitignore"
+clab-*/
+*.tar.xz
+.venv/
+```
+
+```bash
+cd ${LAB_DIR}
+git init
+git add topology.clab.yml .gitignore
+git commit -m "containerlab topology: spine1, leaf1, leaf2"
+```
+
+<Deep>Everything the following pages add lives in this repository: the seed script for NetBox, the templates, the rendering and push scripts, the tests, and the pipeline file. The last page pushes it to GitHub or GitLab and runs it on a runner installed on this very machine, which is why the layout under <V name="LAB_DIR" /> matters from the start.</Deep>
+
+<Check cmd="git -C ${LAB_DIR} status --short | wc -l" expect="0" />
+
+## Done
+
+Three <When is="NOS" equals="srlinux">SR Linux</When><When is="NOS" equals="ceos">cEOS</When> nodes run on <V name="LAB_DIR" />, wired spine-to-leaf, reachable on <V name="SPINE1_MGMT" />, <V name="LEAF1_MGMT" /> and <V name="LEAF2_MGMT" />, and the topology is in git. You can destroy and rebuild the whole thing in two commands:
+
+```bash
+cd ${LAB_DIR} && sudo containerlab destroy -t topology.clab.yml --cleanup && sudo containerlab deploy -t topology.clab.yml
+```
+
+The addresses you typed by hand in this page are the last ones you will type: the next page models the lab in NetBox, devices, interfaces, cables and IPs, so that configuration can be generated from it.

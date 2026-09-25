@@ -1,0 +1,204 @@
+# The gist: a push starts a pipeline that builds and pushes the image, then
+# tells the cluster to run it. Quick: five boxes. Guided adds the ServiceAccount
+# and the CI secret. Deep adds ports, the token and the kustomize step.
+title: { en: "From git push to running pods", fr: "Du git push aux pods qui tournent" }
+caption:
+  en: "A push to main runs the pipeline: it builds the image, pushes it to the registry tagged with the commit SHA, then, with a kubeconfig limited to ${NAMESPACE}, applies the manifests with that tag and waits for the rollout."
+  fr: "Un push sur main lance le pipeline : il construit l'image, la pousse dans le registre taguée avec le SHA du commit, puis, avec un kubeconfig limité à ${NAMESPACE}, applique les manifestes avec ce tag et attend le rollout."
+
+groups:
+  - id: forge
+    label: { en: "Your forge", fr: "Ta forge" }
+    desc:
+      en: "GitHub or GitLab: the repository, the runners that execute the pipeline, and the registry that stores the images."
+      fr: "GitHub ou GitLab : le dépôt, les runners qui exécutent le pipeline, et le registre qui stocke les images."
+  - id: cluster
+    label: { en: "Your cluster", fr: "Ton cluster" }
+    desc:
+      en: "The k3s cluster. The API on ${NODE_IP}:6443 must be reachable from the runners."
+      fr: "Le cluster k3s. L'API sur ${NODE_IP}:6443 doit être joignable depuis les runners."
+
+nodes:
+  - id: dev
+    kind: user
+    label: { en: "You", fr: "Toi" }
+    sub: "git push origin main"
+    desc:
+      en: "A push to main is the deployment. No kubectl on your side anymore, except to watch."
+      fr: "Un push sur main, c'est le déploiement. Plus de kubectl de ton côté, sauf pour regarder."
+  - id: repo
+    kind: file
+    label: { en: "Repository", fr: "Dépôt" }
+    sub: "${REPO}"
+    in: forge
+    desc:
+      en: "The application code, the Dockerfile, the deploy/ folder from the previous page, and the pipeline file."
+      fr: "Le code de l'application, le Dockerfile, le dossier deploy/ de la page précédente, et le fichier de pipeline."
+    deep:
+      sub: "${REPO} · Dockerfile · deploy/ · pipeline file"
+  - id: runner
+    kind: service
+    label: { en: "GitHub Actions", fr: "GitHub Actions" }
+    sub: "build → push → deploy"
+    in: forge
+    focus: true
+    when: { is: CI, equals: github }
+    desc:
+      en: "Two jobs on a hosted runner: build with buildx and push to GHCR, then deploy with kubectl using the KUBECONFIG_B64 secret."
+      fr: "Deux jobs sur un runner hébergé : build avec buildx et push sur GHCR, puis deploy avec kubectl via le secret KUBECONFIG_B64."
+    deep:
+      sub: ".github/workflows/deploy.yml · ubuntu-latest · environment production"
+  - id: runner-gl
+    kind: service
+    label: { en: "GitLab CI", fr: "GitLab CI" }
+    sub: "build → deploy"
+    in: forge
+    focus: true
+    when: { is: CI, equals: gitlab }
+    desc:
+      en: "Two stages: build with docker-in-docker and push to the project registry, then deploy with kubectl using the KUBECONFIG_B64 variable."
+      fr: "Deux stages : build en docker-in-docker et push sur le registre du projet, puis deploy avec kubectl via la variable KUBECONFIG_B64."
+    deep:
+      sub: ".gitlab-ci.yml · docker:dind · environment production"
+  - id: kubeconfig
+    kind: file
+    label: { en: "CI secret", fr: "Secret de CI" }
+    sub: "KUBECONFIG_B64"
+    in: forge
+    level: guided
+    desc:
+      en: "The kubeconfig of the ci-deploy ServiceAccount, base64-encoded, stored as a masked secret. It can only act inside ${NAMESPACE}."
+      fr: "Le kubeconfig du ServiceAccount ci-deploy, encodé en base64, stocké en secret masqué. Il ne peut agir que dans ${NAMESPACE}."
+  - id: registry
+    kind: cloud
+    label: { en: "Registry", fr: "Registre" }
+    sub: "${IMAGE_REPO}:<sha>"
+    in: forge
+    desc:
+      en: "One image per commit, tagged with its SHA. Never 'latest' in production: a tag that moves cannot be rolled back."
+      fr: "Une image par commit, taguée avec son SHA. Jamais « latest » en production : un tag qui bouge ne se rétablit pas."
+  - id: api
+    kind: server
+    label: { en: "API server", fr: "API server" }
+    sub: "${NODE_IP}:6443"
+    in: cluster
+    desc:
+      en: "Receives the pipeline's kubectl calls, authenticated by the ServiceAccount token, authorised by its Role."
+      fr: "Reçoit les appels kubectl du pipeline, authentifiés par le token du ServiceAccount, autorisés par son Role."
+    deep:
+      sub: "https://${NODE_IP}:6443 · token auth · RBAC"
+  - id: sa
+    kind: file
+    label: { en: "ServiceAccount", fr: "ServiceAccount" }
+    sub: "ci-deploy · Role · RoleBinding"
+    in: cluster
+    level: guided
+    desc:
+      en: "An identity for the pipeline with a Role limited to ${NAMESPACE}: deployments, jobs, services, ingresses. Nothing in other namespaces, no secrets."
+      fr: "Une identité pour le pipeline avec un Role limité à ${NAMESPACE} : deployments, jobs, services, ingresses. Rien dans les autres namespaces, pas de secrets."
+    deep:
+      sub: "ci-deploy · Role in ${NAMESPACE} · long-lived token Secret"
+  - id: deploy
+    kind: service
+    label: { en: "indicat", fr: "indicat" }
+    sub: "Deployment · ${NAMESPACE}"
+    in: cluster
+    desc:
+      en: "The Deployment from the previous page. Its image tag changes at each pipeline; the rollout replaces the pods one by one."
+      fr: "Le Deployment de la page précédente. Son tag d'image change à chaque pipeline ; le rollout remplace les pods un par un."
+    deep:
+      sub: "Job indicat-migrate then Deployment indicat · image ${IMAGE_REPO}:<sha>"
+
+edges:
+  - from: dev
+    to: repo
+    label: "push"
+    deep: { label: "git push · HTTPS or SSH" }
+    desc:
+      en: "The commit lands on main."
+      fr: "Le commit arrive sur main."
+  - from: repo
+    to: runner
+    label: "on: push"
+    when: { is: CI, equals: github }
+    desc:
+      en: "The workflow triggers on pushes to main."
+      fr: "Le workflow se déclenche sur les push vers main."
+  - from: repo
+    to: runner-gl
+    label: "pipeline"
+    when: { is: CI, equals: gitlab }
+    desc:
+      en: "The pipeline runs on pushes; the deploy stage only on main."
+      fr: "Le pipeline tourne sur les push ; le stage deploy seulement sur main."
+  - from: runner
+    to: registry
+    label: "docker push"
+    when: { is: CI, equals: github }
+    deep: { label: "buildx build --push · GITHUB_TOKEN · packages: write" }
+    desc:
+      en: "The runner logs in with its own GITHUB_TOKEN and pushes the image tagged with the commit SHA."
+      fr: "Le runner se connecte avec son propre GITHUB_TOKEN et pousse l'image taguée avec le SHA du commit."
+  - from: runner-gl
+    to: registry
+    label: "docker push"
+    when: { is: CI, equals: gitlab }
+    deep: { label: "buildx build --push · CI_REGISTRY_PASSWORD" }
+    desc:
+      en: "The job logs in with the built-in CI_REGISTRY_USER / CI_REGISTRY_PASSWORD and pushes the image tagged with the commit SHA."
+      fr: "Le job se connecte avec les variables intégrées CI_REGISTRY_USER / CI_REGISTRY_PASSWORD et pousse l'image taguée avec le SHA du commit."
+  - from: runner
+    to: api
+    label: "kubectl apply -k"
+    when: { is: CI, equals: github }
+    deep: { label: "kubectl apply -k deploy/ · rollout status · TCP 6443" }
+    desc:
+      en: "kustomize rewrites the image tag, the migrations Job runs, then the Deployment is applied and the job waits for the rollout."
+      fr: "kustomize réécrit le tag d'image, le Job de migrations tourne, puis le Deployment est appliqué et le job attend le rollout."
+  - from: runner-gl
+    to: api
+    label: "kubectl apply -k"
+    when: { is: CI, equals: gitlab }
+    deep: { label: "kubectl apply -k deploy/ · rollout status · TCP 6443" }
+    desc:
+      en: "kustomize rewrites the image tag, the migrations Job runs, then the Deployment is applied and the job waits for the rollout."
+      fr: "kustomize réécrit le tag d'image, le Job de migrations tourne, puis le Deployment est appliqué et le job attend le rollout."
+  - from: kubeconfig
+    to: runner
+    label: "secret"
+    dashed: true
+    level: guided
+    when: { is: CI, equals: github }
+    desc:
+      en: "Injected into the deploy job only, decoded to ~/.kube/config on the runner."
+      fr: "Injecté dans le job deploy seulement, décodé vers ~/.kube/config sur le runner."
+  - from: kubeconfig
+    to: runner-gl
+    label: "variable"
+    dashed: true
+    level: guided
+    when: { is: CI, equals: gitlab }
+    desc:
+      en: "A masked, protected CI/CD variable, decoded to ~/.kube/config in the deploy job."
+      fr: "Une variable CI/CD masquée et protégée, décodée vers ~/.kube/config dans le job deploy."
+  - from: sa
+    to: api
+    label: "token · RBAC"
+    dashed: true
+    level: guided
+    desc:
+      en: "The API checks the token, then the Role: anything outside ${NAMESPACE} is forbidden."
+      fr: "L'API vérifie le token, puis le Role : tout ce qui sort de ${NAMESPACE} est interdit."
+  - from: api
+    to: deploy
+    label: "rollout"
+    desc:
+      en: "New ReplicaSet with the new tag; pods replaced one at a time, old ones kept until the new are Ready."
+      fr: "Nouveau ReplicaSet avec le nouveau tag ; pods remplacés un par un, les anciens gardés jusqu'à ce que les nouveaux soient Ready."
+  - from: registry
+    to: deploy
+    label: "pull :sha"
+    dashed: true
+    desc:
+      en: "Each node pulls the exact image of the commit being deployed."
+      fr: "Chaque nœud tire l'image exacte du commit déployé."

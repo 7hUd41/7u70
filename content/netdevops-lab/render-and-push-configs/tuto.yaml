@@ -1,0 +1,34 @@
+# Inherits from ../series.yaml: LAB_DIR, LAB_NAME, MGMT_SUBNET, NETBOX_URL, NETBOX_TOKEN, SITE_NAME, NOS, AUTOMATION, CI.
+# LOOPBACK_PREFIX is also declared by netbox-as-source-of-truth: same key, the reader fills it once per series.
+
+title:
+  en: Generate and push configs from NetBox
+  fr: Générer et pousser les configs depuis NetBox
+summary:
+  en: >-
+    An inventory read from NetBox, one Jinja2 template per network OS, a renderer that writes
+    one file per device, a push with a dry run first, and BGP established between the spine
+    and its leaves without typing a single address.
+  fr: >-
+    Un inventaire lu depuis NetBox, un template Jinja2 par OS réseau, un rendu qui écrit un
+    fichier par équipement, un push précédé d'un dry-run, et BGP établi entre le spine et ses
+    leaves sans taper une seule adresse.
+difficulty: intermediate
+tags: [netbox, nornir, scrapli, ansible, jinja2, bgp, netdevops]
+authors: [thudal]
+created: 2026-09-25
+minutes: 45
+validated: NetBox 4.4 · Nornir 3.x · scrapli 2024.x · Ansible core 2.17 · netbox.netbox 3.x
+
+vars:
+  - key: LOOPBACK_PREFIX
+    kind: cidr
+    group: sot
+    default: 10.0.0.0/24
+    label: { en: Loopback prefix, fr: Préfixe des loopbacks }
+    hint:
+      en: The prefix the loopbacks were taken from on the previous page, in order (spine1 first).
+      fr: Le préfixe dans lequel les loopbacks ont été prises à la page précédente, dans l'ordre (spine1 d'abord).
+    impact:
+      en: The end-to-end test pings leaf2's loopback from leaf1's; both come from here.
+      fr: Le test de bout en bout pingue la loopback de leaf2 depuis celle de leaf1 ; les deux viennent d'ici.

@@ -1,0 +1,294 @@
+{/* Première passe — à valider contre docs.netbox.dev (modèle de données, config contexts, API REST, GraphQL) et pynetbox.readthedocs.io avant publication. */}
+
+La page précédente a tapé des adresses dans trois CLI. C'est la dernière fois : à partir d'ici, le lab est décrit dans NetBox, équipements, interfaces, câbles, adresses et numéros BGP, et tout le reste en dérive. Cette page décide de ce qui a sa place dans la source de vérité, puis écrit un script pynetbox qui crée tout ça, et que tu peux relancer demain sans dégât.
+
+<Run>
+
+Le script crée un environnement virtuel dans <V name="LAB_DIR" />, écrit `sot/seed.py` et le lance contre <V name="NETBOX_URL" />. Lance-le **sur la machine de lab**, avec `NETBOX_TOKEN` dans l'environnement.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Lab NetDevOps — seed de NetBox sur ${NETBOX_URL} avec le lab ${LAB_NAME}
+cd ${LAB_DIR}
+python3 -m venv .venv && .venv/bin/pip install -q pynetbox
+mkdir -p sot
+cat > sot/seed.py <<'EOF'
+import ipaddress, os, re
+import pynetbox
+
+nb = pynetbox.api("${NETBOX_URL}", token=os.environ["NETBOX_TOKEN"])
+SITE, TAG = "${SITE_NAME}", "${LAB_NAME}"
+LOOPBACKS = list(ipaddress.ip_network("${LOOPBACK_PREFIX}").hosts())
+MGMT_LEN = ipaddress.ip_network("${MGMT_SUBNET}").prefixlen
+ASN_BASE = int("${ASN_BASE}")
+EOF
+```
+
+<When is="NOS" equals="srlinux">
+
+```bash
+cat >> sot/seed.py <<'EOF'
+NOS = {"manufacturer": "Nokia", "model": "SR Linux (container)", "slug": "srlinux",
+       "platform": ("Nokia SR Linux", "nokia_srl"), "mgmt": "mgmt0", "loopback": "system0",
+       "ports": ["ethernet-1/1", "ethernet-1/2"]}
+EOF
+```
+
+</When>
+
+<When is="NOS" equals="ceos">
+
+```bash
+cat >> sot/seed.py <<'EOF'
+NOS = {"manufacturer": "Arista", "model": "cEOS-lab", "slug": "ceos",
+       "platform": ("Arista EOS", "arista_eos"), "mgmt": "Management0", "loopback": "Loopback0",
+       "ports": ["Ethernet1", "Ethernet2"]}
+EOF
+```
+
+</When>
+
+```bash
+cat >> sot/seed.py <<'EOF'
+DEVICES = {"spine1": ("spine", None, "${SPINE1_MGMT}", LOOPBACKS[0]),
+           "leaf1": ("leaf", ASN_BASE + 1, "${LEAF1_MGMT}", LOOPBACKS[1]),
+           "leaf2": ("leaf", ASN_BASE + 2, "${LEAF2_MGMT}", LOOPBACKS[2])}
+P = NOS["ports"]
+LINKS = [("spine1", P[0], "10.1.0.0/31", "leaf1", P[0], "10.1.0.1/31"),
+         ("spine1", P[1], "10.1.0.2/31", "leaf2", P[0], "10.1.0.3/31")]
+slug = lambda s: re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
+def ensure(endpoint, lookup, **fields):
+    obj = endpoint.get(**lookup)
+    return obj if obj is not None else endpoint.create(**fields)
+tag = ensure(nb.extras.tags, {"slug": TAG}, name=TAG, slug=TAG)
+site = ensure(nb.dcim.sites, {"slug": slug(SITE)}, name=SITE, slug=slug(SITE), status="active")
+mfr = ensure(nb.dcim.manufacturers, {"slug": slug(NOS["manufacturer"])}, name=NOS["manufacturer"], slug=slug(NOS["manufacturer"]))
+dtype = ensure(nb.dcim.device_types, {"slug": NOS["slug"]}, manufacturer=mfr.id, model=NOS["model"], slug=NOS["slug"])
+plat = ensure(nb.dcim.platforms, {"slug": NOS["platform"][1]}, name=NOS["platform"][0], slug=NOS["platform"][1], manufacturer=mfr.id)
+roles = {r: ensure(nb.dcim.device_roles, {"slug": r}, name=r, slug=r, color=c) for r, c in (("spine", "2196f3"), ("leaf", "4caf50"))}
+for p in ("${MGMT_SUBNET}", "${LOOPBACK_PREFIX}", "10.1.0.0/24"):
+    ensure(nb.ipam.prefixes, {"prefix": p}, prefix=p, site=site.id, status="active", tags=[tag.id])
+def iface(dev, name, **extra):
+    return ensure(nb.dcim.interfaces, {"device_id": dev.id, "name": name}, device=dev.id, name=name, type="1000base-t", **extra)
+def address(i, addr):
+    return ensure(nb.ipam.ip_addresses, {"address": addr}, address=addr, status="active",
+                  assigned_object_type="dcim.interface", assigned_object_id=i.id, tags=[tag.id])
+devices = {}
+for name, (role, asn, mgmt, lo) in DEVICES.items():
+    dev = ensure(nb.dcim.devices, {"name": name, "site_id": site.id}, name=name, site=site.id, role=roles[role].id,
+                 device_type=dtype.id, platform=plat.id, status="active", tags=[tag.id])
+    mgmt_ip = address(iface(dev, NOS["mgmt"], mgmt_only=True), f"{mgmt}/{MGMT_LEN}")
+    address(iface(dev, NOS["loopback"], type="virtual"), f"{lo}/32")
+    if dev.primary_ip4 is None or dev.primary_ip4.id != mgmt_ip.id:
+        dev.update({"primary_ip4": mgmt_ip.id})
+    if asn and (dev.local_context_data or {}).get("bgp", {}).get("asn") != asn:
+        dev.update({"local_context_data": {"bgp": {"asn": asn}}})
+    devices[name] = dev
+for a_dev, a_port, a_addr, b_dev, b_port, b_addr in LINKS:
+    a, b = iface(devices[a_dev], a_port), iface(devices[b_dev], b_port)
+    address(a, a_addr); address(b, b_addr)
+    if a.cable is None:
+        nb.dcim.cables.create(a_terminations=[{"object_type": "dcim.interface", "object_id": a.id}],
+                              b_terminations=[{"object_type": "dcim.interface", "object_id": b.id}], status="connected", tags=[tag.id])
+ensure(nb.extras.config_contexts, {"name": "bgp-spine"}, name="bgp-spine", roles=[roles["spine"].id], data={"bgp": {"asn": ASN_BASE, "peer_group": "leaves"}})
+ensure(nb.extras.config_contexts, {"name": "bgp-leaf"}, name="bgp-leaf", roles=[roles["leaf"].id], data={"bgp": {"peer_group": "spines"}})
+print(f"ok: {len(devices)} devices, {len(LINKS)} cables, site {site.name}")
+EOF
+.venv/bin/python sot/seed.py
+git add sot && git -c user.name=lab -c user.email=lab@localhost commit -qm "sot: seed script" || true
+```
+
+<Warn>Le script ne crée des objets que sous le site <V name="SITE_NAME" /> et le tag <V name="LAB_NAME" />, mais il tourne avec tous les droits de ton jeton. Sur un NetBox qui contient aussi la production, donne au lab son propre utilisateur et un jeton limité à ce site.</Warn>
+
+</Run>
+
+## Avant de commencer
+
+<Guided>Il te faut un NetBox 4.x joignable depuis la machine de lab (la série NetBox de ce site en installe un), un jeton avec les droits d'écriture sur DCIM, IPAM et extras (config contexts et tags), et Python 3.10 ou plus récent sur la machine de lab. pynetbox va dans un environnement virtuel dans le dépôt ; le jeton va dans l'environnement, jamais dans un fichier.</Guided>
+
+```bash
+cd ${LAB_DIR}
+python3 -m venv .venv
+source .venv/bin/activate
+pip install pynetbox
+export NETBOX_TOKEN=${NETBOX_TOKEN}   # pour ce shell seulement ; un gestionnaire de secrets pour tout ce qui dure
+```
+
+<Check cmd="pip show pynetbox | head -1" expect="Name: pynetbox" />
+
+<Check cmd={"curl -sf -o /dev/null -w '%{http_code}' -H \"Authorization: Token $NETBOX_TOKEN\" ${NETBOX_URL}/api/dcim/sites/"} expect="200" />
+
+<Note>Certificat auto-signé sur NetBox ? Pointe `REQUESTS_CA_BUNDLE` vers son certificat, ou, pour un lab seulement, ajoute `nb.http_session.verify = False` après la création du client. `curl` prend `-k`.</Note>
+
+## Quoi modéliser, et quoi laisser dehors
+
+<Guided>Une source de vérité contient l'**intention** : ce que le réseau doit être. Elle ne contient pas l'**état** : ce qu'il est en ce moment, que le réseau lui-même connaît mieux. La ligne est facile à tracer pour un lab et c'est la même en production.</Guided>
+
+| Va dans NetBox | Reste dehors |
+|---|---|
+| Sites, équipements, rôles, types, plateformes | Numéros de série des conteneurs, uptime |
+| Interfaces, câbles entre elles | Compteurs d'interface, état des liens |
+| Préfixes, les /31 et les loopbacks, l'IP primaire | Tables ARP, routes apprises |
+| Numéros d'AS et groupes BGP (config context) | État des sessions BGP |
+| Un tag qui dit « ceci appartient au lab » | La configuration rendue elle-même |
+
+<Deep>La dernière ligne est la plus importante : NetBox stocke *à quoi* le réseau doit ressembler, jamais le texte de configuration constructeur. La configuration est une fonction du modèle et d'un template ; stocke-la dans NetBox et tu as deux sources qui dérivent. Même chose pour tout ce que le lab rapporte (sorties de `show`, résultats de tests) : ça vit dans les artefacts du pipeline à la dernière page, pas ici. Les config contexts sont la zone grise : ils portent des paramètres structurés (AS, groupes de pairs, timers) qui n'ont pas de modèle dédié. Utilise-les pour des nombres qu'un template consomme, pas pour du texte libre. Quand un paramètre vaut pour tous les équipements d'un rôle, il va dans un contexte attaché au rôle ; quand il est propre à un équipement, dans le contexte local de cet équipement. NetBox fusionne les deux en profondeur, le rôle d'abord, l'équipement en dernier.</Deep>
+
+## Le script de seed
+
+<Guided>Un fichier, `sot/seed.py`, se lit de haut en bas : le client, les constantes du lab, puis chaque objet dans l'ordre des dépendances. Chaque objet passe par `ensure()`, chercher par ses champs uniques ou créer : lancer le script deux fois ne crée rien deux fois. Les noms d'interfaces et de plateforme dépendent de l'OS réseau, d'où le dictionnaire `NOS`.</Guided>
+
+<Annotated>
+
+```python title="${LAB_DIR}/sot/seed.py" {4,9-12,24,40,42,47,50-51}
+import ipaddress, os, re
+import pynetbox
+
+nb = pynetbox.api("${NETBOX_URL}", token=os.environ["NETBOX_TOKEN"])   # (1)
+SITE, TAG = "${SITE_NAME}", "${LAB_NAME}"
+LOOPBACKS = list(ipaddress.ip_network("${LOOPBACK_PREFIX}").hosts())
+MGMT_LEN = ipaddress.ip_network("${MGMT_SUBNET}").prefixlen
+ASN_BASE = int("${ASN_BASE}")
+NOS = …                                                               # (2)
+DEVICES = {"spine1": ("spine", None, "${SPINE1_MGMT}", LOOPBACKS[0]),  # (3)
+           "leaf1": ("leaf", ASN_BASE + 1, "${LEAF1_MGMT}", LOOPBACKS[1]),
+           "leaf2": ("leaf", ASN_BASE + 2, "${LEAF2_MGMT}", LOOPBACKS[2])}
+P = NOS["ports"]
+LINKS = [("spine1", P[0], "10.1.0.0/31", "leaf1", P[0], "10.1.0.1/31"),
+         ("spine1", P[1], "10.1.0.2/31", "leaf2", P[0], "10.1.0.3/31")]
+slug = lambda s: re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
+def ensure(endpoint, lookup, **fields):
+    obj = endpoint.get(**lookup)
+    return obj if obj is not None else endpoint.create(**fields)
+tag = ensure(nb.extras.tags, {"slug": TAG}, name=TAG, slug=TAG)
+site = ensure(nb.dcim.sites, {"slug": slug(SITE)}, name=SITE, slug=slug(SITE), status="active")
+mfr = ensure(nb.dcim.manufacturers, {"slug": slug(NOS["manufacturer"])}, name=NOS["manufacturer"], slug=slug(NOS["manufacturer"]))
+dtype = ensure(nb.dcim.device_types, {"slug": NOS["slug"]}, manufacturer=mfr.id, model=NOS["model"], slug=NOS["slug"])
+plat = ensure(nb.dcim.platforms, {"slug": NOS["platform"][1]}, name=NOS["platform"][0], slug=NOS["platform"][1], manufacturer=mfr.id)  # (4)
+roles = {r: ensure(nb.dcim.device_roles, {"slug": r}, name=r, slug=r, color=c) for r, c in (("spine", "2196f3"), ("leaf", "4caf50"))}
+for p in ("${MGMT_SUBNET}", "${LOOPBACK_PREFIX}", "10.1.0.0/24"):
+    ensure(nb.ipam.prefixes, {"prefix": p}, prefix=p, site=site.id, status="active", tags=[tag.id])
+def iface(dev, name, **extra):
+    return ensure(nb.dcim.interfaces, {"device_id": dev.id, "name": name}, device=dev.id, name=name, type="1000base-t", **extra)
+def address(i, addr):
+    return ensure(nb.ipam.ip_addresses, {"address": addr}, address=addr, status="active",
+                  assigned_object_type="dcim.interface", assigned_object_id=i.id, tags=[tag.id])
+devices = {}
+for name, (role, asn, mgmt, lo) in DEVICES.items():
+    dev = ensure(nb.dcim.devices, {"name": name, "site_id": site.id}, name=name, site=site.id, role=roles[role].id,
+                 device_type=dtype.id, platform=plat.id, status="active", tags=[tag.id])
+    mgmt_ip = address(iface(dev, NOS["mgmt"], mgmt_only=True), f"{mgmt}/{MGMT_LEN}")
+    address(iface(dev, NOS["loopback"], type="virtual"), f"{lo}/32")
+    if dev.primary_ip4 is None or dev.primary_ip4.id != mgmt_ip.id:
+        dev.update({"primary_ip4": mgmt_ip.id})                                  # (5)
+    if asn and (dev.local_context_data or {}).get("bgp", {}).get("asn") != asn:
+        dev.update({"local_context_data": {"bgp": {"asn": asn}}})               # (6)
+    devices[name] = dev
+for a_dev, a_port, a_addr, b_dev, b_port, b_addr in LINKS:
+    a, b = iface(devices[a_dev], a_port), iface(devices[b_dev], b_port)
+    address(a, a_addr); address(b, b_addr)
+    if a.cable is None:                                                          # (7)
+        nb.dcim.cables.create(a_terminations=[{"object_type": "dcim.interface", "object_id": a.id}],
+                              b_terminations=[{"object_type": "dcim.interface", "object_id": b.id}], status="connected", tags=[tag.id])
+ensure(nb.extras.config_contexts, {"name": "bgp-spine"}, name="bgp-spine", roles=[roles["spine"].id], data={"bgp": {"asn": ASN_BASE, "peer_group": "leaves"}})  # (8)
+ensure(nb.extras.config_contexts, {"name": "bgp-leaf"}, name="bgp-leaf", roles=[roles["leaf"].id], data={"bgp": {"peer_group": "spines"}})
+print(f"ok: {len(devices)} devices, {len(LINKS)} cables, site {site.name}")
+```
+
+1. L'URL est une constante du lab ; le jeton vient de l'environnement pour que le fichier puisse être commité.
+2. Les noms propres à l'OS, montrés plus bas. Tout ce qui suit cette ligne est indépendant du constructeur.
+3. Par équipement : rôle, son propre AS (aucun pour le spine, dont l'AS vient du rôle), IP de management, loopback prise dans l'ordre dans <V name="LOOPBACK_PREFIX" />.
+4. Le slug de la plateforme est ce que les plugins d'inventaire de la page suivante donnent à l'outil d'automatisation comme nom de driver : `nokia_srl` ou `arista_eos`, pas un joli nom.
+5. L'IP primaire est celle à laquelle les plugins d'inventaire se connectent. Elle doit d'abord être assignée à une interface de cet équipement, d'où l'ordre.
+6. Un config context par équipement : seules les leaves en ont un, avec leur propre AS. `update()` est sauté quand la valeur est déjà là, le journal des changements reste silencieux au second passage.
+7. Un câble est créé une fois, vérifié depuis son côté A. Les câbles de NetBox 4 prennent des listes de terminaisons, c'est ainsi qu'on modélise les breakouts et les câbles multi-brins ; ici chaque liste a une interface.
+8. Les contextes au niveau du rôle : tous les spines partagent l'AS <V name="ASN_BASE" />, toutes les leaves peerent avec le groupe `spines`. Le contexte *rendu* d'un équipement est la fusion des deux niveaux.
+
+</Annotated>
+
+La ligne `NOS` pour ton OS réseau :
+
+<When is="NOS" equals="srlinux">
+
+```python
+NOS = {"manufacturer": "Nokia", "model": "SR Linux (container)", "slug": "srlinux",
+       "platform": ("Nokia SR Linux", "nokia_srl"), "mgmt": "mgmt0", "loopback": "system0",
+       "ports": ["ethernet-1/1", "ethernet-1/2"]}
+```
+
+<Deep>`system0` est la loopback de SR Linux qui porte l'adresse système et le router-id par défaut, l'équivalent de `Loopback0` ; des interfaces `lo0` ordinaires existent aussi. `mgmt0` vit dans la network-instance `mgmt`, et `mgmt_only=True` dans NetBox est ce qui dit aux templates de la page suivante de ne pas y toucher. Les noms d'interfaces doivent correspondre exactement à ceux du NOS (`ethernet-1/1`, pas `e1-1`) : la configuration rendue les utilise tels quels.</Deep>
+
+</When>
+
+<When is="NOS" equals="ceos">
+
+```python
+NOS = {"manufacturer": "Arista", "model": "cEOS-lab", "slug": "ceos",
+       "platform": ("Arista EOS", "arista_eos"), "mgmt": "Management0", "loopback": "Loopback0",
+       "ports": ["Ethernet1", "Ethernet2"]}
+```
+
+<Deep>`Management0` est l'interface que containerlab configure avec l'IP de management ; `mgmt_only=True` dans NetBox est ce qui dit aux templates de la page suivante de ne pas y toucher. Les noms d'interfaces doivent correspondre exactement à ceux d'EOS (`Ethernet1`, E majuscule, sans espace) : la configuration rendue les utilise tels quels.</Deep>
+
+</When>
+
+<Deep>Pourquoi un AS différent par leaf alors qu'on pourrait dire « un AS par rôle » ? eBGP rejette une route dont le chemin d'AS contient déjà l'AS du récepteur. Avec les deux leaves dans l'AS <V name="ASN_BASE" />+1, leaf2 refuserait la loopback de leaf1 comme une boucle et le ping de bout en bout de la page suivante échouerait. Les spines peuvent partager un AS parce qu'ils n'apprennent jamais de routes l'un de l'autre. Le contexte rendu le rend visible : `spine1` montre `bgp.asn` venu du contexte de rôle, `leaf1` montre le sien venu du contexte local, et les deux montrent `peer_group`.</Deep>
+
+## Le lancer, deux fois
+
+<Guided>Le premier passage crée tout et affiche un résumé ; le second retrouve tout et affiche le même résumé, sans rien de neuf dans le journal des changements de NetBox. Ce second passage est le test qui prouve que le script peut aller dans un pipeline.</Guided>
+
+```bash
+cd ${LAB_DIR}
+.venv/bin/python sot/seed.py
+.venv/bin/python sot/seed.py
+git add sot/seed.py && git commit -m "sot: seed NetBox with the lab"
+```
+
+<Check cmd="cd ${LAB_DIR} && .venv/bin/python sot/seed.py" expect="ok: 3 devices, 2 cables, site ${SITE_NAME}" />
+
+<Check cmd={"curl -sf -H \"Authorization: Token $NETBOX_TOKEN\" '${NETBOX_URL}/api/dcim/devices/?tag=${LAB_NAME}' | python3 -c 'import sys, json; print(json.load(sys.stdin)[\"count\"])'"} expect="3" />
+
+<Details summary="S'il s'arrête en route">
+pynetbox remonte le message d'erreur de NetBox lui-même, qui nomme le champ. Les classiques : un `400` sur le type d'équipement veut dire que le slug existe déjà sous un autre fabricant ; un `400` sur une adresse IP veut dire qu'elle est déjà assignée ailleurs (une expérience précédente, peut-être) ; un `403` veut dire que le jeton n'a pas la permission sur ce modèle. Corrige la cause et relance : tout ce qui est déjà créé est retrouvé, pas recréé.
+</Details>
+
+## Vérifier le modèle
+
+<Guided>Dans l'interface, **Devices → Devices**, filtre sur le tag <V name="LAB_NAME" /> : trois lignes, chacune avec une IP primaire. Ouvre `spine1` : l'onglet **Interfaces** montre quatre interfaces, dont deux câblées avec le nom du bout d'en face ; l'onglet **Config context** montre les données fusionnées avec `bgp.asn`. La même chose par l'API :</Guided>
+
+```bash
+api=${NETBOX_URL}/api
+auth="Authorization: Token $NETBOX_TOKEN"
+curl -s -H "$auth" "$api/dcim/devices/?tag=${LAB_NAME}&brief=1" | python3 -m json.tool
+curl -s -H "$auth" "$api/dcim/interfaces/?device=spine1&cabled=true" | python3 -m json.tool | grep -E '"name"|"address"'
+curl -s -H "$auth" "$api/dcim/devices/?name=spine1" | python3 -c 'import sys, json; print(json.load(sys.stdin)["results"][0]["config_context"])'
+```
+
+<Check cmd={"curl -sf -H \"Authorization: Token $NETBOX_TOKEN\" '${NETBOX_URL}/api/dcim/devices/?tag=${LAB_NAME}&has_primary_ip=true' | python3 -c 'import sys, json; print(json.load(sys.stdin)[\"count\"])'"} expect="3" />
+
+<Check cmd={"curl -sf -H \"Authorization: Token $NETBOX_TOKEN\" '${NETBOX_URL}/api/dcim/cables/?tag=${LAB_NAME}' | python3 -c 'import sys, json; print(json.load(sys.stdin)[\"count\"])'"} expect="2" />
+
+<Check cmd={"curl -sf -H \"Authorization: Token $NETBOX_TOKEN\" '${NETBOX_URL}/api/dcim/devices/?name=spine1' | python3 -c 'import sys, json; print(json.load(sys.stdin)[\"results\"][0][\"config_context\"][\"bgp\"][\"asn\"])'"} expect="${ASN_BASE}" />
+
+<Deep>
+
+La réponse REST pour un équipement est plate : interfaces, adresses et câbles sont des endpoints séparés, trois appels et une jointure dans ta tête. GraphQL renvoie l'arbre en une requête, ce qu'un moteur de rendu veut :
+
+```bash
+curl -s -H "Authorization: Token $NETBOX_TOKEN" -H 'Content-Type: application/json' ${NETBOX_URL}/graphql/ -d @- <<'EOF' | python3 -m json.tool
+{"query": "{ device_list(filters: {tag: [\"${LAB_NAME}\"]}) { name role { slug } primary_ip4 { address } config_context
+  interfaces { name mgmt_only ip_addresses { address } link_peers { ... on InterfaceType { name device { name } } } } } }"}
+EOF
+```
+
+`link_peers` est le bout d'en face du câble, donc une seule requête donne à chaque équipement ses interfaces, leurs adresses, et qui est de l'autre côté : tout ce dont le template BGP de la page suivante a besoin. La syntaxe des filtres a changé dans NetBox 4.3 (objets imbriqués `{slug: {exact: …}}` au lieu de valeurs simples) ; l'explorateur sur **<V name="NETBOX_URL" />/graphql/** complète la bonne forme pour ta version. GraphQL est en lecture seule ; les écritures restent sur REST.
+
+</Deep>
+
+## Terminé
+
+NetBox contient maintenant le lab : le site <V name="SITE_NAME" />, trois équipements tagués <V name="LAB_NAME" /> avec chacun une IP primaire, leurs interfaces, deux câbles, les /31, les loopbacks tirées de <V name="LOOPBACK_PREFIX" />, et les numéros BGP dans des config contexts. Le script qui a construit tout ça est dans git et se relance à volonté ; à la dernière page, un pipeline de nuit fait exactement ça.
+
+La page suivante transforme ce modèle en configuration : un inventaire lu depuis NetBox, un template par OS réseau, un rendu et un push, jusqu'à ce que BGP soit établi entre le spine et ses leaves.

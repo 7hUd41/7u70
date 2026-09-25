@@ -1,0 +1,119 @@
+title:
+  en: NetDevOps lab
+  fr: Lab NetDevOps
+summary:
+  en: >-
+    A network lab you can rebuild in minutes: a containerlab topology, NetBox as the source
+    of truth, configuration generated and pushed from it, and a CI pipeline that proves every
+    change before it reaches the lab.
+  fr: >-
+    Un lab réseau que tu reconstruis en quelques minutes : une topologie containerlab, NetBox
+    comme source de vérité, la configuration générée et poussée depuis lui, et un pipeline CI
+    qui prouve chaque changement avant qu'il n'atteigne le lab.
+order:
+  - containerlab-topology
+  - netbox-as-source-of-truth
+  - render-and-push-configs
+  - validate-in-ci
+
+# Shared by every page: the reader fills these once for the whole series.
+groups:
+  - id: lab
+    label: { en: Lab machine, fr: Machine de lab }
+    desc: { en: The Linux host that runs Docker and containerlab., fr: L'hôte Linux qui fait tourner Docker et containerlab. }
+  - id: sot
+    label: { en: Source of truth, fr: Source de vérité }
+    desc: { en: The NetBox instance the lab is modelled in., fr: L'instance NetBox dans laquelle le lab est modélisé. }
+
+vars:
+  - key: LAB_DIR
+    kind: path
+    group: lab
+    default: /home/lab/netlab
+    label: { en: Lab directory, fr: Répertoire du lab }
+    hint:
+      en: Where the git repository and the topology file live on the lab machine.
+      fr: Là où vivent le dépôt git et le fichier de topologie sur la machine de lab.
+    impact:
+      en: Every path on every page starts here. containerlab creates its working folder next to the topology file, and the CI runner checks the repository out with the same layout.
+      fr: Tous les chemins de toutes les pages partent d'ici. containerlab crée son dossier de travail à côté du fichier de topologie, et le runner CI récupère le dépôt avec la même arborescence.
+  - key: LAB_NAME
+    kind: text
+    group: lab
+    default: netlab
+    label: { en: Lab name, fr: Nom du lab }
+    hint:
+      en: The containerlab lab name. Lowercase, no spaces.
+      fr: Le nom du lab containerlab. Minuscules, sans espace.
+    impact:
+      en: Prefixes every container (clab-<name>-spine1), the working folder (clab-<name>/) and the management network. Two labs with the same name on one host collide.
+      fr: Préfixe chaque conteneur (clab-<nom>-spine1), le dossier de travail (clab-<nom>/) et le réseau de management. Deux labs du même nom sur un hôte entrent en collision.
+  - key: MGMT_SUBNET
+    kind: cidr
+    group: lab
+    default: 172.20.20.0/24
+    label: { en: Management subnet, fr: Sous-réseau de management }
+    hint:
+      en: The Docker network containerlab creates for the nodes' management interfaces. Must not overlap anything the lab host already routes.
+      fr: Le réseau Docker que containerlab crée pour les interfaces de management des nœuds. Ne doit rien chevaucher de ce que l'hôte route déjà.
+    impact:
+      en: The nodes' management IPs are taken from it, pinned in the topology and recorded in NetBox as primary IPs. Change it and all three must change together.
+      fr: Les IP de management des nœuds en sont tirées, fixées dans la topologie et enregistrées dans NetBox comme IP primaires. La changer oblige à changer les trois ensemble.
+  - key: NETBOX_URL
+    kind: url
+    group: sot
+    default: https://netbox.example.com
+    label: { en: NetBox URL, fr: URL de NetBox }
+    hint:
+      en: The base URL of your NetBox, without a trailing slash. The NetBox series of this site gets you one.
+      fr: L'URL de base de ton NetBox, sans slash final. La série NetBox de ce site t'en donne un.
+    impact:
+      en: Used by the seed script, the inventory plugin and the CI pipeline. It must be reachable from the lab machine, and from the runner.
+      fr: Utilisée par le script de seed, le plugin d'inventaire et le pipeline CI. Elle doit être joignable depuis la machine de lab, et depuis le runner.
+  - key: NETBOX_TOKEN
+    kind: secret
+    group: sot
+    default: ""
+    label: { en: NetBox API token, fr: Jeton d'API NetBox }
+    hint:
+      en: A token of a user allowed to read and write DCIM, IPAM and config contexts. On this site it only ever goes into an environment variable.
+      fr: Un jeton d'un utilisateur autorisé à lire et écrire DCIM, IPAM et les config contexts. Sur ce site il ne va jamais ailleurs que dans une variable d'environnement.
+    impact:
+      en: The seed script creates objects with it; the render step only reads. In CI it becomes a masked secret, never a file in the repository.
+      fr: Le script de seed crée des objets avec ; l'étape de rendu ne fait que lire. En CI il devient un secret masqué, jamais un fichier du dépôt.
+  - key: SITE_NAME
+    kind: text
+    group: sot
+    default: Lab
+    label: { en: NetBox site, fr: Site NetBox }
+    hint:
+      en: The site the lab devices are created under. Its slug is derived from it (lowercase, dashes).
+      fr: Le site sous lequel les équipements du lab sont créés. Son slug en est dérivé (minuscules, tirets).
+    impact:
+      en: Every query on the following pages filters on this site, so the lab never touches production devices in the same NetBox.
+      fr: Chaque requête des pages suivantes filtre sur ce site, pour que le lab ne touche jamais aux équipements de production du même NetBox.
+
+choices:
+  - key: NOS
+    type: select
+    label: { en: Network OS, fr: OS réseau }
+    hint: { en: SR Linux needs no registration; cEOS needs an Arista account to download the image., fr: SR Linux ne demande aucune inscription ; cEOS demande un compte Arista pour télécharger l'image. }
+    default: srlinux
+    options:
+      - { value: srlinux, label: { en: Nokia SR Linux (free image), fr: Nokia SR Linux (image libre) } }
+      - { value: ceos, label: { en: Arista cEOS (image to import), fr: Arista cEOS (image à importer) } }
+  - key: AUTOMATION
+    type: select
+    label: { en: Automation tool, fr: Outil d'automatisation }
+    hint: { en: Nornir is Python you read and debug; Ansible is YAML your team may already know., fr: Nornir, c'est du Python que tu lis et débogues ; Ansible, du YAML que ton équipe connaît peut-être déjà. }
+    default: nornir
+    options:
+      - { value: nornir, label: { en: Nornir + scrapli (Python), fr: Nornir + scrapli (Python) } }
+      - { value: ansible, label: { en: Ansible, fr: Ansible } }
+  - key: CI
+    type: select
+    label: { en: CI, fr: CI }
+    default: github
+    options:
+      - { value: github, label: { en: GitHub Actions, fr: GitHub Actions } }
+      - { value: gitlab, label: { en: GitLab CI, fr: GitLab CI } }

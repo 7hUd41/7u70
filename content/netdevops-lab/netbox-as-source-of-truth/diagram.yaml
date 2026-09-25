@@ -1,0 +1,114 @@
+# The gist: one script, run from the lab repository, talks to the NetBox API and
+# leaves behind the objects the next pages read. Quick: four boxes. Guided adds the
+# token, the tag and the config contexts. Deep adds endpoints, the merge and GraphQL.
+title: { en: "From a script to a model", fr: "D'un script à un modèle" }
+caption:
+  en: "seed.py calls the REST API of ${NETBOX_URL} with your token and creates, once, the site, the devices with their interfaces, addresses and cables, and the BGP numbers in config contexts. Run it again: it finds everything and changes nothing."
+  fr: "seed.py appelle l'API REST de ${NETBOX_URL} avec ton jeton et crée, une fois, le site, les équipements avec leurs interfaces, adresses et câbles, et les numéros BGP dans des config contexts. Relance-le : il retrouve tout et ne change rien."
+
+groups:
+  - id: repo
+    label: { en: "Lab repository", fr: "Dépôt du lab" }
+    desc:
+      en: "${LAB_DIR} on the lab machine: the topology from the previous page, now the sot/ folder too."
+      fr: "${LAB_DIR} sur la machine de lab : la topologie de la page précédente, et maintenant le dossier sot/."
+  - id: netbox
+    label: { en: "NetBox", fr: "NetBox" }
+    desc:
+      en: "${NETBOX_URL}: the source of truth. Everything created here carries the tag ${LAB_NAME}."
+      fr: "${NETBOX_URL} : la source de vérité. Tout ce qui est créé ici porte le tag ${LAB_NAME}."
+
+nodes:
+  - id: seed
+    kind: file
+    label: { en: "seed.py", fr: "seed.py" }
+    sub: "pynetbox · get, then create"
+    in: repo
+    focus: true
+    desc:
+      en: "One file, top to bottom, every object through ensure(): get by unique fields, create if missing. Safe to run twice."
+      fr: "Un fichier, de haut en bas, chaque objet via ensure() : chercher par champs uniques, créer s'il manque. Rejouable sans risque."
+    deep:
+      sub: "${LAB_DIR}/sot/seed.py · .venv · NETBOX_TOKEN from the environment"
+  - id: api
+    kind: server
+    label: { en: "REST API", fr: "API REST" }
+    sub: "/api/"
+    in: netbox
+    desc:
+      en: "One endpoint per model. pynetbox turns nb.dcim.devices.get() into GET /api/dcim/devices/ and .create() into a POST."
+      fr: "Un endpoint par modèle. pynetbox transforme nb.dcim.devices.get() en GET /api/dcim/devices/ et .create() en POST."
+    deep:
+      sub: "HTTPS · Authorization: Token … · /api/dcim/ · /api/ipam/ · /api/extras/"
+  - id: dcim
+    kind: store
+    label: { en: "Site & devices", fr: "Site & équipements" }
+    sub: "${SITE_NAME} · spine1 · leaf1 · leaf2"
+    in: netbox
+    desc:
+      en: "The site, the manufacturer, the device type, the platform, two roles and the three devices, each with a primary IP."
+      fr: "Le site, le fabricant, le type d'équipement, la plateforme, deux rôles et les trois équipements, chacun avec une IP primaire."
+    deep:
+      sub: "dcim: site · manufacturer · device_type · platform · roles spine/leaf · devices"
+  - id: ifaces
+    kind: store
+    label: { en: "Interfaces & cables", fr: "Interfaces & câbles" }
+    sub: "4 per device · 2 cables"
+    in: netbox
+    desc:
+      en: "Management (mgmt_only), loopback (virtual) and the fabric ports; two cables joining spine1 to each leaf."
+      fr: "Management (mgmt_only), loopback (virtuelle) et les ports de fabric ; deux câbles reliant spine1 à chaque leaf."
+    deep:
+      sub: "dcim.interfaces · dcim.cables (a/b terminations) · link_peers"
+  - id: ipam
+    kind: store
+    label: { en: "Addresses", fr: "Adresses" }
+    sub: "${MGMT_SUBNET} · ${LOOPBACK_PREFIX} · /31s"
+    in: netbox
+    level: guided
+    desc:
+      en: "Three prefixes and every address assigned to an interface: management, loopbacks, the /31 on each link."
+      fr: "Trois préfixes et chaque adresse assignée à une interface : management, loopbacks, le /31 de chaque lien."
+    deep:
+      sub: "ipam.prefixes · ipam.ip_addresses (assigned_object = interface) · primary_ip4"
+  - id: ctx
+    kind: file
+    label: { en: "Config contexts", fr: "Config contexts" }
+    sub: "bgp.asn ${ASN_BASE}…"
+    in: netbox
+    level: guided
+    desc:
+      en: "Role contexts (spine AS ${ASN_BASE}, peer groups) and a local context per leaf with its own AS. The device's rendered context is the merge."
+      fr: "Contextes de rôle (AS ${ASN_BASE} du spine, groupes de pairs) et un contexte local par leaf avec son propre AS. Le contexte rendu de l'équipement est la fusion."
+    deep:
+      sub: "extras.config_contexts (roles) + local_context_data → config_context (deep merge)"
+
+edges:
+  - from: seed
+    to: api
+    label: "HTTPS"
+    guided: { label: "Token · JSON" }
+    deep: { label: "GET ?slug= → 200 or POST → 201" }
+    desc: { en: "Every ensure() is a GET with a filter, then a POST only if nothing came back.", fr: "Chaque ensure() est un GET avec un filtre, puis un POST seulement si rien n'est revenu." }
+  - from: api
+    to: dcim
+    label: "creates"
+    desc: { en: "In dependency order: site, manufacturer, type, platform, roles, then devices.", fr: "Dans l'ordre des dépendances : site, fabricant, type, plateforme, rôles, puis équipements." }
+  - from: dcim
+    to: ifaces
+    label: "owns"
+    dashed: true
+    desc: { en: "Interfaces belong to a device; a cable joins two interfaces.", fr: "Les interfaces appartiennent à un équipement ; un câble joint deux interfaces." }
+  - from: ifaces
+    to: ipam
+    label: "assigned"
+    dashed: true
+    level: guided
+    desc: { en: "An address is assigned to an interface; the device then points at one of them as primary.", fr: "Une adresse est assignée à une interface ; l'équipement pointe ensuite l'une d'elles comme primaire." }
+  - from: dcim
+    to: ctx
+    label: "by role"
+    dashed: true
+    level: guided
+    deep: { label: "roles → context · device → local_context_data" }
+    desc: { en: "A context attached to a role applies to every device of that role; a local context to one device only.", fr: "Un contexte attaché à un rôle s'applique à tous les équipements de ce rôle ; un contexte local à un seul." }

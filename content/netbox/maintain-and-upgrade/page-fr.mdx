@@ -1,0 +1,376 @@
+{/* Première passe — à valider contre docs.netbox.dev (installation/upgrading, administration/housekeeping, integrations/prometheus-metrics) avant publication. */}
+
+Une instance que personne ne maintient est une bombe à retardement : le jour où elle casse est le jour où tu découvres que la sauvegarde n'a jamais été testée. Cette page met en place une sauvegarde nocturne et la restaure une fois, met NetBox à jour vers une version choisie exprès, branche la tâche d'entretien, et laisse derrière elle une sonde qui te prévient quand quelque chose cloche.
+
+<Run>
+
+Le script installe la tâche de sauvegarde sur **<V name="NETBOX_HOST" />**, prend une première sauvegarde, prouve qu'elle se restaure, puis met NetBox à jour vers **<V name="TARGET_REF" />**. Lance-le en sudoer sur le serveur NetBox.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# NetBox — sauvegardes, entretien et mise à jour vers ${TARGET_REF} sur ${NETBOX_HOST}
+sudo mkdir -p ${BACKUP_DIR} && sudo chmod 700 ${BACKUP_DIR}
+
+sudo tee /usr/local/sbin/netbox-backup.sh >/dev/null <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+stamp=$(date +%Y%m%d-%H%M)
+dest=${BACKUP_DIR}
+sudo -u postgres pg_dump -Fc netbox > "$dest/netbox-$stamp.dump"
+files=(netbox/media netbox/netbox/configuration.py)
+for f in netbox/netbox/ldap_config.py local_requirements.txt gunicorn.py; do
+  if [ -e "${INSTALL_DIR}/$f" ]; then files+=("$f"); fi
+done
+tar -czf "$dest/netbox-files-$stamp.tar.gz" -C ${INSTALL_DIR} "${files[@]}"
+find "$dest" -name 'netbox-*' -mtime +${BACKUP_RETENTION_DAYS} -delete
+EOF
+sudo chmod 750 /usr/local/sbin/netbox-backup.sh
+```
+
+<When flag="OFFSITE">
+
+```bash
+sudo test -f /root/.ssh/netbox-backup || sudo ssh-keygen -t ed25519 -N '' -f /root/.ssh/netbox-backup -C netbox-backup
+sudo tee -a /usr/local/sbin/netbox-backup.sh >/dev/null <<'EOF'
+rsync -az --delete -e "ssh -i /root/.ssh/netbox-backup -o StrictHostKeyChecking=accept-new" \
+  "$dest/" ${BACKUP_USER}@${BACKUP_HOST}:${BACKUP_PATH}/
+EOF
+echo "Autorise cette clé sur ${BACKUP_HOST} pour ${BACKUP_USER} :" && sudo cat /root/.ssh/netbox-backup.pub
+```
+
+</When>
+
+```bash
+sudo tee /etc/systemd/system/netbox-backup.service >/dev/null <<'EOF'
+[Unit]
+Description=NetBox backup (database dump + files)
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/netbox-backup.sh
+EOF
+sudo tee /etc/systemd/system/netbox-backup.timer >/dev/null <<'EOF'
+[Unit]
+Description=Nightly NetBox backup
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=15m
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable --now netbox-backup.timer
+sudo systemctl start netbox-backup.service
+
+# Exercice de restauration sur une base jetable
+latest=$(ls -t ${BACKUP_DIR}/netbox-*.dump | head -1)
+sudo -u postgres dropdb --if-exists netbox_drill
+sudo -u postgres createdb -O netbox netbox_drill
+sudo -u postgres pg_restore --no-owner --role=netbox -d netbox_drill < "$latest"
+sudo -u postgres psql -d netbox_drill -tAc 'SELECT count(*) FROM dcim_site'
+sudo -u postgres dropdb netbox_drill
+
+# Entretien et taille du journal
+sudo ln -sf ${INSTALL_DIR}/contrib/netbox-housekeeping.sh /etc/cron.daily/netbox-housekeeping
+sudo mkdir -p /etc/systemd/journald.conf.d
+printf '[Journal]\nSystemMaxUse=500M\n' | sudo tee /etc/systemd/journald.conf.d/netbox.conf >/dev/null
+sudo systemctl restart systemd-journald
+
+# Mise à jour
+cd ${INSTALL_DIR}
+sudo git fetch --tags
+sudo git checkout ${TARGET_REF}
+sudo ./upgrade.sh
+sudo systemctl restart netbox netbox-rq
+curl -skf -H "Authorization: Token ${NETBOX_TOKEN}" https://${NETBOX_HOST}/api/status/
+```
+
+<Warn>La partie mise à jour est celle qu'il ne faut pas lancer à l'aveugle. Lis d'abord les notes de version de <V name="TARGET_REF" /> : un plugin en retard, ou une version de Python exigée, c'est ce qui transforme une mise à jour de cinq minutes en soirée.</Warn>
+
+</Run>
+
+## Avant de commencer
+
+<Guided>Il te faut sudo sur le serveur NetBox, le jeton d'API de la page précédente (ou n'importe quel jeton en lecture), et un passage par la [page des releases de NetBox](https://github.com/netbox-community/netbox/releases) pour choisir <V name="TARGET_REF" />. Tout ce qui est sur cette page s'exécute sur le serveur lui-même.</Guided>
+
+<Deep>NetBox a exactement trois choses qui méritent d'être sauvegardées : la base PostgreSQL (chaque objet, chaque enregistrement de changement), le dossier `media` (les images attachées), et les fichiers que tu as écrits à la main dans <V name="INSTALL_DIR" /> (`configuration.py`, `ldap_config.py`, `local_requirements.txt`, `gunicorn.py`). Redis ne contient que la file et le cache ; le code revient de git ; le venv est reconstruit par `upgrade.sh`. Une sauvegarde qui contient ces trois choses restaure une instance n'importe où.</Deep>
+
+<Check cmd="systemctl is-active netbox netbox-rq postgresql" expect="active
+active
+active" />
+
+<When is="OS" equals="rhel">
+
+<Note>Sur la famille RHEL, `/etc/cron.daily` n'est exécuté que si le paquet `cronie` est installé. Vérifie `systemctl is-active crond` ; l'alternative par timer dans l'étape Entretien évite la question.</Note>
+
+</When>
+
+## Sauvegardes nocturnes
+
+<Guided>Un script shell fait le dump et l'archive ; un service systemd l'exécute ; un timer déclenche le service à 02 h 30. La rétention est un `find -delete` à la fin du script. Le répertoire est réservé à root parce que l'archive contient `configuration.py`, et avec lui le mot de passe de la base et la clé secrète.</Guided>
+
+```bash
+sudo mkdir -p ${BACKUP_DIR} && sudo chmod 700 ${BACKUP_DIR}
+```
+
+<Tabs group="backup-files">
+
+<Tab label="netbox-backup.sh">
+
+<Annotated>
+
+```bash title="/usr/local/sbin/netbox-backup.sh" {5,10-11}
+#!/usr/bin/env bash
+set -euo pipefail
+stamp=$(date +%Y%m%d-%H%M)
+dest=${BACKUP_DIR}
+sudo -u postgres pg_dump -Fc netbox > "$dest/netbox-$stamp.dump"        # (1)
+files=(netbox/media netbox/netbox/configuration.py)
+for f in netbox/netbox/ldap_config.py local_requirements.txt gunicorn.py; do
+  if [ -e "${INSTALL_DIR}/$f" ]; then files+=("$f"); fi                  # (2)
+done
+tar -czf "$dest/netbox-files-$stamp.tar.gz" -C ${INSTALL_DIR} "${files[@]}"
+find "$dest" -name 'netbox-*' -mtime +${BACKUP_RETENTION_DAYS} -delete  # (3)
+```
+
+1. `-Fc` est le format « custom » de PostgreSQL : compressé, et restaurable table par table avec `pg_restore`. Le format SQL brut est plus gros et tout-ou-rien. La redirection est faite par root, donc l'utilisateur `postgres` n'a jamais besoin d'écrire dans le répertoire de sauvegarde.
+2. `ldap_config.py` n'existe qu'avec LDAP ; `local_requirements.txt` qu'avec des plugins. Tester chaque fichier garde le script valable sur toutes les instances.
+3. Supprime les dumps et archives de plus de <V name="BACKUP_RETENTION_DAYS" /> jours. Ça tourne *après* la nouvelle sauvegarde, donc un dump raté n'entame jamais la rétention.
+
+</Annotated>
+
+</Tab>
+
+<Tab label="netbox-backup.service">
+
+```ini title="/etc/systemd/system/netbox-backup.service"
+[Unit]
+Description=NetBox backup (database dump + files)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/netbox-backup.sh
+```
+
+</Tab>
+
+<Tab label="netbox-backup.timer">
+
+```ini title="/etc/systemd/system/netbox-backup.timer" {5-7}
+[Unit]
+Description=Nightly NetBox backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+</Tab>
+
+</Tabs>
+
+<Deep>`Persistent=true` est ce qui rend un timer meilleur que cron ici : si le serveur était éteint à 02 h 30, la tâche tourne au démarrage au lieu d'être sautée. `RandomizedDelaySec` étale la charge quand plusieurs timers partagent la même minute. Le service n'a pas de section `[Install]`, c'est voulu : seul le timer est activé, le service est juste ce qu'il démarre. `journalctl -u netbox-backup` montre chaque exécution et sa sortie.</Deep>
+
+```bash
+sudo chmod 750 /usr/local/sbin/netbox-backup.sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now netbox-backup.timer
+sudo systemctl start netbox-backup.service
+```
+
+<Check cmd="systemctl is-active netbox-backup.timer" expect="active" />
+
+<Check cmd="ls ${BACKUP_DIR} | sed 's/-[0-9]*-[0-9]*\././' | LC_ALL=C sort -u" expect="netbox-files.tar.gz
+netbox.dump" />
+
+<Details summary="Si le service échoue">
+`journalctl -u netbox-backup -n 20` donne la raison. Les habituelles : `pg_dump` ne peut pas se connecter (PostgreSQL est arrêté, ou `pg_hba.conf` a perdu sa ligne `local all postgres peer`) ; `tar` se plaint d'un `netbox/media` manquant (le dossier a été déplacé, corrige le chemin) ; plus de place dans <V name="BACKUP_DIR" />.
+</Details>
+
+<When flag="OFFSITE">
+
+### Copie distante
+
+<Guided>Une sauvegarde sur le même disque que la base ne te protège que de tes propres erreurs, pas du disque. Le script pousse le dossier vers <V name="BACKUP_HOST" /> avec rsync en SSH, avec une clé qui appartient à root et ne sait rien faire d'autre.</Guided>
+
+```bash
+sudo ssh-keygen -t ed25519 -N '' -f /root/.ssh/netbox-backup -C netbox-backup
+sudo cat /root/.ssh/netbox-backup.pub
+```
+
+Ajoute la clé affichée dans `~${BACKUP_USER}/.ssh/authorized_keys` sur <V name="BACKUP_HOST" />, vérifie que <V name="BACKUP_PATH" /> existe et appartient à <V name="BACKUP_USER" />, puis ajoute à la fin du script de sauvegarde :
+
+```bash title="/usr/local/sbin/netbox-backup.sh (à la fin)"
+rsync -az --delete -e "ssh -i /root/.ssh/netbox-backup -o StrictHostKeyChecking=accept-new" \
+  "$dest/" ${BACKUP_USER}@${BACKUP_HOST}:${BACKUP_PATH}/
+```
+
+<Deep>`--delete` reflète le dossier, donc le côté distant suit la même rétention et ne se remplit jamais tout seul. Si tu préfères garder plus d'historique à distance, retire `--delete` et fais la rotation là-bas. Sur le serveur de sauvegarde, préfixe la clé dans `authorized_keys` avec `restrict,command="rrsync /le/chemin/de/destination"` : `rrsync` est livré avec rsync et confine la clé à ce dossier, donc un serveur NetBox compromis ne peut rien lire d'autre là-bas. `accept-new` enregistre la clé d'hôte à la première exécution et refuse une clé changée ensuite, exactement ce qu'on attend d'une tâche sans surveillance.</Deep>
+
+<Check cmd="sudo systemctl start netbox-backup.service && sudo ssh -i /root/.ssh/netbox-backup ${BACKUP_USER}@${BACKUP_HOST} ls ${BACKUP_PATH} | grep -q dump && echo synced" expect="synced" />
+
+</When>
+
+## Exercice de restauration
+
+<Guided>Une sauvegarde jamais restaurée est un espoir, pas une sauvegarde. On restaure le dernier dump dans une base jetable, on y compte quelque chose, et on la supprime. Dix secondes, et maintenant tu sais que le fichier est utilisable et tu connais les commandes.</Guided>
+
+```bash
+latest=$(ls -t ${BACKUP_DIR}/netbox-*.dump | head -1)
+sudo -u postgres createdb -O netbox netbox_drill
+sudo -u postgres pg_restore --no-owner --role=netbox -d netbox_drill < "$latest"
+```
+
+<Check cmd="sudo -u postgres psql -d netbox_drill -tAc 'SELECT count(*) > 0 FROM dcim_site'" expect="t" />
+
+```bash
+sudo -u postgres dropdb netbox_drill
+```
+
+<Deep>`--no-owner --role=netbox` fait appartenir chaque objet restauré au rôle `netbox` quoi que dise le dump, ce qui permet au même fichier de se restaurer sur un serveur où les rôles diffèrent. Une vraie restauration, ce sont les mêmes trois lignes vers la base `netbox`, les deux services NetBox arrêtés avant, puis `sudo ./upgrade.sh` si le dump vient d'une version plus ancienne de NetBox : les migrations ne vont que vers l'avant, donc le code doit être au moins aussi récent que les données. Restaurer les fichiers, c'est `tar -xzf … -C ${INSTALL_DIR}`.</Deep>
+
+<Warn>Ne fais jamais de `pg_restore` dans la base `netbox` en production pendant que les services tournent. Arrête `netbox` et `netbox-rq` d'abord, sinon tu restaures sous les pieds des workers et tu te retrouves avec un mélange de lignes anciennes et nouvelles.</Warn>
+
+## Mettre NetBox à jour
+
+<Guided>Une mise à jour, c'est : une sauvegarde, un `git checkout` du nouveau tag, `upgrade.sh`, un redémarrage. Le script reconstruit l'environnement virtuel, réinstalle les plugins listés dans `local_requirements.txt`, exécute les migrations et collecte les fichiers statiques, raison pour laquelle le même script a servi à l'installation. Lis les notes de version de <V name="TARGET_REF" /> avant tout : elles listent les changements cassants, la version de Python exigée, et les plugins à mettre à jour.</Guided>
+
+```bash
+sudo systemctl start netbox-backup.service
+cd ${INSTALL_DIR}
+sudo git fetch --tags
+sudo git checkout ${TARGET_REF}
+sudo ./upgrade.sh
+sudo systemctl restart netbox netbox-rq
+```
+
+<Note>Si `git fetch` se plaint d'un clone superficiel (la page d'installation a cloné avec `--depth 1`), lance `sudo git fetch --unshallow --tags` une fois. Si `upgrade.sh` choisit le mauvais Python, préfixe-le : `sudo PYTHON=/usr/bin/python3.12 ./upgrade.sh`. Les deux sont documentés dans le guide de mise à jour sur docs.netbox.dev ; confirme les noms des options là-bas.</Note>
+
+<Deep>NetBox ne supporte que la montée vers une version plus récente, et seulement depuis la dernière release de la majeure précédente : passer de 3.5 à 4.4 impose une étape en 3.7. Les versions mineures à l'intérieur de 4.x peuvent être sautées. `upgrade.sh` supprime et recrée `venv/`, donc tout ce que tu as installé avec `pip` à la main sans le lister dans `local_requirements.txt` disparaît à ce moment-là, c'est le classique « le plugin a disparu après la mise à jour ». Les migrations tournent dans une transaction par application ; si l'une échoue, la base reste dans l'état d'avant les migrations de cette application et le script sort en erreur, donc une mise à jour ratée n'est pas une base corrompue, elle est simplement pas faite.</Deep>
+
+<Check cmd="sudo git -C ${INSTALL_DIR} describe --tags --exact-match" expect="${TARGET_REF}" />
+
+<Check cmd={"curl -skf -H 'Authorization: Token ${NETBOX_TOKEN}' https://${NETBOX_HOST}/api/status/ | python3 -c 'import sys,json; print(\"v\" + json.load(sys.stdin)[\"netbox-version\"])'"} expect="${TARGET_REF}" />
+
+<Check cmd={"curl -sk -o /dev/null -w '%{http_code}' https://${NETBOX_HOST}/login/"} expect="200" />
+
+Ensuite, ouvre **https://<V name="NETBOX_HOST" />/** et clique sur une page d'équipement et une recherche : que l'API réponde ne veut pas dire que l'interface s'affiche, puisque les fichiers statiques et les plugins peuvent casser l'un sans l'autre.
+
+### Si un plugin bloque la mise à jour
+
+<Guided>La panne la plus fréquente : `upgrade.sh` s'arrête pendant l'installation de `local_requirements.txt`, ou pendant les migrations, avec une erreur qui nomme un plugin. Le plugin ne supporte pas encore le nouveau NetBox, ou il le supporte mais seulement dans une version que pip n'a pas choisie.</Guided>
+
+- Regarde le tableau de compatibilité du plugin sur son dépôt. S'il existe une release compatible, fige-la dans `local_requirements.txt` (`netbox-bgp==0.15.0`) et relance `sudo ./upgrade.sh`.
+- S'il n'en existe pas, retire le plugin de `PLUGINS` dans `configuration.py` *et* de `local_requirements.txt`, mets à jour, et remets-le quand le plugin aura rattrapé. Ses tables restent dans la base ; rien n'est perdu, les pages disparaissent juste en attendant.
+- Si les notes de version disent que le plugin est devenu une fonction native (ça arrive), migre les données avec les instructions du plugin *avant* la mise à jour.
+
+<Deep>Ne fais pas de `pip install` d'un plugin depuis sa branche git `main` pour contourner : tu ferais tourner du code non publié dans ta source de vérité, et le prochain `upgrade.sh` le jetterait de toute façon. Quand un plugin est indispensable et en retard, la bonne décision est de retarder la mise à jour de NetBox, pas de la forcer.</Deep>
+
+### Retour arrière
+
+<Guided>Le code revient avec git ; la base revient avec le dump pris juste avant. Les deux ensemble, dans cet ordre, et tu es exactement là où tu étais.</Guided>
+
+```bash
+sudo systemctl stop netbox netbox-rq
+cd ${INSTALL_DIR}
+sudo git checkout $(sudo git describe --tags --abbrev=0 ${TARGET_REF}^)
+latest=$(ls -t ${BACKUP_DIR}/netbox-*.dump | head -1)
+sudo -u postgres dropdb netbox && sudo -u postgres createdb -O netbox netbox
+sudo -u postgres pg_restore --no-owner --role=netbox -d netbox < "$latest"
+sudo ./upgrade.sh
+sudo systemctl start netbox netbox-rq
+```
+
+<Warn>`dropdb netbox` supprime la base en production. Ne le fais qu'avec un dump que tu as restauré dans l'exercice ci-dessus, pris *avant* la mise à jour. La ligne `git describe` trouve le tag juste avant <V name="TARGET_REF" /> ; vérifie ce qu'elle affiche si tu avais sauté des versions, et utilise ton tag précédent explicitement à la place.</Warn>
+
+<Deep>Pourquoi restaurer la base, si le code est revenu ? Parce que les migrations sont à sens unique en pratique : NetBox ne teste pas les migrations inverses, et une nouvelle colonne avec des données n'a pas de chemin honnête vers l'arrière. Le dump est le retour arrière. C'est aussi pour ça que la sauvegarde tourne juste avant le checkout dans l'étape de mise à jour, et pas la nuit d'avant.</Deep>
+
+## Entretien
+
+<Guided>NetBox livre une commande de gestion, `manage.py housekeeping`, qui supprime les sessions expirées, les enregistrements de changement plus vieux que `CHANGELOG_RETENTION` et les résultats de tâches plus vieux que `JOB_RETENTION`. La page d'installation a lié le wrapper livré dans `/etc/cron.daily` ; vérifie qu'il est toujours là après la mise à jour, et lance-le une fois à la main pour voir ce qu'il fait.</Guided>
+
+```bash
+sudo ln -sf ${INSTALL_DIR}/contrib/netbox-housekeeping.sh /etc/cron.daily/netbox-housekeeping
+sudo ${INSTALL_DIR}/venv/bin/python ${INSTALL_DIR}/netbox/manage.py housekeeping
+```
+
+<Check cmd="run-parts --test /etc/cron.daily | grep netbox" expect="/etc/cron.daily/netbox-housekeeping" />
+
+<Deep>Tu préfères un timer à cron ? Copie les deux unités de sauvegarde, remplace le script par `${INSTALL_DIR}/contrib/netbox-housekeeping.sh` et mets `OnCalendar=daily`, puis retire le lien symbolique. Même résultat, plus un journal par exécution. `CHANGELOG_RETENTION` est le nombre de jours d'historique conservés (180 à la page précédente, 90 par défaut, 0 pour toujours) ; le journal des changements est la plus grosse table de toute instance où de l'automatisation écrit, donc c'est le réglage qui décide de la taille de tes dumps.</Deep>
+
+Logs et disque : gunicorn écrit sur la sortie standard, que systemd capture dans le journal ; plafonne-le. nginx et Apache font tourner leurs propres fichiers via `logrotate`, livré avec le paquet.
+
+<Tabs group="logs">
+
+<Tab label="journald.conf.d/netbox.conf">
+
+```ini title="/etc/systemd/journald.conf.d/netbox.conf"
+[Journal]
+SystemMaxUse=500M
+```
+
+Puis `sudo systemctl restart systemd-journald`.
+
+</Tab>
+
+<Tab label="vérifications">
+
+```bash
+journalctl --disk-usage
+df -h / ${BACKUP_DIR}
+sudo -u postgres psql -tAc "SELECT pg_size_pretty(pg_database_size('netbox'))"
+redis-cli info memory | grep used_memory_human
+```
+
+</Tab>
+
+</Tabs>
+
+<Deep>Redis contient la file RQ et le cache ; un `used_memory_human` au-dessus de quelques centaines de Mo signifie soit une file bloquée (des webhooks qui s'empilent parce qu'un récepteur est tombé, voir les logs de `manage.py rqworker` dans `journalctl -u netbox-rq`), soit un cache jamais purgé. Mets `maxmemory 256mb` et `maxmemory-policy allkeys-lru` dans `redis.conf` dans le second cas : NetBox tolère un cache froid, pas un Redis qui refuse d'écrire. Confirme les noms des paramètres dans la documentation Redis de la version de ton paquet.</Deep>
+
+<When is="WEB" equals="nginx">
+
+<Note>`logrotate -d /etc/logrotate.d/nginx` montre ce qui serait tourné sans le faire. Par défaut : quotidien, 14 fichiers, compressés. Très bien.</Note>
+
+</When>
+
+<When is="WEB" equals="apache">
+
+<Note>`logrotate -d /etc/logrotate.d/apache2` (Ubuntu) ou `/etc/logrotate.d/httpd` (RHEL) montre ce qui serait tourné sans le faire. Par défaut : hebdomadaire et compressé. Très bien.</Note>
+
+</When>
+
+Chaque semaine, cinq minutes :
+
+| Vérification | Commande | Attendu |
+|---|---|---|
+| Les deux services tournent | `systemctl is-active netbox netbox-rq` | `active` deux fois |
+| La dernière sauvegarde a tourné | `systemctl list-timers netbox-backup.timer` | un `LAST` de moins de 24 h |
+| Taille de sauvegarde cohérente | `ls -lh ${BACKUP_DIR}` | des tailles du même ordre que la semaine dernière |
+| Disque | `df -h /` | sous 80 % |
+| File calme | `redis-cli info memory` | `used_memory_human` stable |
+| Nouvelle release ? | page des releases | lire les notes, planifier la mise à jour |
+
+## Supervision de base
+
+<Guided>Deux signaux suffisent pour commencer : l'état systemd des deux unités, et la réponse JSON de `/api/status/`, qui donne la version et, plus utile, le nombre de workers RQ en marche. Une sonde qui vérifie le second toutes les minutes attrape les pannes que les utilisateurs remarquent.</Guided>
+
+```bash
+systemctl status netbox netbox-rq --no-pager | grep Active
+curl -skf -H "Authorization: Token ${NETBOX_TOKEN}" https://${NETBOX_HOST}/api/status/ | python3 -m json.tool
+```
+
+<Check cmd={"curl -skf -H 'Authorization: Token ${NETBOX_TOKEN}' https://${NETBOX_HOST}/api/status/ | python3 -c 'import sys,json; print(json.load(sys.stdin)[\"rq-workers-running\"] >= 1)'"} expect="True" />
+
+<Guided>Pour une vraie sonde (Zabbix, Nagios, Uptime Kuma, un cron avec `curl -f`), crée un utilisateur dédié avec des droits de lecture sur rien en particulier et donne à la sonde *son* jeton, pas le tien ; la page suivante montre comment créer ces utilisateurs et jetons. `rq-workers-running` à 0 veut dire que webhooks, scripts et rapports s'arrêtent en silence pendant que l'interface continue de marcher : c'est celui sur lequel alerter.</Guided>
+
+<Deep>Prometheus : mets `METRICS_ENABLED = True` dans `configuration.py` et NetBox expose `/metrics` (django-prometheus : latences des requêtes, compteurs base et cache). Avec plusieurs workers gunicorn, chaque processus a ses propres compteurs, donc l'exporteur a besoin d'un répertoire partagé : ajoute un drop-in à l'unité `netbox` avec `RuntimeDirectory=netbox-metrics` et `Environment=PROMETHEUS_MULTIPROC_DIR=/run/netbox-metrics`, puis `daemon-reload` et redémarre. `/metrics` est exempté de `LOGIN_REQUIRED`, donc restreins-le à l'adresse de Prometheus dans le serveur web (`location = /metrics` avec `allow`/`deny` sous nginx, `Require ip` sous Apache). Confirme l'orthographe de la variable d'environnement dans la page « Prometheus metrics » de la doc NetBox ; les anciennes versions utilisaient le nom en minuscules.</Deep>
+
+## Terminé
+
+Chaque nuit un dump et une archive atterrissent dans <V name="BACKUP_DIR" /><When flag="OFFSITE"> et sur <V name="BACKUP_HOST" /></When>, tu en as restauré un à la main, NetBox tourne en <V name="TARGET_REF" />, le journal des changements est purgé chaque jour, et une sonde sait quand les workers s'arrêtent. La page suivante arrête de cliquer : un utilisateur d'automatisation, pynetbox, des imports en masse, des webhooks et des scripts personnalisés.

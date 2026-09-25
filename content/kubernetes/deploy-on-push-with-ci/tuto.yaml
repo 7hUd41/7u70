@@ -1,0 +1,57 @@
+# Contract for this page. Inherits the cluster and application groups, NODE_IP, K3S_VERSION,
+# APP_DOMAIN, NAMESPACE, ACME_EMAIL and the TOPOLOGY / TLS / DB choices from ../series.yaml.
+
+title:
+  en: Deploy on push with CI
+  fr: Déployer à chaque push avec la CI
+summary:
+  en: >-
+    A ServiceAccount that can only touch your namespace, its kubeconfig as a CI secret, and a
+    pipeline that builds the image on every push, tags it with the commit, and rolls it out.
+  fr: >-
+    Un ServiceAccount qui ne peut toucher qu'à ton namespace, son kubeconfig en secret de CI,
+    et un pipeline qui construit l'image à chaque push, la tague avec le commit, et la déploie.
+difficulty: intermediate
+tags: [kubernetes, ci, github-actions, gitlab-ci, kustomize, rbac]
+authors: [thudal]
+created: 2026-09-25
+minutes: 35
+validated: k3s v1.31 · GitHub Actions · GitLab 17
+
+groups:
+  - id: ci
+    label: { en: CI, fr: CI }
+    desc: { en: The repository and the image it builds., fr: Le dépôt et l'image qu'il construit. }
+
+vars:
+  - key: REPO
+    kind: text
+    group: ci
+    default: tugdual/indicat
+    label: { en: Repository, fr: Dépôt }
+    hint:
+      en: owner/name on GitHub, or group/project on GitLab.
+      fr: owner/name sur GitHub, ou groupe/projet sur GitLab.
+    impact:
+      en: Only used in commands that talk to the forge (gh, glab) and in the pipeline's comments. The pipeline itself uses the forge's built-in variables.
+      fr: Utilisé seulement dans les commandes qui parlent à la forge (gh, glab) et dans les commentaires du pipeline. Le pipeline lui-même utilise les variables intégrées de la forge.
+  - key: IMAGE_REPO
+    kind: text
+    group: ci
+    default: ghcr.io/tugdual/indicat
+    label: { en: Image name (no tag), fr: Nom de l'image (sans tag) }
+    hint:
+      en: The image of the previous page without its tag. On GitLab, registry.gitlab.com/group/project.
+      fr: L'image de la page précédente sans son tag. Sur GitLab, registry.gitlab.com/groupe/projet.
+    impact:
+      en: The pipeline pushes IMAGE_REPO:commit-sha and kustomize rewrites every manifest that uses this name. It must match the image name in deploy/ exactly, or nothing is replaced.
+      fr: Le pipeline pousse IMAGE_REPO:sha-du-commit et kustomize réécrit chaque manifeste qui utilise ce nom. Il doit correspondre exactement au nom d'image dans deploy/, sinon rien n'est remplacé.
+
+choices:
+  - key: CI
+    type: select
+    label: { en: CI system, fr: Système de CI }
+    default: github
+    options:
+      - { value: github, label: { en: GitHub Actions, fr: GitHub Actions } }
+      - { value: gitlab, label: { en: GitLab CI, fr: GitLab CI } }

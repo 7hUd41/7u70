@@ -1,0 +1,160 @@
+# The gist: your laptop reaches one lab machine; on it, containerlab drives Docker
+# to run three network OS containers wired spine-to-leaf. Quick: five boxes. Guided
+# adds the topology file and the management network. Deep adds images, ports, veths.
+title: { en: "One machine, three switches", fr: "Une machine, trois switches" }
+caption:
+  en: "containerlab reads topology.clab.yml, asks Docker for three containers running the network OS, wires them with virtual cables and puts their management interfaces on ${MGMT_SUBNET}."
+  fr: "containerlab lit topology.clab.yml, demande à Docker trois conteneurs qui font tourner l'OS réseau, les câble virtuellement et met leurs interfaces de management sur ${MGMT_SUBNET}."
+
+groups:
+  - id: host
+    label: { en: "Lab machine", fr: "Machine de lab" }
+    desc:
+      en: "One Ubuntu host with Docker and containerlab. Everything on this page runs here, in ${LAB_DIR}."
+      fr: "Un hôte Ubuntu avec Docker et containerlab. Tout ce qui est sur cette page tourne ici, dans ${LAB_DIR}."
+  - id: lab
+    label: { en: "Lab ${LAB_NAME}", fr: "Lab ${LAB_NAME}" }
+    desc:
+      en: "The three containers, prefixed clab-${LAB_NAME}-, on the management network ${MGMT_SUBNET}."
+      fr: "Les trois conteneurs, préfixés clab-${LAB_NAME}-, sur le réseau de management ${MGMT_SUBNET}."
+
+nodes:
+  - id: you
+    kind: client
+    label: { en: "Your laptop", fr: "Ton portable" }
+    sub: "ssh · git"
+    desc:
+      en: "Where you edit and from where you ssh into the lab machine. Nothing runs here."
+      fr: "Là où tu édites et d'où tu fais du ssh vers la machine de lab. Rien ne tourne ici."
+  - id: topo
+    kind: file
+    label: { en: "topology.clab.yml", fr: "topology.clab.yml" }
+    sub: "${LAB_DIR}"
+    in: host
+    level: guided
+    desc:
+      en: "The whole lab in one file: name, management subnet, three nodes, two links. Versioned in git."
+      fr: "Tout le lab dans un fichier : nom, sous-réseau de management, trois nœuds, deux liens. Versionné dans git."
+    deep:
+      sub: "${LAB_DIR}/topology.clab.yml · kinds · nodes · links"
+  - id: clab
+    kind: service
+    label: { en: "containerlab", fr: "containerlab" }
+    sub: "deploy · inspect · destroy"
+    in: host
+    focus: true
+    desc:
+      en: "Reads the topology, creates the containers through Docker, the veth pairs for the links and the management network."
+      fr: "Lit la topologie, crée les conteneurs via Docker, les paires veth pour les liens et le réseau de management."
+    deep:
+      sub: "v${CLAB_VERSION} · /var/run/docker.sock · veth pairs · /etc/hosts"
+  - id: docker
+    kind: service
+    label: { en: "Docker", fr: "Docker" }
+    sub: "containers · bridge"
+    in: host
+    level: guided
+    desc:
+      en: "Runs the node images and owns the management bridge network."
+      fr: "Fait tourner les images des nœuds et possède le réseau bridge de management."
+    deep:
+      sub: "dockerd · network ${LAB_NAME}-mgmt · ${MGMT_SUBNET}"
+  - id: spine1
+    kind: net
+    label: { en: "spine1", fr: "spine1" }
+    sub: "${SPINE1_MGMT}"
+    in: lab
+    desc:
+      en: "The spine. Two links down to the leaves, /31 on each. Management on ${SPINE1_MGMT}."
+      fr: "Le spine. Deux liens vers les leaves, un /31 sur chacun. Management sur ${SPINE1_MGMT}."
+    deep:
+      sub: "clab-${LAB_NAME}-spine1 · ${SPINE1_MGMT} · 10.1.0.0/31 · 10.1.0.2/31"
+  - id: leaf1
+    kind: net
+    label: { en: "leaf1", fr: "leaf1" }
+    sub: "${LEAF1_MGMT}"
+    in: lab
+    desc:
+      en: "First leaf, one link up to spine1. Management on ${LEAF1_MGMT}."
+      fr: "Première leaf, un lien vers spine1. Management sur ${LEAF1_MGMT}."
+    deep:
+      sub: "clab-${LAB_NAME}-leaf1 · ${LEAF1_MGMT} · 10.1.0.1/31"
+  - id: leaf2
+    kind: net
+    label: { en: "leaf2", fr: "leaf2" }
+    sub: "${LEAF2_MGMT}"
+    in: lab
+    desc:
+      en: "Second leaf, one link up to spine1. Management on ${LEAF2_MGMT}."
+      fr: "Deuxième leaf, un lien vers spine1. Management sur ${LEAF2_MGMT}."
+    deep:
+      sub: "clab-${LAB_NAME}-leaf2 · ${LEAF2_MGMT} · 10.1.0.3/31"
+
+edges:
+  - from: you
+    to: clab
+    label: "ssh"
+    max: quick
+    desc: { en: "You ssh into the lab machine and run containerlab there.", fr: "Tu fais du ssh vers la machine de lab et y lances containerlab." }
+  - from: you
+    to: topo
+    label: "edits"
+    level: guided
+    deep: { label: "ssh · git commit" }
+    desc: { en: "The topology is edited and committed; containerlab only ever reads it.", fr: "La topologie est éditée et commitée ; containerlab ne fait que la lire." }
+  - from: topo
+    to: clab
+    label: "reads"
+    level: guided
+    desc: { en: "deploy -t topology.clab.yml: the file is validated against containerlab's schema before anything starts.", fr: "deploy -t topology.clab.yml : le fichier est validé contre le schéma de containerlab avant que rien ne démarre." }
+  - from: clab
+    to: docker
+    label: "Docker API"
+    level: guided
+    deep: { label: "unix socket · create · start · network" }
+    desc: { en: "containerlab never runs an image itself: it asks Docker to.", fr: "containerlab ne lance jamais une image lui-même : il le demande à Docker." }
+  - from: clab
+    to: spine1
+    label: "deploys"
+    max: quick
+    desc: { en: "Three containers from one command.", fr: "Trois conteneurs en une commande." }
+  - from: docker
+    to: spine1
+    level: guided
+    deep: { label: "image ${SRL_IMAGE}" }
+    when: { is: NOS, equals: srlinux }
+    desc: { en: "The node image, pulled from GitHub's registry.", fr: "L'image du nœud, tirée du registre de GitHub." }
+  - from: docker
+    to: spine1
+    level: guided
+    deep: { label: "image ${CEOS_IMAGE}" }
+    when: { is: NOS, equals: ceos }
+    desc: { en: "The node image, imported from Arista's tarball.", fr: "L'image du nœud, importée depuis l'archive d'Arista." }
+  - from: spine1
+    to: leaf1
+    label: "link"
+    guided: { label: "10.1.0.0/31" }
+    deep: { label: "veth · e1-1 ↔ e1-1 · 10.1.0.0/31" }
+    when: { is: NOS, equals: srlinux }
+    desc: { en: "A veth pair between the two containers' network namespaces: the virtual cable.", fr: "Une paire veth entre les espaces de noms réseau des deux conteneurs : le câble virtuel." }
+  - from: spine1
+    to: leaf2
+    label: "link"
+    guided: { label: "10.1.0.2/31" }
+    deep: { label: "veth · e1-2 ↔ e1-1 · 10.1.0.2/31" }
+    when: { is: NOS, equals: srlinux }
+    desc: { en: "Second virtual cable, spine1's second port.", fr: "Deuxième câble virtuel, second port de spine1." }
+  - from: spine1
+    to: leaf1
+    label: "link"
+    guided: { label: "10.1.0.0/31" }
+    deep: { label: "veth · eth1 ↔ eth1 · 10.1.0.0/31" }
+    when: { is: NOS, equals: ceos }
+    desc: { en: "A veth pair between the two containers' network namespaces: the virtual cable.", fr: "Une paire veth entre les espaces de noms réseau des deux conteneurs : le câble virtuel." }
+  - from: spine1
+    to: leaf2
+    label: "link"
+    guided: { label: "10.1.0.2/31" }
+    deep: { label: "veth · eth2 ↔ eth1 · 10.1.0.2/31" }
+    when: { is: NOS, equals: ceos }
+    desc: { en: "Second virtual cable, spine1's second port.", fr: "Deuxième câble virtuel, second port de spine1." }

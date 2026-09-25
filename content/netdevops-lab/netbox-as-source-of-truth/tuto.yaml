@@ -1,0 +1,83 @@
+# Inherits from ../series.yaml: LAB_DIR, LAB_NAME, MGMT_SUBNET, NETBOX_URL, NETBOX_TOKEN, SITE_NAME, NOS, AUTOMATION, CI.
+# The three management IPs are also declared by containerlab-topology: same keys, the reader fills them once per series.
+
+title:
+  en: Model the lab in NetBox
+  fr: Modéliser le lab dans NetBox
+summary:
+  en: >-
+    What belongs in a source of truth and what does not, then a pynetbox script that creates
+    the site, the devices, their interfaces, addresses and cables, and a config context with
+    the BGP numbers. Safe to run twice.
+  fr: >-
+    Ce qui a sa place dans une source de vérité et ce qui n'y a pas, puis un script pynetbox
+    qui crée le site, les équipements, leurs interfaces, adresses et câbles, et un config
+    context avec les numéros BGP. Rejouable sans risque.
+difficulty: intermediate
+tags: [netbox, pynetbox, source-of-truth, ipam, dcim, netdevops]
+authors: [thudal]
+created: 2026-09-25
+minutes: 40
+validated: NetBox 4.4 · pynetbox 7.x · Python 3.12
+
+groups:
+  - id: nodes
+    label: { en: Nodes, fr: Nœuds }
+    desc: { en: The management address of each node, as pinned in the topology., fr: L'adresse de management de chaque nœud, telle que fixée dans la topologie. }
+
+vars:
+  - key: LOOPBACK_PREFIX
+    kind: cidr
+    group: sot
+    default: 10.0.0.0/24
+    label: { en: Loopback prefix, fr: Préfixe des loopbacks }
+    hint:
+      en: Each node gets one /32 from it, in order (spine1 first). Also the router IDs.
+      fr: Chaque nœud y prend un /32, dans l'ordre (spine1 d'abord). Ce sont aussi les router-id.
+    impact:
+      en: Advertised in BGP on the next page; the loopback pings are the end-to-end test of the whole series.
+      fr: Annoncé en BGP à la page suivante ; les pings de loopback sont le test de bout en bout de toute la série.
+  - key: ASN_BASE
+    kind: text
+    group: sot
+    default: "65000"
+    label: { en: Base AS number, fr: Numéro d'AS de base }
+    hint:
+      en: The spine's private AS. Leaves get the following numbers, one each.
+      fr: L'AS privé du spine. Les leaves prennent les numéros suivants, un chacun.
+    impact:
+      en: Stored in config contexts, read by the templates of the next page. Private range 64512–65534.
+      fr: Stocké dans les config contexts, lu par les templates de la page suivante. Plage privée 64512–65534.
+  - key: SPINE1_MGMT
+    kind: ip
+    group: nodes
+    default: 172.20.20.11
+    label: { en: spine1 management IP, fr: IP de management de spine1 }
+    hint:
+      en: The address pinned in topology.clab.yml on the previous page.
+      fr: L'adresse fixée dans topology.clab.yml à la page précédente.
+    impact:
+      en: Becomes the device's primary IP in NetBox, which is what the inventory plugins connect to.
+      fr: Devient l'IP primaire de l'équipement dans NetBox, celle à laquelle les plugins d'inventaire se connectent.
+  - key: LEAF1_MGMT
+    kind: ip
+    group: nodes
+    default: 172.20.20.12
+    label: { en: leaf1 management IP, fr: IP de management de leaf1 }
+    hint:
+      en: As pinned in the topology.
+      fr: Telle que fixée dans la topologie.
+    impact:
+      en: Same role as spine1's address.
+      fr: Même rôle que l'adresse de spine1.
+  - key: LEAF2_MGMT
+    kind: ip
+    group: nodes
+    default: 172.20.20.13
+    label: { en: leaf2 management IP, fr: IP de management de leaf2 }
+    hint:
+      en: As pinned in the topology.
+      fr: Telle que fixée dans la topologie.
+    impact:
+      en: Same role as spine1's address.
+      fr: Même rôle que l'adresse de spine1.

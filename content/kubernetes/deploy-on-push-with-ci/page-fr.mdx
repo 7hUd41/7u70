@@ -1,0 +1,508 @@
+{/* Première passe — à valider contre kubernetes.io/docs (RBAC, tokens de ServiceAccount, kustomize), docs.github.com/actions et docs.gitlab.com/ci avant publication. */}
+
+La page précédente déployait indicat à la main depuis ton portable, avec un kubeconfig qui est `cluster-admin`. Cette page confie le travail à <When is="CI" equals="github">GitHub Actions</When><When is="CI" equals="gitlab">GitLab CI</When> : un push sur `main` construit l'image, la tague avec le SHA du commit, la pousse dans le registre et la déploie, avec une identité qui ne peut toucher qu'à <V name="NAMESPACE" />.
+
+<Run>
+
+Le script tourne sur ton portable, à la racine du clone de <V name="REPO" />, avec le kubeconfig admin de la première page. Il crée le ServiceAccount, construit son kubeconfig, écrit `deploy/kustomization.yaml` et le fichier de pipeline. Il affiche le secret à ranger dans la CI ; il ne pousse pas.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Identité de déploiement CI et pipeline — ${REPO} → ${NAMESPACE} sur https://${NODE_IP}:6443
+NS=${NAMESPACE}
+kubectl -n $NS apply -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: ci-deploy }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: ci-deploy }
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/log, services]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: ci-deploy }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: ci-deploy }
+subjects: [{ kind: ServiceAccount, name: ci-deploy, namespace: ${NAMESPACE} }]
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ci-deploy-token
+  annotations: { kubernetes.io/service-account.name: ci-deploy }
+type: kubernetes.io/service-account-token
+EOF
+sleep 2
+TOKEN=$(kubectl -n $NS get secret ci-deploy-token -o jsonpath='{.data.token}' | base64 -d)
+CA=$(kubectl -n $NS get secret ci-deploy-token -o jsonpath='{.data.ca\.crt}')
+cat > ci-kubeconfig.yaml <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+  - name: k3s
+    cluster: { server: "https://${NODE_IP}:6443", certificate-authority-data: $CA }
+users:
+  - name: ci-deploy
+    user: { token: $TOKEN }
+contexts:
+  - name: ci
+    context: { cluster: k3s, user: ci-deploy, namespace: ${NAMESPACE} }
+current-context: ci
+EOF
+kubectl --kubeconfig ci-kubeconfig.yaml auth can-i create deployments
+cat > deploy/kustomization.yaml <<EOF
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ${NAMESPACE}
+resources: [migrate.yaml, deployment.yaml, service.yaml, ingress.yaml, hpa.yaml]
+images:
+  - name: ${IMAGE_REPO}
+    newTag: latest
+EOF
+```
+
+<When is="CI" equals="github">
+
+```bash
+mkdir -p .github/workflows
+cat > .github/workflows/deploy.yml <<'EOF'
+name: deploy
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  packages: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: ${{ github.actor }}, password: ${{ secrets.GITHUB_TOKEN }} }
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${IMAGE_REPO}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    env: { KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }} }
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          mkdir -p ~/.kube && echo "$KUBECONFIG_B64" | base64 -d > ~/.kube/config && chmod 600 ~/.kube/config
+          sed -i "s|newTag: .*|newTag: ${{ github.sha }}|" deploy/kustomization.yaml
+          kubectl delete job indicat-migrate --ignore-not-found
+          kubectl apply -k deploy/ -l app=indicat-migrate
+          kubectl wait --for=condition=complete job/indicat-migrate --timeout=300s
+          kubectl apply -k deploy/
+          kubectl rollout status deploy/indicat --timeout=300s
+EOF
+echo "Ensuite : gh secret set KUBECONFIG_B64 < <(base64 -w0 ci-kubeconfig.yaml); git add deploy .github; git commit -m 'ci: deploy on push'; git push"
+```
+
+</When>
+
+<When is="CI" equals="gitlab">
+
+```bash
+cat > .gitlab-ci.yml <<'EOF'
+stages: [build, deploy]
+build:
+  stage: build
+  image: docker:27
+  services: [docker:27-dind]
+  variables: { DOCKER_TLS_CERTDIR: /certs }
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - docker buildx create --use
+    - docker buildx build --push -t "${IMAGE_REPO}:$CI_COMMIT_SHA" .
+deploy:
+  stage: deploy
+  image: { name: bitnami/kubectl:1.31, entrypoint: [""] }
+  environment: production
+  rules: [{ if: $CI_COMMIT_BRANCH == "main" }]
+  script:
+    - mkdir -p ~/.kube && echo "$KUBECONFIG_B64" | base64 -d > ~/.kube/config && chmod 600 ~/.kube/config
+    - sed -i "s|newTag: .*|newTag: $CI_COMMIT_SHA|" deploy/kustomization.yaml
+    - kubectl delete job indicat-migrate --ignore-not-found
+    - kubectl apply -k deploy/ -l app=indicat-migrate
+    - kubectl wait --for=condition=complete job/indicat-migrate --timeout=300s
+    - kubectl apply -k deploy/
+    - kubectl rollout status deploy/indicat --timeout=300s
+EOF
+echo "Ensuite : glab variable set KUBECONFIG_B64 --masked --protected < <(base64 -w0 ci-kubeconfig.yaml); git add deploy .gitlab-ci.yml; git commit -m 'ci: deploy on push'; git push"
+```
+
+</When>
+
+<Warn>`ci-kubeconfig.yaml` est un identifiant pour ton namespace. Range-le dans la CI, puis supprime le fichier ; ne le commite jamais.</Warn>
+
+</Run>
+
+## Avant de commencer
+
+<Guided>Il te faut le dossier `deploy/` de la page précédente commité dans <V name="REPO" />, un `Dockerfile` à sa racine, le kubeconfig admin sur ton portable, et <When is="CI" equals="github">la CLI `gh` connectée</When><When is="CI" equals="gitlab">la CLI `glab` connectée</When> (facultatif : tout ce qu'elle fait se clique aussi dans l'interface web). L'API sur <V name="NODE_IP" />:6443 doit être joignable depuis les runners : pour des runners hébergés, ça veut dire depuis internet.</Guided>
+
+<Deep>Ouvrir le 6443 sur internet, c'est ce qu'a fait l'étape pare-feu de la première page. C'est acceptable parce que l'API n'accepte que des requêtes authentifiées en TLS, et que l'identité du pipeline est limitée à un namespace. Si ta politique l'interdit, fais tourner un runner auto-hébergé dans le réseau (ou dans le cluster lui-même, avec actions-runner-controller ou l'agent GitLab) et referme le port.</Deep>
+
+## Un ServiceAccount pour le pipeline
+
+<Guided>Le pipeline a besoin d'une identité, pas de ton kubeconfig. Un ServiceAccount, un Role qui liste exactement ce que déployer demande, et un RoleBinding qui lie les deux, le tout dans <V name="NAMESPACE" />. Un `Role` (pas un `ClusterRole`) ne peut pas sortir de son namespace, quoi qu'il dise.</Guided>
+
+```yaml title="deploy/ci-rbac.yaml" {10-11,26-27}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ci-deploy
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ci-deploy
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/log, services]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ci-deploy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ci-deploy
+subjects:
+  - kind: ServiceAccount
+    name: ci-deploy
+    namespace: ${NAMESPACE}
+```
+
+```bash
+kubectl -n ${NAMESPACE} apply -f deploy/ci-rbac.yaml
+```
+
+<Deep>Pas de `secrets` dans les règles : le pipeline applique des manifestes, il ne crée pas d'identifiants, et un token qui fuite ne peut alors pas lire `indicat-secrets`. Pas de `persistentvolumeclaims` ni de ressources `cnpg` non plus : la base n'est pas quelque chose qu'un push devrait toucher. `pods` et `pods/log` sont là pour que le job de déploiement puisse te montrer pourquoi un rollout a échoué. Si tu ajoutes plus tard un `PodDisruptionBudget` dans `deploy/`, ajoute `policy` / `poddisruptionbudgets` ici, sinon l'apply échoue en `forbidden`.</Deep>
+
+<Check cmd="kubectl -n kube-system auth can-i get secrets --as=system:serviceaccount:${NAMESPACE}:ci-deploy" expect="no" />
+
+## Un kubeconfig pour le pipeline
+
+<Guided>Depuis Kubernetes 1.24, un ServiceAccount n'a pas de token par défaut. Un Secret de type `service-account-token` demande au control plane d'en émettre un de longue durée ; le token, la CA du cluster et l'adresse de l'API font ensuite un kubeconfig à part entière.</Guided>
+
+```yaml title="deploy/ci-token.yaml"
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ci-deploy-token
+  annotations:
+    kubernetes.io/service-account.name: ci-deploy
+type: kubernetes.io/service-account-token
+```
+
+```bash
+kubectl -n ${NAMESPACE} apply -f deploy/ci-token.yaml
+TOKEN=$(kubectl -n ${NAMESPACE} get secret ci-deploy-token -o jsonpath='{.data.token}' | base64 -d)
+CA=$(kubectl -n ${NAMESPACE} get secret ci-deploy-token -o jsonpath='{.data.ca\.crt}')
+cat > ci-kubeconfig.yaml <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+  - name: k3s
+    cluster: { server: "https://${NODE_IP}:6443", certificate-authority-data: $CA }
+users:
+  - name: ci-deploy
+    user: { token: $TOKEN }
+contexts:
+  - name: ci
+    context: { cluster: k3s, user: ci-deploy, namespace: ${NAMESPACE} }
+current-context: ci
+EOF
+```
+
+<Deep>L'alternative est `kubectl create token ci-deploy --duration=8760h` : un token lié qui expire, meilleure posture de sécurité au prix d'une rotation annuelle à ne pas oublier. Le Secret ci-dessus n'expire jamais ; le révoquer, c'est supprimer le Secret (le token est rejeté immédiatement) ou le ServiceAccount. Le `namespace` dans le contexte permet au pipeline d'omettre `-n` partout. Le `certificate-authority-data` est la CA du cluster de la première page, et c'est pour ça que l'adresse doit être couverte par le certificat de l'API : <V name="NODE_IP" /> a été ajoutée avec `--tls-san`.</Deep>
+
+<Check cmd="kubectl --kubeconfig ci-kubeconfig.yaml auth can-i create deployments" expect="yes" />
+
+## Le secret de CI et le registre
+
+<Guided>Le kubeconfig entre dans la CI comme une seule chaîne base64, `KUBECONFIG_B64`, pour que les sauts de ligne ne soient jamais abîmés. Le registre ne demande aucun secret en plus : <When is="CI" equals="github">le `GITHUB_TOKEN` du workflow peut pousser sur GHCR dès que le workflow demande `packages: write`</When><When is="CI" equals="gitlab">chaque job reçoit `CI_REGISTRY_USER` et `CI_REGISTRY_PASSWORD` pour le registre du projet</When>.</Guided>
+
+<When is="CI" equals="github">
+
+```bash
+gh secret set KUBECONFIG_B64 --repo ${REPO} < <(base64 -w0 ci-kubeconfig.yaml)
+rm ci-kubeconfig.yaml
+```
+
+<Note>Ou dans le navigateur : dépôt **Settings → Secrets and variables → Actions → New repository secret**. Sur macOS, `base64` n'a pas de `-w0` ; utilise `base64 | tr -d '\n'`.</Note>
+
+<Deep>Un paquet poussé par un workflow est privé par défaut et lié au dépôt : le `regcred` du cluster de la page précédente (un PAT avec `read:packages`) continue de le tirer. Si le paquet avait été créé à la main avant, lie-le au dépôt dans les réglages du paquet pour que le token du workflow puisse y pousser. `GITHUB_TOKEN` est limité au run et expire avec lui ; rien à faire tourner.</Deep>
+
+</When>
+
+<When is="CI" equals="gitlab">
+
+```bash
+glab variable set KUBECONFIG_B64 --masked --protected --repo ${REPO} < <(base64 -w0 ci-kubeconfig.yaml)
+rm ci-kubeconfig.yaml
+```
+
+<Note>Ou dans le navigateur : projet **Settings → CI/CD → Variables → Add variable**, coche *Mask* et *Protect*. Sur macOS, `base64` n'a pas de `-w0` ; utilise `base64 | tr -d '\n'`.</Note>
+
+<Deep>*Protected* veut dire que la variable n'existe que dans les pipelines des branches et tags protégés, donc une branche de fonctionnalité ne peut pas déployer même si quelqu'un y modifie `.gitlab-ci.yml`. *Masked* la cache dans les logs des jobs ; la valeur doit tenir sur une ligne d'au moins 8 caractères, ce que le base64 garantit. `CI_REGISTRY_PASSWORD` est un job token valable pour le run seulement, avec droit de push sur le registre du projet ; le cluster tire avec un deploy token (**Settings → Repository → Deploy tokens**, portée `read_registry`), et c'est lui que `regcred` devrait contenir sur GitLab.</Deep>
+
+<Check cmd="glab variable list --repo ${REPO} | grep -o KUBECONFIG_B64" expect="KUBECONFIG_B64" />
+
+</When>
+
+## kustomize : un seul endroit pour le tag d'image
+
+<Guided>Les manifestes de la page précédente nomment l'image avec un tag fixe. Plutôt qu'un `sed` sur chaque fichier, un `kustomization.yaml` les liste et porte une seule surcharge `images:` ; `kubectl apply -k` les rend avec le nouveau tag. Le pipeline modifie une ligne.</Guided>
+
+```yaml title="deploy/kustomization.yaml" {4,6-8}
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ${NAMESPACE}
+resources: [migrate.yaml, deployment.yaml, service.yaml, ingress.yaml, hpa.yaml]
+images:
+  - name: ${IMAGE_REPO}
+    newTag: latest
+```
+
+<Deep>`images[].name` doit être le nom de l'image tel qu'écrit dans les manifestes, sans son tag ; kustomize remplace le tag partout où ce nom apparaît, dans le Job comme dans le Deployment. `namespace:` estampille chaque objet rendu, donc les fichiers restent sans namespace et un overlay de staging est un `kustomization.yaml` de plus qui pointe vers les mêmes ressources avec un autre namespace. `postgres.yaml` et les fichiers RBAC ne sont volontairement pas listés : le pipeline ne devrait pas pouvoir les réappliquer. Alternative sans kustomize : `kubectl set image deploy/indicat indicat=IMAGE:TAG`, une commande, mais elle laisse le Job de migrations et les fichiers dans git désynchronisés de ce qui tourne.</Deep>
+
+<Check cmd="kubectl kustomize deploy/ | grep -c 'image: ${IMAGE_REPO}:latest'" expect="2" />
+
+## Le pipeline
+
+<Guided>Deux jobs. *build* récupère le code, construit l'image avec buildx et la pousse en <V name="IMAGE_REPO" />:*sha-du-commit*. *deploy* décode le kubeconfig, met le tag dans `kustomization.yaml`, lance le Job de migrations, applique le reste et attend le rollout. Si une étape échoue, le pipeline est rouge et la version précédente continue de tourner.</Guided>
+
+<When is="CI" equals="github">
+
+<Annotated>
+
+```yaml title=".github/workflows/deploy.yml" {6-7,22,29,36-39}
+name: deploy
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  packages: write                                        # (1)
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${IMAGE_REPO}:${{ github.sha }}          # (2)
+          cache-from: type=gha
+          cache-to: type=gha,mode=max                    # (3)
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production                              # (4)
+    env:
+      KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "$KUBECONFIG_B64" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+      - name: Deploy
+        run: |
+          sed -i "s|newTag: .*|newTag: ${{ github.sha }}|" deploy/kustomization.yaml
+          kubectl delete job indicat-migrate --ignore-not-found
+          kubectl apply -k deploy/ -l app=indicat-migrate  # (5)
+          kubectl wait --for=condition=complete job/indicat-migrate --timeout=300s
+          kubectl apply -k deploy/
+          kubectl rollout status deploy/indicat --timeout=300s
+```
+
+1. Le minimum : lire le code, écrire des paquets. Les permissions par défaut du token sont plus larges ; les énoncer ici les restreint pour ce workflow.
+2. Un tag par commit. Le même SHA dans `git log`, dans le registre et dans `kubectl get deploy -o wide` : plus à deviner ce qui tourne.
+3. Cache de couches dans le service de cache de GitHub ; un build qui n'a changé que le code applicatif prend quelques secondes.
+4. Rattache le job à l'environnement `production` : ses secrets, ses règles de protection (étape suivante), et un historique de déploiements dans la barre latérale du dépôt.
+5. Le Job d'abord, seul, sélectionné par son label ; puis tout le reste. Une migration qui échoue arrête le pipeline avant qu'un pod change.
+
+</Annotated>
+
+<Note>`kubectl` est préinstallé sur les runners `ubuntu-latest`. Fige les actions à une version majeure comme ci-dessus ; Dependabot peut les monter.</Note>
+
+</When>
+
+<When is="CI" equals="gitlab">
+
+<Annotated>
+
+```yaml title=".gitlab-ci.yml" {3-6,11,15-17,20-26}
+stages: [build, deploy]
+build:
+  stage: build
+  image: docker:27
+  services: [docker:27-dind]                                          # (1)
+  variables: { DOCKER_TLS_CERTDIR: /certs }
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - docker buildx create --use
+    - docker buildx build --push -t "${IMAGE_REPO}:$CI_COMMIT_SHA" .  # (2)
+deploy:
+  stage: deploy
+  image:
+    name: bitnami/kubectl:1.31
+    entrypoint: [""]                                                  # (3)
+  environment: production                                             # (4)
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  script:
+    - mkdir -p ~/.kube && echo "$KUBECONFIG_B64" | base64 -d > ~/.kube/config && chmod 600 ~/.kube/config
+    - sed -i "s|newTag: .*|newTag: $CI_COMMIT_SHA|" deploy/kustomization.yaml
+    - kubectl delete job indicat-migrate --ignore-not-found
+    - kubectl apply -k deploy/ -l app=indicat-migrate                  # (5)
+    - kubectl wait --for=condition=complete job/indicat-migrate --timeout=300s
+    - kubectl apply -k deploy/
+    - kubectl rollout status deploy/indicat --timeout=300s
+```
+
+1. Docker-in-docker : un démon Docker tourne dans un conteneur de service à côté du job ; la CLI `docker` du job lui parle en TLS. Le runner doit autoriser les jobs privilégiés, ce que font les runners partagés de gitlab.com.
+2. Un tag par commit. Le même SHA dans `git log`, dans le registre et dans `kubectl get deploy -o wide` : plus à deviner ce qui tourne.
+3. L'entrypoint de l'image est `kubectl` lui-même ; GitLab a besoin d'un shell pour lancer `script:`, d'où l'entrypoint vide.
+4. Rattache le job à l'environnement `production` : historique de déploiements, et les règles de protection de l'étape suivante.
+5. Le Job d'abord, seul, sélectionné par son label ; puis tout le reste. Une migration qui échoue arrête le pipeline avant qu'un pod change.
+
+</Annotated>
+
+<Note>Sur un GitLab auto-hébergé, vérifie que le runner a `privileged = true` pour docker-in-docker, ou utilise kaniko/buildah, qui n'ont pas besoin de démon.</Note>
+
+</When>
+
+```bash
+git add deploy/ .github/ .gitlab-ci.yml 2>/dev/null; git commit -m "ci: deploy on push"
+git push origin main
+```
+
+<When is="CI" equals="github">
+
+<Check cmd="gh run list --repo ${REPO} --workflow deploy --limit 1 --json conclusion --jq '.[0].conclusion'" expect="success" />
+
+</When>
+
+<When is="CI" equals="gitlab">
+
+<Check cmd="glab ci list --repo ${REPO} --per-page 1 | grep -o success" expect="success" />
+
+</When>
+
+<Check cmd={"[ \"$(kubectl -n ${NAMESPACE} get deploy indicat -o jsonpath='{.spec.template.spec.containers[0].image}' | cut -d: -f2)\" = \"$(git rev-parse HEAD)\" ] && echo running HEAD"} expect="running HEAD" />
+
+<Details summary="Si le job deploy échoue">
+Le log du job contient l'erreur kubectl. Par ordre de probabilité :
+
+- `Unable to connect to the server` : <V name="NODE_IP" />:6443 n'est pas joignable depuis le runner (pare-feu, adresse privée).
+- `forbidden` : il manque au Role une ressource que `deploy/` contient maintenant ; ajoute-la dans `ci-rbac.yaml`.
+- `error: no objects passed to apply` à l'étape du Job : le label `app: indicat-migrate` manque sur `migrate.yaml`.
+- Le Job de migrations échoue : `kubectl logs job/indicat-migrate` depuis ton portable ; le Deployment n'a pas été touché.
+- `rollout status` expire : `ImagePullBackOff` parce que le nom d'image dans `deploy/` diffère de <V name="IMAGE_REPO" /> (kustomize n'a rien remplacé), ou les pods ratent leurs sondes (le dépannage de la page précédente s'applique).
+</Details>
+
+## Environnements et protection
+
+<Guided>Un push sur `main` déploie maintenant en production. Deux garde-fous coûtent une minute : protéger la branche (pas de push direct, seulement des merge requests relues) et protéger l'environnement (une personne nommée approuve le job de déploiement).</Guided>
+
+<When is="CI" equals="github">
+
+Dépôt **Settings → Environments → production** : ajoute des *Required reviewers*, et restreins *Deployment branches* à `main`. **Settings → Branches → Add rule** sur `main` : exige une pull request et des status checks.
+
+<Deep>Avec des relecteurs requis, le job `deploy` se met en pause jusqu'à ce que l'un d'eux approuve dans l'interface Actions ; l'image est déjà construite, l'approbation est le seul délai. Les secrets d'environnement (par opposition aux secrets de dépôt) ne sont exposés qu'aux jobs qui ciblent cet environnement : déplace `KUBECONFIG_B64` là (`gh secret set --env production`) et un workflow qui ne déclare pas `environment: production` ne peut pas le lire, même depuis `main`. Un second environnement `staging` avec son propre kubeconfig pour un namespace `staging`, c'est le même fichier avec un autre `environment:` et un déclencheur `workflow_dispatch`.</Deep>
+
+</When>
+
+<When is="CI" equals="gitlab">
+
+Projet **Settings → CI/CD → Protected environments** : ajoute `production`, mets *Allowed to deploy* sur Maintainers et *Approvers* sur les personnes qui valident. **Settings → Repository → Protected branches** : `main`, personne autorisé à pousser, Maintainers autorisés à merger.
+
+<Deep>Avec des approbateurs, le job `deploy` attend dans la page de l'environnement jusqu'à approbation ; les `rules:` sur `main` plus le drapeau *protected* de la variable font qu'un pipeline de branche ne voit même jamais le kubeconfig. Pour un namespace de staging, ajoute un second job avec `environment: staging`, des `rules` sur les merge requests, et un `KUBECONFIG_B64` limité à cet environnement (les variables ont un champ *Environment scope*), qui pointe vers un ServiceAccount `ci-deploy` du namespace `staging`.</Deep>
+
+</When>
+
+## Rollback
+
+Chaque commit a son image. Revenir en arrière, c'est déployer une plus ancienne : relance le pipeline du dernier bon commit, ou, depuis ton portable, annule le rollout.
+
+<When is="CI" equals="github">
+
+```bash
+gh run list --repo ${REPO} --workflow deploy --limit 5
+gh run rerun <run-id> --repo ${REPO}
+```
+
+</When>
+
+<When is="CI" equals="gitlab">
+
+```bash
+glab ci list --repo ${REPO} --per-page 5
+glab ci retry <job-id> --repo ${REPO}
+```
+
+</When>
+
+```bash
+kubectl -n ${NAMESPACE} rollout undo deploy/indicat
+```
+
+<Deep>Relancer un vieux pipeline ne reconstruit rien sur GitHub si le tag existe déjà (le push est sans effet) et redéploie ce SHA ; l'historique de l'environnement montre exactement quel commit est en ligne. `rollout undo` est plus rapide mais laisse git en avance sur le cluster : le prochain push déploie le successeur du mauvais commit comme si de rien n'était. Dans les deux cas la base n'est pas rétablie, et c'est pourquoi les migrations doivent rester compatibles avec la version précédente. Un `git revert` du mauvais commit, poussé sur `main`, est le rollback qui laisse une trace et garde git et le cluster au pas.</Deep>
+
+## Terminé
+
+Un push sur `main` construit <V name="IMAGE_REPO" />:*sha*, migre, déploie, et s'arrête à la première erreur, avec une identité qui ne voit pas au-delà de <V name="NAMESPACE" />. Ton kubeconfig admin reste sur ton portable.
+
+<Deep>L'étape d'après, quand les manifestes deviennent plus qu'un dossier, c'est le GitOps : au lieu que le pipeline pousse vers le cluster, un agent dans le cluster (Argo CD ou Flux) surveille un dépôt git et applique ce qui s'y trouve. Le pipeline ne fait alors que construire l'image et commiter le nouveau tag dans `kustomization.yaml` ; aucun kubeconfig ne quitte jamais le cluster, la dérive est détectée et corrigée, et chaque environnement est un dossier dans git. Argo CD vient avec une interface qui montre le diff entre git et le cluster ; Flux est plus léger et natif kustomize et helm. L'un comme l'autre s'installe sur ce k3s en dix minutes et lit le dossier `deploy/` tel quel.</Deep>
