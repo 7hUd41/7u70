@@ -5,7 +5,7 @@
    2. ValuesPanel  — the reader's values, consulted lazily, explained fully on hover
    Groups and variables can declare `when` and disappear when irrelevant. */
 
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { HelpCircle, RotateCcw } from "lucide-react";
 import { atLeast, evaluate, validate, type ChoiceSpec, type VarSpec } from "@/engine";
 import { useReader } from "./store";
@@ -21,6 +21,11 @@ function Help({ spec }: { spec: VarSpec }) {
   const { locale, t } = useReader();
   const [pos, setPos] = useState<TipPos | null>(null);
   const id = useId();
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelHide = () => {
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = null;
+  };
 
   // Fixed positioning escapes the scrolling margin; flip above the icon when
   // the space below would clip the text.
@@ -30,15 +35,21 @@ function Help({ spec }: { spec: VarSpec }) {
     const roomBelow = window.innerHeight - r.bottom;
     setPos(roomBelow >= TIP_MAX_HEIGHT ? { left, top: r.bottom + 6 } : { left, bottom: window.innerHeight - r.top + 6 });
   };
-  const hide = () => setPos(null);
+  const hide = () => {
+    cancelHide();
+    hideTimer.current = setTimeout(() => setPos(null), 300);
+  };
 
   return (
-    <span className="inline-flex" onMouseLeave={hide}>
+    <span className="inline-flex" onMouseLeave={hide} onMouseEnter={cancelHide}>
       <button
         type="button"
         aria-label={t.help.about(spec.label[locale])}
         aria-describedby={pos ? id : undefined}
-        onMouseEnter={(e) => show(e.currentTarget)}
+        onMouseEnter={(e) => {
+          cancelHide();
+          show(e.currentTarget);
+        }}
         onFocus={(e) => show(e.currentTarget)}
         onBlur={hide}
         className="rounded text-ink-3 hover:text-ink"
@@ -49,6 +60,8 @@ function Help({ spec }: { spec: VarSpec }) {
         <span
           id={id}
           role="tooltip"
+          onMouseEnter={cancelHide}
+          onMouseLeave={hide}
           style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: TIP_WIDTH, maxHeight: TIP_MAX_HEIGHT }}
           className="ui fixed z-50 overflow-y-auto rounded-md border border-line bg-paper p-3 text-left text-[12.5px] leading-snug text-ink shadow-soft"
         >

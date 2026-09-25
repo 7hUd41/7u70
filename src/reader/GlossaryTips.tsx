@@ -4,7 +4,7 @@
    One delegated listener on the body; the definitions come with the page. */
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { GlossaryEntry } from "@/engine";
 import { useReader } from "./store";
 
@@ -14,21 +14,29 @@ export function GlossaryTips({ entries }: { entries: GlossaryEntry[] }) {
   const { locale, t } = useReader();
   const [tip, setTip] = useState<Tip | null>(null);
   const byTerm = new Map(entries.map((e) => [e.term, e]));
+  // Leaving the term starts a short grace period, so the pointer can travel
+  // to the tooltip (and its link) without it vanishing.
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelHide = () => {
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = null;
+  };
+  const scheduleHide = () => {
+    cancelHide();
+    hideTimer.current = setTimeout(() => setTip(null), 350);
+  };
 
   useEffect(() => {
     const root = document.querySelector<HTMLElement>(".doc-body");
     if (!root) return;
-    let hideTimer: ReturnType<typeof setTimeout> | null = null;
     const show = (el: HTMLElement) => {
-      if (hideTimer) clearTimeout(hideTimer);
+      cancelHide();
       const r = el.getBoundingClientRect();
       const left = Math.max(8, Math.min(r.left, window.innerWidth - 340));
       const below = window.innerHeight - r.bottom > 200;
       setTip({ key: el.dataset.term ?? "", left, top: below ? r.bottom + 6 : undefined, bottom: below ? undefined : window.innerHeight - r.top + 6 });
     };
-    const hide = () => {
-      hideTimer = setTimeout(() => setTip(null), 120);
-    };
+    const hide = () => scheduleHide();
     const over = (e: Event) => {
       const el = (e.target as HTMLElement).closest<HTMLElement>("abbr[data-term]");
       if (el) show(el);
@@ -46,6 +54,7 @@ export function GlossaryTips({ entries }: { entries: GlossaryEntry[] }) {
       root.removeEventListener("focusin", over);
       root.removeEventListener("focusout", out);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- handlers only touch refs and setters
   }, []);
 
   const entry = tip ? byTerm.get(tip.key) : undefined;
@@ -55,8 +64,8 @@ export function GlossaryTips({ entries }: { entries: GlossaryEntry[] }) {
       role="tooltip"
       className="ui fixed z-50 w-[330px] rounded-md border border-line bg-paper p-3 text-[13px] leading-snug text-ink shadow-soft"
       style={{ left: tip.left, top: tip.top, bottom: tip.bottom }}
-      onMouseEnter={() => setTip(tip)}
-      onMouseLeave={() => setTip(null)}
+      onMouseEnter={cancelHide}
+      onMouseLeave={scheduleHide}
     >
       <div className="mb-1 flex items-baseline gap-2">
         <span className="font-bold">{entry.term}</span>

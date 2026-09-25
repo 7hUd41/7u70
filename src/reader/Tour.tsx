@@ -59,10 +59,24 @@ export function Tour({ open, onClose }: { open: boolean; onClose: () => void }) 
     const b = { top: r.top - pad, left: r.left - pad, width: r.width + pad * 2, height: r.height + pad * 2 };
     setBox(b);
     const cardW = 340;
-    const cardH = 170;
-    const below = b.top + b.height + 12;
-    const top = below + cardH < window.innerHeight ? below : Math.max(12, b.top - cardH - 12);
-    const left = Math.max(12, Math.min(b.left, window.innerWidth - cardW - 12));
+    const cardH = 190;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const tall = b.height > vh * 0.5;
+    let top: number;
+    let left: number;
+    if (tall && b.left - cardW - 16 >= 12) {
+      // Tall target on the right (a side panel): card to its left, vertically centred in view.
+      left = b.left - cardW - 16;
+      top = Math.max(12, Math.min(vh - cardH - 12, Math.max(b.top, 0) + Math.min(b.height, vh) / 2 - cardH / 2));
+    } else if (tall && b.left + b.width + cardW + 16 <= vw - 12) {
+      left = b.left + b.width + 16;
+      top = Math.max(12, Math.min(vh - cardH - 12, Math.max(b.top, 0) + Math.min(b.height, vh) / 2 - cardH / 2));
+    } else {
+      const below = b.top + b.height + 12;
+      top = below + cardH < vh ? below : Math.max(12, b.top - cardH - 12);
+      left = Math.max(12, Math.min(b.left, vw - cardW - 12));
+    }
     setCard({ top, left });
     return true;
   }, [i]);
@@ -78,13 +92,32 @@ export function Tour({ open, onClose }: { open: boolean; onClose: () => void }) 
       else onClose();
       return;
     }
+    // Hide the spotlight while the page moves; show it once the scroll has settled.
+    setBox(null);
+    setCard(null);
     el.scrollIntoView({ block: "center", behavior: "smooth" });
-    const id = setTimeout(measure, 350);
-    const onMove = () => measure();
+    let settled = false;
+    let lastY = window.scrollY;
+    let stableFor = 0;
+    const started = Date.now();
+    const tick = setInterval(() => {
+      if (settled) return;
+      const y = window.scrollY;
+      stableFor = y === lastY ? stableFor + 60 : 0;
+      lastY = y;
+      if (stableFor >= 180 || Date.now() - started > 1500) {
+        settled = true;
+        clearInterval(tick);
+        measure();
+      }
+    }, 60);
+    const onMove = () => {
+      if (settled) measure();
+    };
     window.addEventListener("resize", onMove);
     window.addEventListener("scroll", onMove, { passive: true });
     return () => {
-      clearTimeout(id);
+      clearInterval(tick);
       window.removeEventListener("resize", onMove);
       window.removeEventListener("scroll", onMove);
     };
@@ -101,9 +134,14 @@ export function Tour({ open, onClose }: { open: boolean; onClose: () => void }) 
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  if (!open || !box || !card) return null;
+  if (!open) return null;
   const step = t.tour.steps[STEPS[i].key as keyof typeof t.tour.steps];
   const last = i === STEPS.length - 1;
+
+  if (!box || !card) {
+    // Between two steps: keep the page dimmed, show nothing else until the scroll settles.
+    return <div className="fixed inset-0 z-[60] bg-[rgb(20_18_14_/_0.35)] transition-colors" role="dialog" aria-modal aria-label={t.tour.title} />;
+  }
 
   return (
     <div className="fixed inset-0 z-[60]" role="dialog" aria-modal aria-label={t.tour.title}>
