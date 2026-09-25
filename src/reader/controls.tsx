@@ -77,7 +77,7 @@ export function LocaleSwitch({ locale, path }: { locale: Locale; path: string })
 }
 
 /* ── Skin: a whole look, independent of light/dark ─────────── */
-export const SKINS = ["editorial", "transit"] as const;
+export const SKINS = ["editorial", "transit", "transit2"] as const;
 export type Skin = (typeof SKINS)[number];
 
 export function SkinToggle({ locale }: { locale: Locale }) {
@@ -85,8 +85,9 @@ export function SkinToggle({ locale }: { locale: Locale }) {
   const [skin, setSkin] = useState<Skin>("editorial");
   useEffect(() => {
     // Applied before paint by the inline script; sync the control.
+    const current = document.documentElement.dataset.skin;
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setSkin(document.documentElement.dataset.skin === "transit" ? "transit" : "editorial");
+    setSkin((SKINS as readonly string[]).includes(current ?? "") ? (current as Skin) : "editorial");
   }, []);
   const next = () => {
     const i = (SKINS.indexOf(skin) + 1) % SKINS.length;

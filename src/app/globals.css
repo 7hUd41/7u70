@@ -131,6 +131,70 @@
   --shadow: 0 2px 4px rgb(0 0 0 / 0.4), 0 12px 32px -12px rgb(0 0 0 / 0.6);
 }
 
+/* "transit2": the brand green. White page, grey cards, charcoal text,
+   muted teal secondary text, bold spaced labels, green hero header. */
+:root[data-skin="transit2"] {
+  --paper: #ffffff;
+  --paper-2: #f2f4f5;
+  --paper-3: #e4e8ea;
+  --ink: #33333f;
+  --ink-2: #5c7a86;
+  --ink-3: #8fa3ab;
+  --line: #e3e7e9;
+  --line-2: #cbd3d7;
+
+  --accent: #43a35d;
+  --accent-ink: #2e8a47;
+  --accent-soft: #dff2e4;
+
+  --warn: #e0b322;
+  --warn-soft: #fff3c8;
+
+  --ok: #2f9e7a;
+  --ok-soft: #d9f1e8;
+
+  --code-bg: #f2f4f5;
+  --code-line: #e3e7e9;
+  --code-ink: #33333f;
+  --code-muted: #9fb0b7;
+
+  --shadow: 0 2px 4px rgb(51 51 63 / 0.05), 0 14px 32px -14px rgb(67 163 93 / 0.35);
+
+  --radius-sm: 12px;
+  --radius-md: 18px;
+  --radius-lg: 24px;
+  --radius-xl: 28px;
+
+  --skin-text: var(--font-rounded);
+}
+:root[data-skin="transit2"][data-theme="dark"] {
+  --paper: #14351f;
+  --paper-2: #1c4a2c;
+  --paper-3: #265c3a;
+  --ink: #f3f7f4;
+  --ink-2: #b7d3c2;
+  --ink-3: #7fa88f;
+  --line: #2b5b3d;
+  --line-2: #3d7352;
+
+  --accent: #7ed69a;
+  --accent-ink: #a8e6bb;
+  --accent-soft: #235f39;
+
+  --warn: #ffd23f;
+  --warn-soft: #4a4218;
+
+  --ok: #6fd3a8;
+  --ok-soft: #1c4a3a;
+
+  --code-bg: #0f2a19;
+  --code-line: #2b5b3d;
+  --code-ink: #eef5f0;
+  --code-muted: #5f8a70;
+
+  --shadow: 0 2px 4px rgb(0 0 0 / 0.4), 0 14px 32px -14px rgb(0 0 0 / 0.6);
+}
+
 @theme inline {
   --color-paper: var(--paper);
   --color-paper-2: var(--paper-2);
@@ -196,9 +260,10 @@ samp,
 }
 
 /* ── Prose (tutorial body) ─────────────────────────────────── */
-/* Text keeps a reading measure; code, checks and tables use the whole column. */
+/* Text, code, checks and tables all use the whole column. Set --measure to
+   e.g. 70ch to cap the text width again. */
 .prose {
-  --measure: 70ch;
+  --measure: none;
 }
 .prose > * + * {
   margin-top: 1em;
@@ -412,4 +477,64 @@ samp,
   background: var(--accent-soft);
   padding: 0 0.3em;
   border-radius: 6px;
+}
+
+/* Transit green skin: hero header in brand green with white text; heavy,
+   spaced labels; pill controls. Components untouched: only tokens are
+   re-scoped inside the header. */
+:root[data-skin="transit2"] body {
+  font-size: 16.5px;
+  font-weight: 500;
+}
+:root[data-skin="transit2"] body > header {
+  --paper: #43a35d;
+  --paper-2: #3a9452;
+  --paper-3: #2e8a47;
+  --ink: #ffffff;
+  --ink-2: #e3f4e8;
+  --ink-3: #bfe3cb;
+  --line: rgb(255 255 255 / 0.28);
+  --line-2: rgb(255 255 255 / 0.45);
+  --accent: #ffffff;
+  --accent-soft: rgb(255 255 255 / 0.18);
+  --shadow: none;
+  background: #43a35d;
+  border-color: transparent;
+}
+:root[data-skin="transit2"][data-theme="dark"] body > header {
+  --paper: #1c4a2c;
+  --paper-2: #235f39;
+  --paper-3: #2a6f43;
+  background: #1c4a2c;
+}
+:root[data-skin="transit2"] .prose h2,
+:root[data-skin="transit2"] .prose h3 {
+  font-weight: 900;
+  letter-spacing: -0.01em;
+}
+:root[data-skin="transit2"] .font-display {
+  font-weight: 900;
+  letter-spacing: -0.02em;
+}
+:root[data-skin="transit2"] .label {
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  color: var(--ink-2);
+}
+:root[data-skin="transit2"] .token {
+  font-weight: 800;
+  text-decoration: none;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  padding: 0 0.35em;
+  border-radius: 8px;
+}
+:root[data-skin="transit2"] input {
+  border-color: transparent;
+  background: var(--paper-2);
+}
+:root[data-skin="transit2"] .prose :not(pre) > code {
+  border-color: transparent;
+  background: var(--paper-2);
+  font-weight: 600;
 }

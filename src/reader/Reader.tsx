@@ -180,7 +180,7 @@ function Frame(props: ReaderProps) {
         )}
         <main className="min-w-0">
           <h1 className="font-display text-[2.4rem] leading-[1.1] tracking-tight text-ink">{contract.title[locale]}</h1>
-          <p className="mt-3 max-w-[68ch] text-[1.1rem] leading-relaxed text-ink-2">{contract.summary[locale]}</p>
+          <p className="mt-3 text-[1.1rem] leading-relaxed text-ink-2">{contract.summary[locale]}</p>
           <Meta />
           <ValidationLine list={validations.list} href={`/${locale}${props.path}/validations`} />
           <div className="mt-6 border-b border-line pb-5">
