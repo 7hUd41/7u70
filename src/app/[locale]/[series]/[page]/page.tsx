@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { isLocale, LOCALES } from "@/engine";
-import { getPage, listSeries, neighbors, readDiagram, readPageSource, readValidations } from "@/content/loader";
+import { getPage, listSeries, neighbors, readDiagram, readGlossary, readPageSource, readValidations } from "@/content/loader";
 import { site } from "@/site.config";
 import { compileMdx } from "@/content/mdx";
 import { mdxComponents } from "@/reader/mdx-components";
@@ -27,8 +27,14 @@ export default async function TutorialPage({ params }: { params: Promise<Params>
   const page = await getPage(series, slug);
   if (!page) notFound();
 
-  const [source, nav, validations, diagram] = await Promise.all([readPageSource(page, locale), neighbors(page), readValidations(page), readDiagram(page)]);
-  const Content = await compileMdx(source);
+  const [source, nav, validations, diagram, glossary] = await Promise.all([
+    readPageSource(page, locale),
+    neighbors(page),
+    readValidations(page),
+    readDiagram(page),
+    readGlossary(series),
+  ]);
+  const Content = await compileMdx(source, glossary);
   const href = (s: string) => `/${locale}/${series}/${s}`;
 
   return (
@@ -43,6 +49,7 @@ export default async function TutorialPage({ params }: { params: Promise<Params>
       next={nav.next && { href: href(nav.next.slug), title: nav.next.contract.title[locale] }}
       validations={validations}
       diagram={diagram}
+      glossary={glossary}
       canValidate={site.authorMode}
       tourOnFirstVisit={series === "example"}
     >

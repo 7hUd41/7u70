@@ -1,0 +1,116 @@
+# Terms and abbreviations marked in the prose of every page. Hover to read.
+# `abbr: true` = matched on every occurrence, case-sensitively, with its expansion.
+# A series may add or override entries in content/<series>/glossary.yaml.
+
+- term: SSH
+  abbr: true
+  expansion: { en: Secure Shell, fr: Secure Shell }
+  def:
+    en: The protocol (and command) used to open an encrypted terminal session on a remote machine. Authentication is by password or, better, by key pair.
+    fr: Le protocole (et la commande) qui ouvre une session de terminal chiffrée sur une machine distante. L'authentification se fait par mot de passe ou, mieux, par paire de clés.
+
+- term: sudo
+  aliases: [sudoer, sudoers]
+  def:
+    en: Runs one command with administrator (root) rights, from your own account. The action is logged under your name, unlike logging in as root.
+    fr: Exécute une commande avec les droits administrateur (root) depuis ton propre compte. L'action est journalisée à ton nom, contrairement à une connexion en root.
+
+- term: root
+  def:
+    en: The all-powerful account on a Unix system. Everything you type as root is executed without question, which is why day-to-day work is done from a normal account with sudo.
+    fr: Le compte tout-puissant d'un système Unix. Tout ce que tu tapes en root est exécuté sans question, d'où le travail au quotidien depuis un compte normal avec sudo.
+
+- term: TLS
+  abbr: true
+  aliases: [HTTPS]
+  expansion: { en: Transport Layer Security, fr: Transport Layer Security }
+  def:
+    en: The encryption layer under HTTPS. A certificate proves the server's identity; Let's Encrypt issues them for free, a self-signed one works but browsers warn.
+    fr: La couche de chiffrement sous HTTPS. Un certificat prouve l'identité du serveur ; Let's Encrypt en délivre gratuitement, un auto-signé fonctionne mais les navigateurs avertissent.
+
+- term: DNS
+  abbr: true
+  expansion: { en: Domain Name System, fr: Domain Name System }
+  def:
+    en: Turns names into addresses. A page that says "the name must point to the server" means an A (or AAAA) record in your DNS zone.
+    fr: Transforme les noms en adresses. Quand une page dit « le nom doit pointer vers le serveur », il s'agit d'un enregistrement A (ou AAAA) dans ta zone DNS.
+
+- term: LDAP
+  abbr: true
+  aliases: [Active Directory, AD]
+  expansion: { en: Lightweight Directory Access Protocol, fr: Lightweight Directory Access Protocol }
+  def:
+    en: The protocol used to query a user directory such as Active Directory. Applications delegate logins to it so people use their usual password.
+    fr: Le protocole pour interroger un annuaire d'utilisateurs comme Active Directory. Les applications lui délèguent les connexions pour que chacun garde son mot de passe habituel.
+
+- term: reverse proxy
+  aliases: [web server, serveur web]
+  def:
+    en: A web server placed in front of an application. It handles HTTPS, serves static files itself and forwards the rest to the application on a local port.
+    fr: Un serveur web placé devant une application. Il gère le HTTPS, sert lui-même les fichiers statiques et transmet le reste à l'application sur un port local.
+
+- term: gunicorn
+  def:
+    en: The program that actually runs a Python web application (NetBox, Django…) and answers HTTP on a local port. It is never exposed directly; a reverse proxy sits in front.
+    fr: Le programme qui fait réellement tourner une application web Python (NetBox, Django…) et répond en HTTP sur un port local. Il n'est jamais exposé directement ; un reverse proxy est devant.
+
+- term: systemd
+  aliases: [systemctl]
+  def:
+    en: The service manager of modern Linux distributions. `systemctl enable --now x` starts a service and makes it start at boot; `systemctl status x` tells you how it is doing.
+    fr: Le gestionnaire de services des distributions Linux modernes. `systemctl enable --now x` démarre un service et le lance au démarrage ; `systemctl status x` dit comment il va.
+
+- term: firewall
+  aliases: [ufw, firewalld, pare-feu]
+  def:
+    en: Decides which network ports of the machine answer to whom. ufw (Debian/Ubuntu) and firewalld (RHEL family) are front-ends to the same kernel mechanism.
+    fr: Décide quels ports réseau de la machine répondent à qui. ufw (Debian/Ubuntu) et firewalld (famille RHEL) sont des façades du même mécanisme du noyau.
+
+- term: fail2ban
+  def:
+    en: Watches log files and temporarily bans addresses that fail to log in repeatedly. Keeps bots out of your logs and your CPU.
+    fr: Surveille les journaux et bannit temporairement les adresses qui échouent à se connecter à répétition. Garde les robots hors de tes logs et de ton CPU.
+
+- term: SELinux
+  abbr: true
+  expansion: { en: Security-Enhanced Linux, fr: Security-Enhanced Linux }
+  def:
+    en: An extra permission layer on the RHEL family. A service may be allowed by the firewall and still be denied by SELinux, silently; check the audit log when something "should work".
+    fr: Une couche de permissions supplémentaire sur la famille RHEL. Un service peut être autorisé par le pare-feu et refusé par SELinux, sans bruit ; regarde le journal d'audit quand quelque chose « devrait marcher ».
+
+- term: source of truth
+  aliases: [SoT, source de vérité]
+  def:
+    en: The one place where a piece of information is authoritative. In NetDevOps, NetBox is the source of truth for the network; devices are configured from it, not the other way round.
+    fr: L'endroit unique où une information fait foi. En NetDevOps, NetBox est la source de vérité du réseau ; les équipements sont configurés à partir d'elle, pas l'inverse.
+
+- term: REST API
+  aliases: [API]
+  abbr: true
+  expansion: { en: Application Programming Interface, fr: Application Programming Interface }
+  def:
+    en: The way programs talk to an application over HTTP, without the web interface. Everything you can click in NetBox can be done with a request and a token.
+    fr: La façon dont les programmes parlent à une application via HTTP, sans l'interface web. Tout ce qu'on clique dans NetBox se fait aussi avec une requête et un jeton.
+
+- term: token
+  aliases: [jeton, jeton d'API, API token]
+  def:
+    en: A long random string that authenticates a program to an API, in place of a password. Create one per use, give it an expiry date, revoke it when done.
+    fr: Une longue chaîne aléatoire qui authentifie un programme auprès d'une API, à la place d'un mot de passe. Un par usage, avec une date d'expiration, révoqué une fois fini.
+
+- term: virtual environment
+  aliases: [venv, environnement virtuel]
+  def:
+    en: A private set of Python packages for one application, isolated from the system's Python. NetBox's lives in its install directory and is rebuilt by upgrade.sh.
+    fr: Un jeu privé de paquets Python pour une application, isolé du Python du système. Celui de NetBox vit dans son répertoire d'installation et est reconstruit par upgrade.sh.
+
+- term: Redis
+  def:
+    en: An in-memory data store. NetBox uses it for its task queue (webhooks, scripts) and its cache; nothing durable lives in it.
+    fr: Une base en mémoire. NetBox s'en sert pour sa file de tâches (webhooks, scripts) et son cache ; rien de durable n'y vit.
+
+- term: PostgreSQL
+  aliases: [Postgres]
+  def:
+    en: The relational database NetBox stores everything in. The only one it supports.
+    fr: La base de données relationnelle dans laquelle NetBox stocke tout. La seule qu'il supporte.

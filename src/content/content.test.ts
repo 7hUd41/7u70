@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 import { compile } from "@mdx-js/mdx";
 import remarkGfm from "remark-gfm";
 import { keysOf, LOCALES } from "@/engine";
-import { listSeries, readDiagram, readPageSource } from "./loader";
+import { listSeries, readDiagram, readGlossary, readPageSource } from "./loader";
+import { rehypeGlossary } from "./rehype-glossary";
+import { GlossaryEntry } from "@/engine";
 import { rehypeHeadingIds } from "./rehype-heading-ids";
 import { parseMeta, rehypeCodeMeta } from "./rehype-code-meta";
 import { sectionsOf } from "./search-index";
@@ -93,5 +95,36 @@ describe("search index", () => {
     expect(s[0].text).toContain("Intro ${HOST} here.");
     expect(s[1].text).toContain("sudo apt install -y nginx");
     expect(s[2].text).toBe("Hidden text.");
+  });
+});
+
+describe("glossary", () => {
+  const entries = [
+    GlossaryEntry.parse({ term: "SSH", abbr: true, expansion: { en: "Secure Shell", fr: "Secure Shell" }, def: { en: "d", fr: "d" } }),
+    GlossaryEntry.parse({ term: "firewall", aliases: ["ufw"], def: { en: "d", fr: "d" } }),
+  ];
+  const run = async (src: string) => String(await compile(src, { rehypePlugins: [[rehypeGlossary, entries]] }));
+
+  it("marks every abbreviation, the first term per step, never inside code or headings", async () => {
+    const out = await run("## SSH and the firewall\n\nSSH uses the firewall. The firewall (ufw) and `ufw status` and SSH again.\n\n## Next\n\nThe firewall again.\n");
+    expect(out.match(/"data-term": "SSH"/g)?.length).toBe(2);
+    expect(out.match(/"data-term": "firewall"/g)?.length).toBe(2); // once per step
+    expect(out).not.toContain('"data-term": "ufw"');
+  });
+
+  it("matches a term regardless of case", async () => {
+    const out = await run("Firewall first.\n");
+    expect(out).toContain('"data-term": "firewall"');
+  });
+
+  it("does not match a lowercase spelling of an abbreviation", async () => {
+    const out = await run("the ssh command\n");
+    expect(out).not.toContain("data-term");
+  });
+
+  it("site glossary loads and every entry has both locales", async () => {
+    const g = await readGlossary();
+    expect(g.length).toBeGreaterThan(5);
+    for (const e of g) expect(e.def.en && e.def.fr).toBeTruthy();
   });
 });

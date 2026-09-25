@@ -6,7 +6,8 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight } from "lucide-react";
-import { LEVELS, type DiagramSpec, type Locale, type TutoContract, type Validation } from "@/engine";
+import { LEVELS, type DiagramSpec, type GlossaryEntry, type Locale, type TutoContract, type Validation } from "@/engine";
+import { GlossaryTips } from "./GlossaryTips";
 import { Gist } from "./Diagram";
 import { useRouter } from "next/navigation";
 import { ValidatePanel, ValidationLine, useValidations } from "./Validation";
@@ -31,6 +32,7 @@ export type ReaderProps = {
   next?: PageLink;
   validations: Validation[];
   diagram: DiagramSpec | null;
+  glossary: GlossaryEntry[];
   canValidate: boolean;
   /** Start the tour on the reader's first visit of this page. */
   tourOnFirstVisit?: boolean;
@@ -227,6 +229,7 @@ function Frame(props: ReaderProps) {
         </aside>
       </div>
       <VarEditor />
+      <GlossaryTips entries={props.glossary} />
       <Tour open={tourOpen} onClose={closeTour} />
     </>
   );

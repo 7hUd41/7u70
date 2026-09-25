@@ -53,6 +53,7 @@ const en = {
   },
   toc: "On this page",
   gist: { title: "The gist" },
+  glossary: { title: "Glossary", intro: "The terms and abbreviations these pages use. Hover any underlined term in a page to read its definition there.", link: "Open the glossary" },
   search: { open: "Search", placeholder: "Search every tutorial…", loading: "Loading the index…", empty: "Nothing found." },
   outline: { hide: "Hide the outline", show: "Show the outline" },
   help: {
@@ -202,6 +203,7 @@ const fr: Dict = {
   },
   toc: "Sur cette page",
   gist: { title: "En un coup d'œil" },
+  glossary: { title: "Glossaire", intro: "Les termes et abréviations que ces pages emploient. Survole un terme souligné dans une page pour lire sa définition sur place.", link: "Ouvrir le glossaire" },
   search: { open: "Rechercher", placeholder: "Chercher dans tous les tutos…", loading: "Chargement de l'index…", empty: "Rien trouvé." },
   outline: { hide: "Masquer le sommaire", show: "Afficher le sommaire" },
   help: {

@@ -7,3 +7,4 @@ export * from "./script";
 export * from "./contract";
 export * from "./validation";
 export * from "./diagram";
+export * from "./glossary";

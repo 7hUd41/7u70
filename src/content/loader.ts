@@ -16,7 +16,7 @@
 import { appendFile, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { DiagramSpec, inherit, LOCALES, PageContract, SeriesContract, Validation, Validations, type TutoContract, type Locale } from "@/engine";
+import { DiagramSpec, Glossary, inherit, LOCALES, PageContract, SeriesContract, Validation, Validations, type GlossaryEntry, type TutoContract, type Locale } from "@/engine";
 
 export const CONTENT_DIR = path.join(process.cwd(), "content");
 
@@ -158,4 +158,15 @@ export async function readDiagram(page: PageRef): Promise<DiagramSpec | null> {
   const file = path.join(CONTENT_DIR, page.series, page.slug, "diagram.yaml");
   if (!(await exists(file))) return null;
   return readYaml(file, DiagramSpec);
+}
+
+/* ── Glossary: content/glossary.yaml + content/<series>/glossary.yaml ── */
+export async function readGlossary(series?: string): Promise<GlossaryEntry[]> {
+  const files = [path.join(CONTENT_DIR, "glossary.yaml")];
+  if (series) files.push(path.join(CONTENT_DIR, series, "glossary.yaml"));
+  const out: GlossaryEntry[] = [];
+  for (const f of files) if (await exists(f)) out.push(...(await readYaml(f, Glossary)));
+  // A series entry overrides a site entry with the same term.
+  const byTerm = new Map(out.map((e) => [e.term, e]));
+  return [...byTerm.values()];
 }

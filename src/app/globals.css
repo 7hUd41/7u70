@@ -690,6 +690,17 @@ samp,
   border-radius: 3px;
 }
 
+/* Glossary term marked in the prose. */
+abbr.term {
+  text-decoration: underline dotted;
+  text-decoration-color: var(--ink-3);
+  text-underline-offset: 3px;
+  cursor: help;
+}
+abbr.term:hover {
+  text-decoration-color: var(--accent);
+}
+
 /* Thin reading-progress line. */
 .progress-line {
   height: 2px;
