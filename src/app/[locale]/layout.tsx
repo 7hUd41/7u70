@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import Script from "next/script";
 import { isLocale, LOCALES } from "@/engine";
 import { dict } from "@/i18n";
 import { fontClassName } from "../fonts";
@@ -26,7 +27,7 @@ export default async function LocaleLayout({ children, params }: { children: Rea
   return (
     <html lang={locale} className={`${fontClassName} h-full`} suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+        <Script id="theme" strategy="beforeInteractive" dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className="flex min-h-full flex-col">{children}</body>
     </html>

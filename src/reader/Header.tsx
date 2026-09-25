@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { Compass, PanelLeft } from "lucide-react";
 import type { Level, Locale } from "@/engine";
 import { dict } from "@/i18n";
-import { LevelSwitch, LocaleSwitch, SkinToggle, ThemeToggle } from "./controls";
+import { LevelSwitch, LocaleSwitch, SkinMenu, ThemeToggle } from "./controls";
 import { SearchButton } from "./Search";
 
 export function Header({
@@ -72,7 +72,7 @@ export function Header({
           {level && setLevel && <LevelSwitch level={level} setLevel={setLevel} locale={locale} />}
           <LocaleSwitch locale={locale} path={path} />
           <ThemeToggle locale={locale} />
-          <SkinToggle locale={locale} />
+          <SkinMenu locale={locale} />
           {onTour && (
             <button type="button" onClick={onTour} title={t.tour.start} aria-label={t.tour.start} className="rounded p-1.5 text-ink-3 hover:text-ink">
               <Compass className="h-4 w-4" />

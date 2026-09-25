@@ -94,7 +94,7 @@ Shell fences (` ```bash `) get a prompt, a copy button and feed the "Download in
 
 ### Skins
 
-The whole look is a set of CSS tokens (colours, radii, fonts) declared on `:root`; light and dark are variants of them. A *skin* re-declares the tokens and nothing else: components never change. Three ship: **Editorial** (default: paper, ink, Libertinus), **Transit pink** (pink accent, white cards, rounded, Nunito) and **Transit green** (brand green hero header, grey cards, charcoal text, bold spaced labels). The palette icon in the header switches; add a skin by adding a `:root[data-skin="…"]` block in `globals.css`.
+The whole look is a set of CSS tokens (colours, radii, fonts) declared on `:root`; light and dark are variants of them. A *skin* re-declares the tokens and nothing else: components never change. Eight ship, each with a light and a dark variant: **Editorial** (default: paper, ink, Libertinus), **Parchment** (old paper, sepia, oil-lamp dark), **Transit pink**, **Transit green**, **Slate** (the neutral one: white, pearl cards, petrol accent, IBM Plex Sans), **Night** (blue-black, amber values, mono labels — best dark), **Headline** (newspaper: black, white, one red, Bricolage Grotesque) and **Atom** (One Light / One Dark pastels). The palette icon in the header opens the menu; add a skin by adding a `:root[data-skin="…"]` block in `globals.css` and a swatch in `controls.tsx`.
 
 ## Stack
 

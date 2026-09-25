@@ -114,7 +114,10 @@ const en = {
     empty: "No validation yet.",
   },
   theme: { light: "Light theme", dark: "Dark theme" },
-  skin: { switchTo: (name: string) => `Switch look: ${name}`, names: { editorial: "Editorial", transit: "Transit pink", transit2: "Transit green" } },
+  skin: {
+    title: "Look",
+    names: { editorial: "Editorial", parchment: "Parchment", transit: "Transit pink", transit2: "Transit green", slate: "Slate", night: "Night", headline: "Headline", atom: "Atom" },
+  },
   locale: { en: "English", fr: "Français" },
   run: {
     banner: "Run mode: one script does everything. Fill in your context, download, run. Switch to Quick to see what it did.",
@@ -258,7 +261,10 @@ const fr: Dict = {
     empty: "Aucune validation pour l'instant.",
   },
   theme: { light: "Thème clair", dark: "Thème sombre" },
-  skin: { switchTo: (name) => `Changer de look : ${name}`, names: { editorial: "Éditorial", transit: "Transit rose", transit2: "Transit vert" } },
+  skin: {
+    title: "Look",
+    names: { editorial: "Éditorial", parchment: "Parchemin", transit: "Transit rose", transit2: "Transit vert", slate: "Ardoise", night: "Nuit", headline: "Manchette", atom: "Atom" },
+  },
   locale: { en: "English", fr: "Français" },
   run: {
     banner: "Mode automatique : un seul script fait tout. Renseigne ton contexte, télécharge, lance. Passe en Express pour voir ce qu'il a fait.",

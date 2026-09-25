@@ -50,4 +50,24 @@ export const rounded = localFont({
   ],
 });
 
-export const fontClassName = [serif.variable, display.variable, sans.variable, mono.variable, rounded.variable].join(" ");
+/** Neutral grotesque for the "slate", "night" and "atom" skins. */
+export const plex = localFont({
+  variable: "--font-plex",
+  display: "swap",
+  src: [
+    { path: "../fonts/IBMPlexSans-400.woff2", weight: "400", style: "normal" },
+    { path: "../fonts/IBMPlexSans-400-Italic.woff2", weight: "400", style: "italic" },
+    { path: "../fonts/IBMPlexSans-500.woff2", weight: "500", style: "normal" },
+    { path: "../fonts/IBMPlexSans-600.woff2", weight: "600", style: "normal" },
+    { path: "../fonts/IBMPlexSans-700.woff2", weight: "700", style: "normal" },
+  ],
+});
+
+/** Characterful grotesque for the "headline" skin's titles. */
+export const bricolage = localFont({
+  variable: "--font-bricolage",
+  display: "swap",
+  src: [{ path: "../fonts/BricolageGrotesque-VF.woff2", weight: "200 800", style: "normal" }],
+});
+
+export const fontClassName = [serif.variable, display.variable, sans.variable, mono.variable, rounded.variable, plex.variable, bricolage.variable].join(" ");
