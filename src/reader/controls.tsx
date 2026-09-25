@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Moon, Sun } from "lucide-react";
+import { Moon, Palette, Sun } from "lucide-react";
 import { LEVELS, LOCALES, type Level, type Locale } from "@/engine";
 import { dict } from "@/i18n";
 
@@ -73,5 +73,35 @@ export function LocaleSwitch({ locale, path }: { locale: Locale; path: string })
         </span>
       ))}
     </nav>
+  );
+}
+
+/* ── Skin: a whole look, independent of light/dark ─────────── */
+export const SKINS = ["editorial", "transit"] as const;
+export type Skin = (typeof SKINS)[number];
+
+export function SkinToggle({ locale }: { locale: Locale }) {
+  const t = dict(locale);
+  const [skin, setSkin] = useState<Skin>("editorial");
+  useEffect(() => {
+    // Applied before paint by the inline script; sync the control.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSkin(document.documentElement.dataset.skin === "transit" ? "transit" : "editorial");
+  }, []);
+  const next = () => {
+    const i = (SKINS.indexOf(skin) + 1) % SKINS.length;
+    const s = SKINS[i];
+    if (s === "editorial") delete document.documentElement.dataset.skin;
+    else document.documentElement.dataset.skin = s;
+    try {
+      localStorage.setItem("skin", s);
+    } catch {}
+    setSkin(s);
+  };
+  const upcoming = SKINS[(SKINS.indexOf(skin) + 1) % SKINS.length];
+  return (
+    <button type="button" onClick={next} title={t.skin.switchTo(t.skin.names[upcoming])} aria-label={t.skin.switchTo(t.skin.names[upcoming])} className="rounded p-1.5 text-ink-3 hover:text-ink">
+      <Palette className="h-4 w-4" />
+    </button>
   );
 }

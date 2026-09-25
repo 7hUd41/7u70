@@ -52,6 +52,7 @@ const en = {
     complete: "All checks passed",
   },
   toc: "On this page",
+  search: { open: "Search", placeholder: "Search every tutorial…", loading: "Loading the index…", empty: "Nothing found." },
   outline: { hide: "Hide the outline", show: "Show the outline" },
   help: {
     about: (label: string) => `About ${label}`,
@@ -113,6 +114,7 @@ const en = {
     empty: "No validation yet.",
   },
   theme: { light: "Light theme", dark: "Dark theme" },
+  skin: { switchTo: (name: string) => `Switch look: ${name}`, names: { editorial: "Editorial", transit: "Transit" } },
   locale: { en: "English", fr: "Français" },
   run: {
     banner: "Run mode: one script does everything. Fill in your context, download, run. Switch to Quick to see what it did.",
@@ -194,6 +196,7 @@ const fr: Dict = {
     complete: "Toutes les vérifications passent",
   },
   toc: "Sur cette page",
+  search: { open: "Rechercher", placeholder: "Chercher dans tous les tutos…", loading: "Chargement de l'index…", empty: "Rien trouvé." },
   outline: { hide: "Masquer le sommaire", show: "Afficher le sommaire" },
   help: {
     about: (label) => `À propos de ${label}`,
@@ -255,6 +258,7 @@ const fr: Dict = {
     empty: "Aucune validation pour l'instant.",
   },
   theme: { light: "Thème clair", dark: "Thème sombre" },
+  skin: { switchTo: (name) => `Changer de look : ${name}`, names: { editorial: "Éditorial", transit: "Transit" } },
   locale: { en: "English", fr: "Français" },
   run: {
     banner: "Mode automatique : un seul script fait tout. Renseigne ton contexte, télécharge, lance. Passe en Express pour voir ce qu'il a fait.",

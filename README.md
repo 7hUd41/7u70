@@ -88,9 +88,13 @@ A page is only as good as the last person who ran it. At the end of every page, 
 
 ### Reader shortcuts
 
-`1`–`4` reading depth · `[` `]` previous / next page · `t` fold the outline · `?` guided tour · `/` search (coming). The guided tour starts on the first visit of the Example series and can be replayed from the compass icon.
+`/` or ⌘K search · `1`–`4` reading depth · `[` `]` previous / next page · `t` fold the outline · `?` guided tour. The guided tour starts on the first visit of the Example series and can be replayed from the compass icon.
 
 Shell fences (` ```bash `) get a prompt, a copy button and feed the "Download install.sh" export. Other languages (` ```python `, ` ```yaml `) render as file excerpts.
+
+### Skins
+
+The whole look is a set of CSS tokens (colours, radii, fonts) declared on `:root`; light and dark are variants of them. A *skin* re-declares the tokens and nothing else: components never change. Two ship: **Editorial** (default: paper, ink, Libertinus) and **Transit** (pink, white cards, rounded, Nunito). The palette icon in the header switches; add a skin by adding a `:root[data-skin="…"]` block in `globals.css`.
 
 ## Stack
 

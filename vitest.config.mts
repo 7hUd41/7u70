@@ -4,7 +4,7 @@ import path from "node:path";
 export default defineConfig({
   test: {
     include: ["src/**/*.test.ts"],
-    coverage: { include: ["src/engine/**", "src/content/**"] },
+    coverage: { include: ["src/engine/**", "src/content/**", "src/reader/Search.tsx"] },
   },
   resolve: { alias: { "@": path.resolve(import.meta.dirname, "src") } },
 });

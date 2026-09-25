@@ -40,4 +40,14 @@ export const mono = localFont({
   src: [{ path: "../fonts/FiraCode-VF.woff2", weight: "300 700", style: "normal" }],
 });
 
-export const fontClassName = [serif.variable, display.variable, sans.variable, mono.variable].join(" ");
+/** Rounded sans used by the "transit" skin for everything but code. */
+export const rounded = localFont({
+  variable: "--font-rounded",
+  display: "swap",
+  src: [
+    { path: "../fonts/Nunito-VF.woff2", weight: "200 1000", style: "normal" },
+    { path: "../fonts/Nunito-VF-Italic.woff2", weight: "200 1000", style: "italic" },
+  ],
+});
+
+export const fontClassName = [serif.variable, display.variable, sans.variable, mono.variable, rounded.variable].join(" ");

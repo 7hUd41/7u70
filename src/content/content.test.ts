@@ -9,6 +9,7 @@ import { keysOf, LOCALES } from "@/engine";
 import { listSeries, readPageSource } from "./loader";
 import { rehypeHeadingIds } from "./rehype-heading-ids";
 import { parseMeta, rehypeCodeMeta } from "./rehype-code-meta";
+import { sectionsOf } from "./search-index";
 
 const series = await listSeries();
 const pages = series.flatMap((s) => s.pages);
@@ -68,5 +69,16 @@ describe("fence meta", () => {
   });
   it("is empty without meta", () => {
     expect(parseMeta(undefined).highlight.size).toBe(0);
+  });
+});
+
+describe("search index", () => {
+  it("cuts a page into sections with the renderer's ids and plain text", () => {
+    const src = 'Intro <V name="HOST" /> here.\n\n## Install it\n\nRun this:\n\n```bash\nsudo apt install -y nginx\n```\n\n<When flag="X">\n\n### Sub step\n\nHidden text.\n\n</When>\n';
+    const s = sectionsOf(src);
+    expect(s.map((x) => x.id)).toEqual(["", "install-it", "sub-step"]);
+    expect(s[0].text).toContain("Intro ${HOST} here.");
+    expect(s[1].text).toContain("sudo apt install -y nginx");
+    expect(s[2].text).toBe("Hidden text.");
   });
 });
