@@ -120,6 +120,14 @@ edges:
 
 Kinds: `user client server service store file net cloud` (the icon). `focus: true` draws the box in the accent: the thing the page is about.
 
+### Carry link, "stuck here", progress
+
+**Share / carry** (toolbar) builds a link — and its QR code — that carries the reader's values, stack choices and the checks done on the whole series, in the URL fragment (`#s=…`): browsers never send it, nothing reaches a server, and secrets (`kind: secret`) are never included. Opening the link on any page of the series applies it and shows a notice. One mechanism for two uses: hand a pre-filled tutorial to a colleague, or pick up where you were on another device. There is no account and no sync; this is the bridge.
+
+**Stuck here?** appears when hovering a step heading and opens an issue pre-filled with the page, the step, the reading level, the language and the stack choices — never the values.
+
+The catalogue shows, from this browser, the checks done per series and a "pick up where you were" link to the page read last.
+
 ### Glossary
 
 `content/glossary.yaml` (and optionally `content/<series>/glossary.yaml`) lists terms and abbreviations with a definition in every locale, plus `aliases` for other spellings (including the other language's word). They are marked in the prose at compile time: abbreviations (`abbr: true`) on every occurrence, case-sensitively, with their expansion; terms on their first occurrence per step. Never inside code, links or headings. Hover to read; `/glossary` lists them all.

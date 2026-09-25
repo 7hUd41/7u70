@@ -6,6 +6,7 @@
 
 import { useEffect, useState } from "react";
 import { useReader } from "./store";
+import { headingText } from "./Stuck";
 
 type Item = { id: string; text: string; depth: 2 | 3 };
 
@@ -24,7 +25,7 @@ function useOutline() {
     const root = document.querySelector<HTMLElement>(".doc-body");
     if (!root) return;
     const hs = Array.from(root.querySelectorAll<HTMLHeadingElement>("h2, h3"));
-    setItems(hs.map((h) => ({ id: h.id, text: h.textContent?.trim() ?? "", depth: h.tagName === "H2" ? 2 : 3 })));
+    setItems(hs.map((h) => ({ id: h.id, text: headingText(h), depth: h.tagName === "H2" ? 2 : 3 })));
     const nodes = Array.from(root.querySelectorAll<HTMLElement>("[data-check]"));
     setChecks({ total: nodes.length, done: nodes.filter((n) => n.dataset.done === "true").length });
 

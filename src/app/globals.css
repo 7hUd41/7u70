@@ -697,6 +697,15 @@ samp,
   background: var(--accent);
 }
 
+/* "Stuck here?" appears when the pointer is on the heading. */
+.doc-body h2 .stuck {
+  opacity: 0;
+}
+.doc-body h2:hover .stuck,
+.doc-body h2 .stuck:focus-visible {
+  opacity: 1;
+}
+
 /* Glossary term marked in the prose. */
 abbr.term {
   text-decoration: underline dotted;

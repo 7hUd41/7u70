@@ -23,6 +23,7 @@ const STEPS: Step[] = [
   { key: "token", target: ".doc-body figure .token" },
   { key: "copy", target: ".doc-body figure[data-shell]" },
   { key: "export", target: '[data-tour="toolbar"]' },
+  { key: "carry", target: '[data-tour="carry"]' },
   { key: "check", target: ".doc-body [data-check]" },
   { key: "details", target: ".doc-body details" },
   { key: "validate", target: '[data-tour="validate"]' },

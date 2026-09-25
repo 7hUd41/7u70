@@ -3,10 +3,11 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ArrowRight } from "lucide-react";
 import { isLocale, LOCALES } from "@/engine";
-import { listSeries, loadSeries } from "@/content/loader";
+import { countChecks, listSeries, loadSeries } from "@/content/loader";
 import { dict } from "@/i18n";
 import { Header } from "@/reader/Header";
 import { LocaleSwitch } from "@/reader/controls";
+import { PageProgress, SeriesProgress } from "@/reader/CatalogueProgress";
 import { homeUrl, localeLinks, pageUrl } from "@/urls";
 
 /* The first URL segment is either a language (/fr: the catalogue in French)
@@ -39,6 +40,9 @@ export default async function FirstSegment({ params }: { params: Promise<{ seg: 
   const locale = seg;
   const t = dict(locale);
   const series = await listSeries();
+  // Checks per page, in the language the card will open.
+  const checks = new Map<string, number>();
+  for (const s of series) for (const p of s.pages) checks.set(`${s.slug}/${p.slug}`, await countChecks(p, p.locales.includes(locale) ? locale : p.locales[0]));
 
   return (
     <>
@@ -58,7 +62,15 @@ export default async function FirstSegment({ params }: { params: Promise<{ seg: 
               <span className="label">{t.series}</span>
               <h2 className="font-serif text-[1.5rem] font-semibold text-ink">{s.contract.title[locale]}</h2>
             </div>
-            <p className="mb-6 max-w-[60ch] text-ink-2">{s.contract.summary[locale]}</p>
+            <p className="mb-4 max-w-[60ch] text-ink-2">{s.contract.summary[locale]}</p>
+            <SeriesProgress
+              series={s.slug}
+              locale={locale}
+              pages={s.pages.map((p) => {
+                const l = p.locales.includes(locale) ? locale : p.locales[0];
+                return { slug: p.slug, title: p.contract.title[locale], checks: checks.get(`${s.slug}/${p.slug}`) ?? 0, locale: l };
+              })}
+            />
             <ol className="grid gap-3 sm:grid-cols-2">
               {s.pages.map((p, i) => {
                 // A page not written in this language links to the language it has, and says so.
@@ -80,6 +92,7 @@ export default async function FirstSegment({ params }: { params: Promise<{ seg: 
                       <span className="ui mt-4 flex items-center gap-2 text-[12.5px] text-ink-3">
                         {t.meta.difficulty[p.contract.difficulty]}
                         {p.contract.minutes && <span>· {t.meta.minutes(p.contract.minutes)}</span>}
+                        <PageProgress series={s.slug} slug={p.slug} checks={checks.get(`${s.slug}/${p.slug}`) ?? 0} locale={locale} />
                         <ArrowRight className="ml-auto h-3.5 w-3.5 transition group-hover:translate-x-0.5 group-hover:text-accent" />
                       </span>
                     </Link>

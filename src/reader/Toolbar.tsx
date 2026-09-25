@@ -9,6 +9,8 @@ import { Check, Copy, FileDown } from "lucide-react";
 import { buildInstallScript, fill, joinCommands, type ShellBlock } from "@/engine";
 import { useReader } from "./store";
 import { PrintButton } from "./Print";
+import { CarryButton } from "./Carry";
+import { headingText } from "./Stuck";
 
 function collect(root: HTMLElement, selector: string, exclude?: string): ShellBlock[] {
   const nodes = Array.from(root.querySelectorAll<HTMLElement>(`h2, ${selector}`));
@@ -16,7 +18,7 @@ function collect(root: HTMLElement, selector: string, exclude?: string): ShellBl
   let step: string | undefined;
   for (const n of nodes) {
     if (n.tagName === "H2") {
-      step = n.textContent?.trim() || undefined;
+      step = headingText(n) || undefined;
       continue;
     }
     if (exclude && n.closest(exclude)) continue;
@@ -87,6 +89,7 @@ export function Toolbar({ title, slug }: { title: string; slug: string }) {
         {run ? t.toolbar.downloadRun : t.toolbar.download}
       </button>
       <PrintButton />
+      <CarryButton />
     </div>
   );
 }

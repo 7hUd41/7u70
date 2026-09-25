@@ -28,6 +28,8 @@ import { localeLinks, pageUrl, validationsUrl } from "@/urls";
 import { Toolbar } from "./Toolbar";
 import { Tour, TOUR_DONE_KEY } from "./Tour";
 import { VarEditor } from "./VarEditor";
+import { ImportedNotice } from "./Carry";
+import { StuckLinks } from "./Stuck";
 
 export type PageLink = { href: string; title: string };
 
@@ -251,6 +253,7 @@ function Frame(props: ReaderProps) {
             list={validations.list}
             href={validationsUrl(props.series.slug, props.slug, locale)}
           />
+          <ImportedNotice />
           {props.diagram && <Gist spec={props.diagram} />}
           <div className="mt-6 border-b border-line pb-5 print:hidden">
             <Toolbar title={contract.title[locale]} slug={props.slug} />
@@ -258,6 +261,7 @@ function Frame(props: ReaderProps) {
           <article className="prose doc-body" data-level={level}>
             {props.children}
           </article>
+          <StuckLinks title={contract.title[locale]} />
           <ValidatePanel
             series={props.id.split("/")[0]}
             slug={props.slug}

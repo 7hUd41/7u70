@@ -123,6 +123,12 @@ export async function readPageSource(page: PageRef, locale: Locale): Promise<str
   return readFile(pageSourcePath(page, locale), "utf8");
 }
 
+/** How many <Check> a page carries in a language (all branches counted). */
+export async function countChecks(page: PageRef, locale: Locale): Promise<number> {
+  const src = await readPageSource(page, locale);
+  return (src.match(/<Check\b/g) ?? []).length;
+}
+
 /** Previous / next page inside the same series. */
 export async function neighbors(page: PageRef): Promise<{ prev?: Page; next?: Page; series: Series }> {
   const series = await loadSeries(page.series);

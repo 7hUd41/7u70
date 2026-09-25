@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DiagramSpec, layoutDiagram, NODE_W, samePath, summarize, Validation, atLeast, buildInstallScript, defaultsOf, evaluate, fill, inherit, joinCommands, keysOf, PageContract, scanDangers, segments, SeriesContract, TutoContract, validate } from "./index";
+import { carryFragment, carryFromHash, decodeCarry, encodeCarry, stripSecrets, type Carry, DiagramSpec, layoutDiagram, NODE_W, samePath, summarize, Validation, atLeast, buildInstallScript, defaultsOf, evaluate, fill, inherit, joinCommands, keysOf, PageContract, scanDangers, segments, SeriesContract, TutoContract, validate } from "./index";
 
 describe("template", () => {
   const vars = { HOST: "netbox.lan", PORT: "8001" };
@@ -373,5 +373,34 @@ describe("diagram layout", () => {
 
   it("rejects an edge to an unknown node", () => {
     expect(() => DiagramSpec.parse({ nodes: [{ id: "a", label: { en: "A", fr: "A" } }], edges: [{ from: "a", to: "zz" }] })).toThrow(/unknown node/);
+  });
+});
+
+describe("carry link", () => {
+  const c: Carry = { v: 1, series: "netbox", vars: { NETBOX_HOST: "nb.example.com", INSTALL_DIR: "/opt/netbox" }, choices: { WEB: "nginx", LDAP: true }, done: { "install-from-scratch": ["a1", "b2"] } };
+
+  it("round-trips through base64url, unicode included", () => {
+    const u = { ...c, vars: { ...c.vars, BANNER: "Réseau — été ✓" } };
+    expect(decodeCarry(encodeCarry(u))).toEqual(u);
+    expect(encodeCarry(u)).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+
+  it("reads itself back from a URL fragment and rejects anything else", () => {
+    expect(carryFromHash(carryFragment(c))).toEqual(c);
+    expect(carryFromHash("#redis")).toBeNull();
+    expect(carryFromHash("#s=not-a-carry")).toBeNull();
+    expect(decodeCarry(encodeCarry({ ...c, v: 2 as unknown as 1 }))).toBeNull();
+  });
+
+  it("never carries a secret", () => {
+    const contract = TutoContract.parse({
+      title: { en: "T", fr: "T" },
+      summary: { en: "S", fr: "S" },
+      vars: [
+        { key: "HOST", label: { en: "H", fr: "H" } },
+        { key: "DB_PASSWORD", kind: "secret", label: { en: "P", fr: "P" } },
+      ],
+    });
+    expect(stripSecrets({ HOST: "x", DB_PASSWORD: "hunter2", EMPTY: "" }, contract)).toEqual({ HOST: "x" });
   });
 });
