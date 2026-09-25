@@ -34,6 +34,8 @@ content/                       tutorials, one folder per page
       tuto.yaml                contract: variables, choices, metadata (language-independent)
       page-en.mdx              prose, English
       page-fr.mdx              prose, French
+      diagram.yaml             optional: the visual gist, boxes and arrows, no coordinates
+      validations.yaml         append-only: who ran the page end to end, on which stack
 src/
   engine/                      pure TypeScript, no React: injection, conditions, validation,
                                script assembly, danger detection, contract schema. Unit-tested.
@@ -81,6 +83,23 @@ In `page-<locale>.mdx`:
 | ` ```ini title="/etc/x.conf" {1,3-5} ` | file name as caption, highlighted lines |
 | `<Annotated>` + `# (1)` markers + a numbered list | code annotations: hidden at Quick, badges at Guided, inline at Deep |
 | `## Heading` | a step: numbered automatically, listed in the outline |
+
+### The gist (diagram.yaml)
+
+A page may carry a diagram: boxes (`nodes`), containers (`groups`) and arrows (`edges`), never coordinates. Labels are localized; `sub` lines and arrow labels may use `${VARS}`; any element may carry a `when` and disappear with the reader's choices. Solid arrows lay the boxes out left to right; dashed arrows are secondary relations and do not move anything. The card renders at the top of the page, follows the skin, and scales to the column.
+
+```yaml
+groups: [{ id: server, label: { en: Your server, fr: Ton serveur } }]
+nodes:
+  - { id: users, kind: user, label: { en: Your team, fr: Ton équipe }, sub: "https://${NETBOX_HOST}" }
+  - { id: nginx, kind: net, label: { en: nginx, fr: nginx }, in: server, when: { is: WEB, equals: nginx } }
+  - { id: netbox, kind: server, label: { en: NetBox, fr: NetBox }, in: server, focus: true }
+edges:
+  - { from: users, to: nginx, label: HTTPS }
+  - { from: nginx, to: netbox }
+```
+
+Kinds: `user client server service store file net cloud` (the icon). `focus: true` draws the box in the accent: the thing the page is about.
 
 ### Human validation
 

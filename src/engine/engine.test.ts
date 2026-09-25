@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { samePath, summarize, Validation, atLeast, buildInstallScript, defaultsOf, evaluate, fill, inherit, joinCommands, keysOf, PageContract, scanDangers, segments, SeriesContract, TutoContract, validate } from "./index";
+import { DiagramSpec, layoutDiagram, NODE_W, samePath, summarize, Validation, atLeast, buildInstallScript, defaultsOf, evaluate, fill, inherit, joinCommands, keysOf, PageContract, scanDangers, segments, SeriesContract, TutoContract, validate } from "./index";
 
 describe("template", () => {
   const vars = { HOST: "netbox.lan", PORT: "8001" };
@@ -221,5 +221,76 @@ describe("validations", () => {
 
   it("rejects a bad timestamp", () => {
     expect(() => Validation.parse({ at: "yesterday", locale: "en", checks: { done: 0, total: 0 } })).toThrow();
+  });
+});
+
+describe("diagram layout", () => {
+  const spec = DiagramSpec.parse({
+    groups: [{ id: "srv", label: { en: "Server", fr: "Serveur" } }],
+    nodes: [
+      { id: "laptop", label: { en: "Laptop", fr: "Portable" }, kind: "client" },
+      { id: "web", label: { en: "nginx", fr: "nginx" }, in: "srv", when: { is: "WEB", equals: "nginx" } },
+      { id: "apache", label: { en: "Apache", fr: "Apache" }, in: "srv", when: { is: "WEB", equals: "apache" } },
+      { id: "app", label: { en: "NetBox", fr: "NetBox" }, in: "srv", focus: true, sub: "${HOST}" },
+      { id: "db", label: { en: "PostgreSQL", fr: "PostgreSQL" }, in: "srv", kind: "store" },
+    ],
+    edges: [
+      { from: "laptop", to: "web", label: "HTTPS" },
+      { from: "laptop", to: "apache", label: "HTTPS" },
+      { from: "web", to: "app" },
+      { from: "apache", to: "app" },
+      { from: "app", to: "db" },
+    ],
+  });
+
+  it("layers nodes left to right along the arrows", () => {
+    const l = layoutDiagram(spec, { WEB: "nginx" });
+    const layer = (id: string) => l.nodes.find((n) => n.id === id)!.layer;
+    expect(layer("laptop")).toBe(0);
+    expect(layer("web")).toBe(1);
+    expect(layer("app")).toBe(2);
+    expect(layer("db")).toBe(3);
+    expect(l.width).toBeGreaterThan(4 * NODE_W);
+  });
+
+  it("drops nodes and edges hidden by the reader's choices", () => {
+    const l = layoutDiagram(spec, { WEB: "apache" });
+    expect(l.nodes.map((n) => n.id)).not.toContain("web");
+    expect(l.nodes.map((n) => n.id)).toContain("apache");
+    expect(l.edges.some((e) => e.from === "laptop" && e.to === "web")).toBe(false);
+  });
+
+  it("draws a container around its members", () => {
+    const l = layoutDiagram(spec, { WEB: "nginx" });
+    const g = l.groups[0];
+    for (const id of ["web", "app", "db"]) {
+      const n = l.nodes.find((x) => x.id === id)!;
+      expect(n.x).toBeGreaterThanOrEqual(g.x);
+      expect(n.y).toBeGreaterThanOrEqual(g.y);
+      expect(n.x + n.w).toBeLessThanOrEqual(g.x + g.w);
+      expect(n.y + n.h).toBeLessThanOrEqual(g.y + g.h);
+    }
+    const laptop = l.nodes.find((x) => x.id === "laptop")!;
+    expect(laptop.x + laptop.w).toBeLessThan(g.x);
+  });
+
+  it("keeps a member with only a dashed arrow inside its group's columns", () => {
+    const d = DiagramSpec.parse({
+      groups: [{ id: "srv", label: { en: "S", fr: "S" } }],
+      nodes: [
+        { id: "you", label: { en: "You", fr: "Toi" } },
+        { id: "fw", label: { en: "FW", fr: "FW" }, in: "srv" },
+        { id: "f2b", label: { en: "f2b", fr: "f2b" }, in: "srv" },
+      ],
+      edges: [{ from: "you", to: "fw" }, { from: "f2b", to: "fw", dashed: true }],
+    });
+    const l = layoutDiagram(d, {});
+    const layer = (id: string) => l.nodes.find((n) => n.id === id)!.layer;
+    expect(layer("f2b")).toBe(layer("fw"));
+    expect(layer("you")).toBe(0);
+  });
+
+  it("rejects an edge to an unknown node", () => {
+    expect(() => DiagramSpec.parse({ nodes: [{ id: "a", label: { en: "A", fr: "A" } }], edges: [{ from: "a", to: "zz" }] })).toThrow(/unknown node/);
   });
 });

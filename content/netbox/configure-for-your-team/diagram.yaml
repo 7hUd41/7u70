@@ -1,0 +1,53 @@
+title: { en: "You, the API, and what you switch on", fr: "Toi, l'API, et ce que tu actives" }
+caption:
+  en: "Most of this page goes through the REST API with a token, so it can be replayed on the next instance. Mail, LDAP groups and plugins are optional pieces you decide on in the margin."
+  fr: "L'essentiel de cette page passe par l'API REST avec un jeton, pour pouvoir être rejoué sur la prochaine instance. Mail, groupes LDAP et plugins sont des briques optionnelles que tu décides dans la marge."
+
+groups:
+  - id: server
+    label: { en: "NetBox server", fr: "Serveur NetBox" }
+
+nodes:
+  - id: you
+    kind: user
+    label: { en: "You (admin)", fr: "Toi (admin)" }
+    sub: "curl · token"
+  - id: api
+    kind: net
+    label: { en: "REST API", fr: "API REST" }
+    sub: "https://${NETBOX_HOST}/api"
+    in: server
+  - id: config
+    kind: file
+    label: { en: "configuration.py", fr: "configuration.py" }
+    sub: "${INSTALL_DIR}/netbox/netbox/"
+    in: server
+    focus: true
+  - id: groups
+    kind: service
+    label: { en: "Groups & permissions", fr: "Groupes et permissions" }
+    sub: "netops · readers"
+    in: server
+  - id: plugins
+    kind: service
+    label: { en: "Plugins", fr: "Plugins" }
+    sub: "local_requirements.txt"
+    in: server
+  - id: smtp
+    kind: cloud
+    label: { en: "Mail relay", fr: "Relais mail" }
+    sub: "${SMTP_HOST}:${SMTP_PORT}"
+    when: { flag: MAIL }
+  - id: ldap
+    kind: cloud
+    label: { en: "LDAP / AD groups", fr: "Groupes LDAP / AD" }
+    sub: "${LDAP_ADMIN_GROUP}"
+    when: { flag: LDAP }
+
+edges:
+  - { from: you, to: api, label: "HTTPS" }
+  - { from: you, to: config, label: "ssh", dashed: true }
+  - { from: api, to: groups }
+  - { from: config, to: plugins }
+  - { from: config, to: smtp, dashed: true, when: { flag: MAIL } }
+  - { from: groups, to: ldap, label: "mirror", dashed: true, when: { flag: LDAP } }

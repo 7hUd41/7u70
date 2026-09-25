@@ -1,0 +1,61 @@
+# The gist: what this page builds. Follows the reader's stack.
+title: { en: "One server, four pieces", fr: "Un serveur, quatre briques" }
+caption:
+  en: "The web server takes HTTPS from users and hands requests to gunicorn, which runs NetBox. NetBox keeps everything in PostgreSQL and uses Redis for its queue and cache. With LDAP, logins are checked against your directory."
+  fr: "Le serveur web reçoit le HTTPS des utilisateurs et passe les requêtes à gunicorn, qui fait tourner NetBox. NetBox garde tout dans PostgreSQL et utilise Redis pour sa file et son cache. Avec LDAP, les connexions sont vérifiées auprès de ton annuaire."
+
+groups:
+  - id: server
+    label: { en: "Your server", fr: "Ton serveur" }
+  - id: directory
+    label: { en: "Your directory", fr: "Ton annuaire" }
+    when: { flag: LDAP }
+
+nodes:
+  - id: users
+    kind: user
+    label: { en: "Your team", fr: "Ton équipe" }
+    sub: "https://${NETBOX_HOST}"
+  - id: nginx
+    kind: net
+    label: { en: "nginx", fr: "nginx" }
+    sub: "443 → 8001"
+    in: server
+    when: { is: WEB, equals: nginx }
+  - id: apache
+    kind: net
+    label: { en: "Apache", fr: "Apache" }
+    sub: "443 → 8001"
+    in: server
+    when: { is: WEB, equals: apache }
+  - id: netbox
+    kind: server
+    label: { en: "NetBox (gunicorn)", fr: "NetBox (gunicorn)" }
+    sub: "${INSTALL_DIR}"
+    in: server
+    focus: true
+  - id: postgres
+    kind: store
+    label: { en: "PostgreSQL", fr: "PostgreSQL" }
+    sub: "netbox / netbox"
+    in: server
+  - id: redis
+    kind: store
+    label: { en: "Redis", fr: "Redis" }
+    sub: "db 0 tasks · db 1 cache"
+    in: server
+  - id: ldap
+    kind: cloud
+    label: { en: "LDAP / AD", fr: "LDAP / AD" }
+    sub: "${LDAP_URI}"
+    in: directory
+    when: { flag: LDAP }
+
+edges:
+  - { from: users, to: nginx, label: "HTTPS" }
+  - { from: users, to: apache, label: "HTTPS" }
+  - { from: nginx, to: netbox }
+  - { from: apache, to: netbox }
+  - { from: netbox, to: postgres }
+  - { from: netbox, to: redis }
+  - { from: netbox, to: ldap, label: "bind", dashed: true, when: { flag: LDAP } }

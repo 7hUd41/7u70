@@ -6,7 +6,8 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight } from "lucide-react";
-import { LEVELS, type Locale, type TutoContract, type Validation } from "@/engine";
+import { LEVELS, type DiagramSpec, type Locale, type TutoContract, type Validation } from "@/engine";
+import { Gist } from "./Diagram";
 import { useRouter } from "next/navigation";
 import { ValidatePanel, ValidationLine, useValidations } from "./Validation";
 import { StackPanel, ValuesPanel } from "./ContextPanel";
@@ -29,6 +30,7 @@ export type ReaderProps = {
   prev?: PageLink;
   next?: PageLink;
   validations: Validation[];
+  diagram: DiagramSpec | null;
   canValidate: boolean;
   /** Start the tour on the reader's first visit of this page. */
   tourOnFirstVisit?: boolean;
@@ -183,6 +185,7 @@ function Frame(props: ReaderProps) {
           <p className="mt-3 text-[1.1rem] leading-relaxed text-ink-2">{contract.summary[locale]}</p>
           <Meta />
           <ValidationLine list={validations.list} href={`/${locale}${props.path}/validations`} />
+          {props.diagram && <Gist spec={props.diagram} />}
           <div className="mt-6 border-b border-line pb-5">
             <Toolbar title={contract.title[locale]} slug={props.slug} />
           </div>

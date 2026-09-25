@@ -16,7 +16,7 @@
 import { appendFile, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { inherit, LOCALES, PageContract, SeriesContract, Validation, Validations, type TutoContract, type Locale } from "@/engine";
+import { DiagramSpec, inherit, LOCALES, PageContract, SeriesContract, Validation, Validations, type TutoContract, type Locale } from "@/engine";
 
 export const CONTENT_DIR = path.join(process.cwd(), "content");
 
@@ -151,4 +151,11 @@ export async function appendValidation(page: PageRef, v: Validation): Promise<vo
   const entry = stringifyYaml([v]);
   const head = (await exists(file)) ? "" : "# Human validations of this page, append-only. Choices only, never values.\n";
   await appendFile(file, head + entry, "utf8");
+}
+
+/* ── Diagram: optional diagram.yaml next to the page ─────────── */
+export async function readDiagram(page: PageRef): Promise<DiagramSpec | null> {
+  const file = path.join(CONTENT_DIR, page.series, page.slug, "diagram.yaml");
+  if (!(await exists(file))) return null;
+  return readYaml(file, DiagramSpec);
 }

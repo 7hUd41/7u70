@@ -1,0 +1,47 @@
+title: { en: "Before and after, in one picture", fr: "Avant et après, en une image" }
+caption:
+  en: "Only your key reaches sshd, on your port, through the firewall. Root and passwords are refused; with fail2ban, repeat offenders are banned before they even reach sshd."
+  fr: "Seule ta clé atteint sshd, sur ton port, à travers le pare-feu. Root et mots de passe sont refusés ; avec fail2ban, les récidivistes sont bannis avant même d'atteindre sshd."
+
+groups:
+  - id: server
+    label: { en: "Your server", fr: "Ton serveur" }
+
+nodes:
+  - id: you
+    kind: client
+    label: { en: "Your laptop", fr: "Ton portable" }
+    sub: "~/.ssh/id_ed25519"
+  - id: bots
+    kind: cloud
+    label: { en: "The internet's bots", fr: "Les robots d'internet" }
+    sub: "root / password…"
+  - id: firewall
+    kind: net
+    label: { en: "Firewall", fr: "Pare-feu" }
+    sub: "${SSH_PORT}/tcp only"
+    in: server
+  - id: sshd
+    kind: server
+    label: { en: "sshd", fr: "sshd" }
+    sub: "keys only · no root"
+    in: server
+    focus: true
+  - id: fail2ban
+    kind: service
+    label: { en: "fail2ban", fr: "fail2ban" }
+    sub: "3 failures → 1h ban"
+    in: server
+    when: { flag: FAIL2BAN }
+  - id: user
+    kind: user
+    label: { en: "Your account", fr: "Ton compte" }
+    sub: "${USERNAME} · sudo"
+    in: server
+
+edges:
+  - { from: you, to: firewall, label: "ssh -p ${SSH_PORT}" }
+  - { from: bots, to: firewall, label: "22, refused", dashed: true }
+  - { from: firewall, to: sshd }
+  - { from: sshd, to: user }
+  - { from: fail2ban, to: firewall, label: "ban", dashed: true, when: { flag: FAIL2BAN } }

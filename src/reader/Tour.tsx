@@ -16,6 +16,7 @@ type Step = { key: string; target: string | string[] };
 const STEPS: Step[] = [
   { key: "levels", target: '[data-tour="levels"]' },
   { key: "validationLine", target: '[data-tour="validation-line"]' },
+  { key: "gist", target: '[data-tour="gist"]' },
   { key: "outline", target: ['[data-tour="outline"]', '[data-tour="outline-toggle"]'] },
   { key: "stack", target: '[data-tour="stack"]' },
   { key: "values", target: '[data-tour="values"]' },

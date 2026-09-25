@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { compile } from "@mdx-js/mdx";
 import remarkGfm from "remark-gfm";
 import { keysOf, LOCALES } from "@/engine";
-import { listSeries, readPageSource } from "./loader";
+import { listSeries, readDiagram, readPageSource } from "./loader";
 import { rehypeHeadingIds } from "./rehype-heading-ids";
 import { parseMeta, rehypeCodeMeta } from "./rehype-code-meta";
 import { sectionsOf } from "./search-index";
@@ -42,6 +42,19 @@ describe("content", () => {
         expect(undeclaredChoices, "undeclared choices").toEqual([]);
       });
     }
+
+    it(`${page.series}/${page.slug}: diagram (if any) is valid and uses declared variables and choices`, async () => {
+      const d = await readDiagram(page);
+      if (!d) return;
+      const declaredVars = new Set(page.contract.vars.map((v) => v.key));
+      const declaredChoices = new Set(page.contract.choices.map((c) => c.key));
+      const subs = [...d.nodes.map((n) => n.sub), ...d.edges.map((e) => e.label)].flatMap((t) => (t === undefined ? [] : typeof t === "string" ? [t] : Object.values(t)));
+      const used = new Set(subs.flatMap((t) => keysOf(t)));
+      expect([...used].filter((k) => !declaredVars.has(k)), "undeclared variables").toEqual([]);
+      const whens = [...d.nodes, ...d.edges, ...d.groups].map((x) => x.when).filter(Boolean);
+      const refs = whens.map((w) => w!.flag ?? w!.notFlag ?? w!.is).filter((k): k is string => Boolean(k));
+      expect(refs.filter((k) => !declaredChoices.has(k)), "undeclared choices").toEqual([]);
+    });
 
     it(`${page.series}/${page.slug}: locales use the same headings`, async () => {
       const outlines = await Promise.all(

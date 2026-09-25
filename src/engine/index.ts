@@ -6,3 +6,4 @@ export * from "./danger";
 export * from "./script";
 export * from "./contract";
 export * from "./validation";
+export * from "./diagram";
