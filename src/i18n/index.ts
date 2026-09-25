@@ -52,7 +52,7 @@ const en = {
     complete: "All checks passed",
   },
   toc: "On this page",
-  gist: { title: "The gist" },
+  gist: { title: "The gist", more: "Show every layer", less: "Back to the simple picture" },
   print: { button: "Print", printedFrom: "Printed from" },
   glossary: { title: "Glossary", intro: "The terms and abbreviations these pages use. Hover any underlined term in a page to read its definition there.", link: "Open the glossary" },
   search: {
@@ -91,7 +91,7 @@ const en = {
     steps: {
       levels: { title: "How much do you want to read?", body: "Run gives you one script and nothing else. Quick shows the commands. Guided explains each step. Deep tells you why. Switch anytime, the page adapts." },
       validationLine: { title: "Is this page still good?", body: "Readers who followed it to the end say so here, with the date and the stack they used. Green means recently." },
-      gist: { title: "What you are building", body: "The pieces and how they connect, before you read a line. It follows your stack: change the web server and the picture changes." },
+      gist: { title: "What you are building", body: "The pieces and how they connect, before you read a line. It follows your stack and your reading level: change the web server and the picture changes; read Deep and every layer appears." },
       outline: { title: "Where you are", body: "The steps of the page, sub-steps under the one you are reading. Fold it from the header when you know the way." },
       stack: { title: "Your path", body: "Your distribution, your web server, your options. Pick them once: steps that do not apply disappear, commands change." },
       values: { title: "Your values", body: "Hostnames, ports, paths. Every command on the page is filled with them. Hover the ? for a full explanation." },
@@ -214,7 +214,7 @@ const fr: Dict = {
     complete: "Toutes les vérifications passent",
   },
   toc: "Sur cette page",
-  gist: { title: "En un coup d'œil" },
+  gist: { title: "En un coup d'œil", more: "Voir toutes les couches", less: "Revenir au schéma simple" },
   print: { button: "Imprimer", printedFrom: "Imprimé depuis" },
   glossary: { title: "Glossaire", intro: "Les termes et abréviations que ces pages emploient. Survole un terme souligné dans une page pour lire sa définition sur place.", link: "Ouvrir le glossaire" },
   search: {
@@ -253,7 +253,7 @@ const fr: Dict = {
     steps: {
       levels: { title: "Combien veux-tu lire ?", body: "Automatique te donne un script et rien d'autre. Express montre les commandes. Détaillé explique chaque étape. Exhaustif dit pourquoi. Change quand tu veux, la page s'adapte." },
       validationLine: { title: "Cette page est-elle toujours bonne ?", body: "Les lecteurs qui l'ont suivie jusqu'au bout le disent ici, avec la date et la stack utilisée. Vert = récemment." },
-      gist: { title: "Ce que tu construis", body: "Les briques et leurs liens, avant de lire une ligne. Ça suit ta stack : change le serveur web et le schéma change." },
+      gist: { title: "Ce que tu construis", body: "Les briques et leurs liens, avant de lire une ligne. Ça suit ta stack et ton niveau de lecture : change le serveur web et le schéma change ; lis en Exhaustif et toutes les couches apparaissent." },
       outline: { title: "Où tu es", body: "Les étapes de la page, les sous-étapes sous celle que tu lis. Replie-le depuis le header quand tu connais le chemin." },
       stack: { title: "Ton chemin", body: "Ta distribution, ton serveur web, tes options. Choisis-les une fois : les étapes qui ne s'appliquent pas disparaissent, les commandes changent." },
       values: { title: "Tes valeurs", body: "Noms d'hôte, ports, chemins. Chaque commande de la page est remplie avec. Survole le ? pour une explication complète." },

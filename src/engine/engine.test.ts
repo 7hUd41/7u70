@@ -290,6 +290,37 @@ describe("diagram layout", () => {
     expect(layer("you")).toBe(0);
   });
 
+  it("follows the reading level: elements from/up to a level, text overrides", () => {
+    const d = DiagramSpec.parse({
+      nodes: [
+        { id: "you", label: { en: "You", fr: "Toi" }, sub: "short", deep: { sub: "a much longer line that wraps onto two lines" } },
+        { id: "fw", label: { en: "FW", fr: "FW" }, level: "guided" },
+        { id: "app", label: { en: "App", fr: "App" }, deep: { label: { en: "App (Django)", fr: "App (Django)" } } },
+      ],
+      edges: [
+        { from: "you", to: "app", label: "HTTPS", max: "quick" },
+        { from: "you", to: "fw", level: "guided", guided: { label: "TCP 443" }, deep: { label: "L7 HTTPS · L4 TCP 443" } },
+        { from: "fw", to: "app", level: "guided" },
+      ],
+    });
+    const ids = (l: ReturnType<typeof layoutDiagram>) => l.nodes.map((n) => n.id);
+    const quick = layoutDiagram(d, {}, "quick");
+    expect(ids(quick)).toEqual(["you", "app"]);
+    expect(quick.edges).toHaveLength(1);
+    expect(quick.edges[0].label).toBe("HTTPS");
+    // Run reads the Quick drawing.
+    expect(ids(layoutDiagram(d, {}, "run"))).toEqual(["you", "app"]);
+    const guided = layoutDiagram(d, {}, "guided");
+    expect(ids(guided)).toEqual(["you", "fw", "app"]);
+    expect(guided.edges.map((e) => e.label)).toEqual(["TCP 443", undefined]);
+    const deep = layoutDiagram(d, {}, "deep");
+    expect(deep.edges.map((e) => e.label)).toEqual(["L7 HTTPS · L4 TCP 443", undefined]);
+    expect(deep.nodes.find((n) => n.id === "app")!.label.en).toBe("App (Django)");
+    // A long sub line gets a taller box; a long arrow label a longer arrow.
+    expect(deep.nodes.find((n) => n.id === "you")!.h).toBeGreaterThan(quick.nodes.find((n) => n.id === "you")!.h);
+    expect(deep.width).toBeGreaterThan(guided.width);
+  });
+
   it("rejects an edge to an unknown node", () => {
     expect(() => DiagramSpec.parse({ nodes: [{ id: "a", label: { en: "A", fr: "A" } }], edges: [{ from: "a", to: "zz" }] })).toThrow(/unknown node/);
   });

@@ -50,7 +50,9 @@ describe("content", () => {
       if (!d) return;
       const declaredVars = new Set(page.contract.vars.map((v) => v.key));
       const declaredChoices = new Set(page.contract.choices.map((c) => c.key));
-      const subs = [...d.nodes.map((n) => n.sub), ...d.edges.map((e) => e.label)].flatMap((t) => (t === undefined ? [] : typeof t === "string" ? [t] : Object.values(t)));
+      const subs = [...d.nodes.flatMap((n) => [n.sub, n.guided?.sub, n.deep?.sub]), ...d.edges.flatMap((e) => [e.label, e.guided?.label, e.deep?.label])].flatMap((t) =>
+        t === undefined ? [] : typeof t === "string" ? [t] : Object.values(t)
+      );
       const used = new Set(subs.flatMap((t) => keysOf(t)));
       expect([...used].filter((k) => !declaredVars.has(k)), "undeclared variables").toEqual([]);
       const whens = [...d.nodes, ...d.edges, ...d.groups].map((x) => x.when).filter(Boolean);

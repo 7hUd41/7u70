@@ -2,7 +2,8 @@
 
 /* The visual gist of a page. Boxes are HTML (skin tokens, clickable
    values), arrows are an SVG underneath; the layout comes from the engine
-   and follows the reader's choices. */
+   and follows the reader's choices and reading level: Quick shows the
+   picture, Deep shows every layer of it. */
 
 import { useEffect, useRef, useState } from "react";
 import { Cloud, Database, FileText, Globe, Monitor, Network, Server, User, type LucideIcon } from "lucide-react";
@@ -21,14 +22,16 @@ const ICON: Record<NodeKind, LucideIcon> = {
   cloud: Cloud,
 };
 
-/* Scale the drawing down to the available width (never up). */
+/* Scale the drawing down to the available width (never up). A detailed
+   drawing stops shrinking at 62% and scrolls sideways instead. */
+const MIN_SCALE = 0.62;
 function useFit(width: number) {
   const ref = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const update = () => setScale(Math.min(1, el.clientWidth / width));
+    const update = () => setScale(Math.max(MIN_SCALE, Math.min(1, el.clientWidth / width)));
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
@@ -38,13 +41,13 @@ function useFit(width: number) {
 }
 
 export function Diagram({ spec }: { spec: DiagramSpec }) {
-  const { choices, locale } = useReader();
-  const l = layoutDiagram(spec, choices);
+  const { choices, locale, level } = useReader();
+  const l = layoutDiagram(spec, choices, level);
   const { ref, scale } = useFit(l.width);
   const text = (t: string | Localized | undefined) => (t === undefined ? undefined : typeof t === "string" ? t : t[locale]);
 
   return (
-    <div ref={ref} className="w-full" style={{ height: l.height * scale }}>
+    <div ref={ref} className="w-full overflow-x-auto overflow-y-hidden" style={{ height: l.height * scale }}>
       <div className="relative origin-top-left" style={{ width: l.width, height: l.height, transform: `scale(${scale})` }}>
         <svg className="absolute inset-0" width={l.width} height={l.height} aria-hidden>
           <defs>
@@ -68,7 +71,7 @@ export function Diagram({ spec }: { spec: DiagramSpec }) {
           .map((e, i) => (
             <span
               key={"l" + i}
-              className="ui absolute -translate-x-1/2 -translate-y-1/2 rounded bg-paper px-1.5 py-px text-[11px] text-ink-2"
+              className="ui absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded bg-paper px-1.5 py-px text-[11px] text-ink-2"
               style={{ left: e.mx, top: e.my }}
             >
               <Tokenized template={text(e.label) ?? ""} />
@@ -90,7 +93,7 @@ export function Diagram({ spec }: { spec: DiagramSpec }) {
               <span className="min-w-0">
                 <span className={"ui block truncate text-[13px] " + (n.focus ? "font-bold text-ink" : "text-ink")}>{n.label[locale]}</span>
                 {n.sub && (
-                  <span className="block truncate font-mono text-[11px] text-ink-2" title={text(n.sub)}>
+                  <span className="line-clamp-3 font-mono text-[11px] leading-[14px] text-ink-2" title={text(n.sub)}>
                     <Tokenized template={text(n.sub) ?? ""} />
                   </span>
                 )}
@@ -105,12 +108,22 @@ export function Diagram({ spec }: { spec: DiagramSpec }) {
 
 /* The card at the top of a page: title, diagram, caption. */
 export function Gist({ spec }: { spec: DiagramSpec }) {
-  const { locale, t } = useReader();
+  const { locale, t, level, setLevel } = useReader();
+  // Only offer the switch when the drawing actually has more (or less) to show.
+  const hasLayers = [...spec.nodes, ...spec.edges, ...spec.groups].some((x) => x.level || x.max || ("guided" in x && x.guided) || ("deep" in x && x.deep));
+  const deep = level === "deep";
   return (
     <section data-tour="gist" className="mt-6 rounded-md border border-line bg-paper-2/40 p-4">
       <div className="mb-3 flex items-baseline justify-between gap-3">
         <span className="label">{t.gist.title}</span>
-        {spec.title && <span className="ui text-[13px] text-ink-2">{spec.title[locale]}</span>}
+        <span className="ui flex items-baseline gap-3 text-[13px] text-ink-2">
+          {spec.title && <span>{spec.title[locale]}</span>}
+          {hasLayers && (
+            <button type="button" onClick={() => setLevel(deep ? "quick" : "deep")} className="no-print text-[12px] text-accent-ink hover:underline">
+              {deep ? t.gist.less : t.gist.more}
+            </button>
+          )}
+        </span>
       </div>
       <Diagram spec={spec} />
       {spec.caption && <p className="mt-3 text-[14px] leading-snug text-ink-2">{spec.caption[locale]}</p>}

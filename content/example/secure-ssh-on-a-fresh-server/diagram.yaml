@@ -1,3 +1,5 @@
+# Quick: five boxes. Guided: the config file that drives sshd and the layers
+# on the arrows. Deep: the key file, the log, and the loop that feeds fail2ban.
 title: { en: "Before and after, in one picture", fr: "Avant et après, en une image" }
 caption:
   en: "Only your key reaches sshd, on your port, through the firewall. Root and passwords are refused; with fail2ban, repeat offenders are banned before they even reach sshd."
@@ -12,36 +14,75 @@ nodes:
     kind: client
     label: { en: "Your laptop", fr: "Ton portable" }
     sub: "~/.ssh/id_ed25519"
+    deep:
+      sub: "ssh client · ~/.ssh/id_ed25519 (private key)"
   - id: bots
     kind: cloud
     label: { en: "The internet's bots", fr: "Les robots d'internet" }
     sub: "root / password…"
+    deep:
+      sub: "scanners · TCP 22 · root / password lists"
   - id: firewall
     kind: net
     label: { en: "Firewall", fr: "Pare-feu" }
     sub: "${SSH_PORT}/tcp only"
     in: server
+    guided:
+      sub: "ufw · allow ${SSH_PORT}/tcp · deny in"
+    deep:
+      sub: "ufw (nftables) · L3/L4 · allow ${SSH_PORT}/tcp · default deny in"
   - id: sshd
     kind: server
     label: { en: "sshd", fr: "sshd" }
     sub: "keys only · no root"
     in: server
     focus: true
+    deep:
+      sub: "Port ${SSH_PORT} · PubkeyAuthentication yes · PasswordAuthentication no · PermitRootLogin no"
+  - id: config
+    kind: file
+    label: { en: "sshd_config", fr: "sshd_config" }
+    sub: "/etc/ssh/sshd_config.d/"
+    in: server
+    level: guided
+    deep:
+      sub: "/etc/ssh/sshd_config.d/hardening.conf · read at start"
+  - id: keys
+    kind: file
+    label: { en: "authorized_keys", fr: "authorized_keys" }
+    sub: "/home/${USERNAME}/.ssh/"
+    in: server
+    level: deep
+  - id: log
+    kind: file
+    label: { en: "Auth log", fr: "Journal d'auth" }
+    sub: "journald · sshd"
+    in: server
+    level: deep
+    when: { flag: FAIL2BAN }
   - id: fail2ban
     kind: service
     label: { en: "fail2ban", fr: "fail2ban" }
     sub: "3 failures → 1h ban"
     in: server
     when: { flag: FAIL2BAN }
+    deep:
+      sub: "jail sshd · port ${SSH_PORT} · maxretry 3 · bantime 1h"
   - id: user
     kind: user
     label: { en: "Your account", fr: "Ton compte" }
     sub: "${USERNAME} · sudo"
     in: server
+    deep:
+      sub: "${USERNAME} · sudo group · a shell, no root"
 
 edges:
-  - { from: you, to: firewall, label: "ssh -p ${SSH_PORT}" }
-  - { from: bots, to: firewall, label: "22, refused", dashed: true }
-  - { from: firewall, to: sshd }
-  - { from: sshd, to: user }
-  - { from: fail2ban, to: firewall, label: "ban", dashed: true, when: { flag: FAIL2BAN } }
+  - { from: you, to: firewall, label: "ssh -p ${SSH_PORT}", guided: { label: "ssh -p ${SSH_PORT} · TCP" }, deep: { label: "L7 SSH-2 · L4 TCP ${SSH_PORT} · L3 IP" } }
+  - { from: bots, to: firewall, label: "22, refused", dashed: true, deep: { label: "TCP 22 SYN → DROP" } }
+  - { from: firewall, to: sshd, deep: { label: "accept ${SSH_PORT}" } }
+  - { from: config, to: sshd, label: "loads", dashed: true, level: guided }
+  - { from: sshd, to: keys, label: "checks key", dashed: true, level: deep }
+  - { from: sshd, to: user, deep: { label: "key matches → session" } }
+  - { from: sshd, to: log, label: "logs failures", dashed: true, level: deep, when: { flag: FAIL2BAN } }
+  - { from: log, to: fail2ban, label: "reads", dashed: true, level: deep, when: { flag: FAIL2BAN } }
+  - { from: fail2ban, to: firewall, label: "ban", dashed: true, when: { flag: FAIL2BAN }, deep: { label: "ban IP · nftables set" } }

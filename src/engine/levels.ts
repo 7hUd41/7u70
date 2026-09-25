@@ -10,7 +10,8 @@ export type Level = (typeof LEVELS)[number];
 
 export const LEVEL_INDEX: Record<Level, number> = { run: 0, quick: 1, guided: 2, deep: 3 };
 
-export const DEFAULT_LEVEL: Level = "guided";
+/** A new reader lands on Quick: the page works, the drawing is the simple one. */
+export const DEFAULT_LEVEL: Level = "quick";
 
 /** True when `current` shows content that requires at least `min`. */
 export function atLeast(current: Level, min: Level): boolean {

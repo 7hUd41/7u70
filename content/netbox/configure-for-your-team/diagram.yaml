@@ -1,3 +1,6 @@
+# Quick: you, the API, the config file and what you switch on. Guided adds
+# the restart that makes configuration.py count. Deep spells out the token,
+# the transports, and where the plugins land.
 title: { en: "You, the API, and what you switch on", fr: "Toi, l'API, et ce que tu actives" }
 caption:
   en: "Most of this page goes through the REST API with a token, so it can be replayed on the next instance. Mail, LDAP groups and plugins are optional pieces you decide on in the margin."
@@ -12,42 +15,65 @@ nodes:
     kind: user
     label: { en: "You (admin)", fr: "Toi (admin)" }
     sub: "curl · token"
+    deep:
+      sub: "curl · Authorization: Token … · JSON"
   - id: api
     kind: net
     label: { en: "REST API", fr: "API REST" }
     sub: "https://${NETBOX_HOST}/api"
     in: server
+    deep:
+      sub: "https://${NETBOX_HOST}/api · DRF · token → user → permissions"
   - id: config
     kind: file
     label: { en: "configuration.py", fr: "configuration.py" }
     sub: "${INSTALL_DIR}/netbox/netbox/"
     in: server
     focus: true
+    deep:
+      sub: "${INSTALL_DIR}/netbox/netbox/configuration.py · read at start only"
+  - id: restart
+    kind: service
+    label: { en: "Restart", fr: "Redémarrage" }
+    sub: "systemctl restart netbox netbox-rq"
+    in: server
+    level: guided
   - id: groups
     kind: service
     label: { en: "Groups & permissions", fr: "Groupes et permissions" }
     sub: "netops · readers"
     in: server
+    deep:
+      sub: "netops (write) · readers (view) · object permissions"
   - id: plugins
     kind: service
     label: { en: "Plugins", fr: "Plugins" }
     sub: "local_requirements.txt"
     in: server
+    deep:
+      sub: "local_requirements.txt → venv · PLUGINS = […] · migrate"
   - id: smtp
     kind: cloud
     label: { en: "Mail relay", fr: "Relais mail" }
     sub: "${SMTP_HOST}:${SMTP_PORT}"
     when: { flag: MAIL }
+    deep:
+      sub: "${SMTP_HOST}:${SMTP_PORT} · STARTTLS · from ${FROM_EMAIL}"
   - id: ldap
     kind: cloud
     label: { en: "LDAP / AD groups", fr: "Groupes LDAP / AD" }
     sub: "${LDAP_ADMIN_GROUP}"
     when: { flag: LDAP }
+    deep:
+      sub: "memberOf ${LDAP_ADMIN_GROUP} → superuser · mirrored at login"
 
 edges:
-  - { from: you, to: api, label: "HTTPS" }
-  - { from: you, to: config, label: "ssh", dashed: true }
-  - { from: api, to: groups }
-  - { from: config, to: plugins }
-  - { from: config, to: smtp, dashed: true, when: { flag: MAIL } }
-  - { from: groups, to: ldap, label: "mirror", dashed: true, when: { flag: LDAP } }
+  - { from: you, to: api, label: "HTTPS", deep: { label: "L7 HTTPS · Authorization: Token" } }
+  - { from: you, to: config, label: "ssh", dashed: true, deep: { label: "ssh · sudo · editor" } }
+  - { from: api, to: groups, deep: { label: "POST /users/…" } }
+  - { from: config, to: restart, label: "then", level: guided }
+  - { from: config, to: plugins, max: quick }
+  - { from: restart, to: plugins, level: guided, deep: { label: "loads PLUGINS" } }
+  - { from: config, to: smtp, dashed: true, when: { flag: MAIL }, max: quick }
+  - { from: restart, to: smtp, dashed: true, level: guided, when: { flag: MAIL }, deep: { label: "EMAIL = {…} · TCP ${SMTP_PORT}" } }
+  - { from: groups, to: ldap, label: "mirror", dashed: true, when: { flag: LDAP }, deep: { label: "AUTH_LDAP_MIRROR_GROUPS" } }

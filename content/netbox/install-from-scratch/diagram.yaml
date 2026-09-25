@@ -1,4 +1,6 @@
-# The gist: what this page builds. Follows the reader's stack.
+# The gist: what this page builds. Follows the reader's stack and level:
+# Quick shows four pieces, Guided adds the firewall and the worker, Deep
+# shows every layer (DNS, TLS, ports, sockets, units, databases).
 title: { en: "One server, four pieces", fr: "Un serveur, quatre briques" }
 caption:
   en: "The web server takes HTTPS from users and hands requests to gunicorn, which runs NetBox. NetBox keeps everything in PostgreSQL and uses Redis for its queue and cache. With LDAP, logins are checked against your directory."
@@ -16,46 +18,123 @@ nodes:
     kind: user
     label: { en: "Your team", fr: "Ton équipe" }
     sub: "https://${NETBOX_HOST}"
+    deep:
+      sub: "browser · L7 HTTPS → ${NETBOX_HOST}"
+  - id: dns
+    kind: cloud
+    label: { en: "DNS", fr: "DNS" }
+    sub: "${NETBOX_HOST} → A / AAAA"
+    level: deep
+  - id: firewall
+    kind: net
+    label: { en: "Firewall", fr: "Pare-feu" }
+    sub: "in: 22, 80, 443/tcp"
+    in: server
+    level: guided
+    deep:
+      sub: "ufw · L3/L4 · allow 22, 80, 443/tcp · deny the rest"
+  - id: cert
+    kind: file
+    label: { en: "TLS certificate", fr: "Certificat TLS" }
+    sub: "self-signed · /etc/ssl/… · CN ${NETBOX_HOST}"
+    in: server
+    level: deep
+    when: { is: TLS, equals: selfsigned }
+  - id: le
+    kind: file
+    label: { en: "TLS certificate", fr: "Certificat TLS" }
+    sub: "Let's Encrypt · certbot · renews itself"
+    in: server
+    level: deep
+    when: { is: TLS, equals: letsencrypt }
   - id: nginx
     kind: net
     label: { en: "nginx", fr: "nginx" }
     sub: "443 → 8001"
     in: server
     when: { is: WEB, equals: nginx }
+    guided:
+      sub: ":443 → 127.0.0.1:8001"
+    deep:
+      sub: "TLS ends here · :443 → 127.0.0.1:8001 · HTTP/1.1"
   - id: apache
     kind: net
     label: { en: "Apache", fr: "Apache" }
     sub: "443 → 8001"
     in: server
     when: { is: WEB, equals: apache }
+    guided:
+      sub: ":443 → 127.0.0.1:8001"
+    deep:
+      sub: "TLS ends here · :443 → 127.0.0.1:8001 · HTTP/1.1"
+  - id: gunicorn
+    kind: service
+    label: { en: "gunicorn", fr: "gunicorn" }
+    sub: "netbox.service · 127.0.0.1:8001 · 5 workers"
+    in: server
+    level: deep
   - id: netbox
     kind: server
     label: { en: "NetBox (gunicorn)", fr: "NetBox (gunicorn)" }
     sub: "${INSTALL_DIR}"
     in: server
     focus: true
+    deep:
+      label: { en: "NetBox (Django)", fr: "NetBox (Django)" }
+      sub: "${INSTALL_DIR} · venv · configuration.py"
+  - id: rq
+    kind: service
+    label: { en: "RQ worker", fr: "Worker RQ" }
+    sub: "netbox-rq.service"
+    in: server
+    level: guided
+    deep:
+      sub: "netbox-rq.service · webhooks, scripts, reports"
   - id: postgres
     kind: store
     label: { en: "PostgreSQL", fr: "PostgreSQL" }
     sub: "netbox / netbox"
     in: server
+    guided:
+      sub: "localhost:5432 · netbox / netbox"
+    deep:
+      sub: "L4 TCP 5432 · scram-sha-256 · db netbox, role netbox"
   - id: redis
     kind: store
     label: { en: "Redis", fr: "Redis" }
     sub: "db 0 tasks · db 1 cache"
     in: server
+    deep:
+      sub: "L4 TCP 127.0.0.1:6379 · db 0 tasks · db 1 cache"
   - id: ldap
     kind: cloud
     label: { en: "LDAP / AD", fr: "LDAP / AD" }
     sub: "${LDAP_URI}"
     in: directory
     when: { flag: LDAP }
+    deep:
+      sub: "${LDAP_URI} · 636 LDAPS or 389 + STARTTLS"
 
 edges:
-  - { from: users, to: nginx, label: "HTTPS" }
-  - { from: users, to: apache, label: "HTTPS" }
-  - { from: nginx, to: netbox }
-  - { from: apache, to: netbox }
-  - { from: netbox, to: postgres }
-  - { from: netbox, to: redis }
-  - { from: netbox, to: ldap, label: "bind", dashed: true, when: { flag: LDAP } }
+  # Quick: users reach the web server directly.
+  - { from: users, to: nginx, label: "HTTPS", max: quick }
+  - { from: users, to: apache, label: "HTTPS", max: quick }
+  # Guided and up: through the firewall, with the layers spelled out.
+  - { from: users, to: dns, label: "L7 DNS · L4 UDP 53", dashed: true, level: deep }
+  - { from: users, to: firewall, label: "HTTPS · TCP 443", level: guided, deep: { label: "L7 HTTPS · L4 TCP 443 · L3 IP" } }
+  - { from: firewall, to: nginx, level: guided, deep: { label: "accept" } }
+  - { from: firewall, to: apache, level: guided, deep: { label: "accept" } }
+  - { from: cert, to: nginx, label: "loads", dashed: true, level: deep }
+  - { from: cert, to: apache, label: "loads", dashed: true, level: deep }
+  - { from: le, to: nginx, label: "loads", dashed: true, level: deep }
+  - { from: le, to: apache, label: "loads", dashed: true, level: deep }
+  # Up to Guided, gunicorn is folded into the NetBox box; Deep separates them.
+  - { from: nginx, to: netbox, max: guided, guided: { label: "proxy_pass" } }
+  - { from: apache, to: netbox, max: guided, guided: { label: "ProxyPass" } }
+  - { from: nginx, to: gunicorn, label: "proxy_pass · HTTP/1.1 · loopback", level: deep }
+  - { from: apache, to: gunicorn, label: "ProxyPass · HTTP/1.1 · loopback", level: deep }
+  - { from: gunicorn, to: netbox, label: "WSGI", level: deep }
+  - { from: netbox, to: postgres, deep: { label: "psycopg · TCP 5432" } }
+  - { from: netbox, to: redis, deep: { label: "TCP 6379" } }
+  - { from: redis, to: rq, label: "jobs", dashed: true, level: guided, deep: { label: "queue db 0 → jobs" } }
+  - { from: netbox, to: ldap, label: "bind", dashed: true, when: { flag: LDAP }, deep: { label: "bind · TLS · then search" } }
