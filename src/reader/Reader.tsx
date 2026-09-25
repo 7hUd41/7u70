@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { LEVELS, type DiagramSpec, type GlossaryEntry, type Locale, type TutoContract, type Validation } from "@/engine";
 import { GlossaryTips } from "./GlossaryTips";
+import { PrintSummary, PrintSupport } from "./Print";
 import { Gist } from "./Diagram";
 import { useRouter } from "next/navigation";
 import { ValidatePanel, ValidationLine, useValidations } from "./Validation";
@@ -51,7 +52,7 @@ function ReadingLine() {
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
-  return <div className="progress-line fixed inset-x-0 top-0 z-40" style={{ transform: `scaleX(${pct})` }} />;
+  return <div className="progress-line fixed inset-x-0 top-0 z-40 print:hidden" style={{ transform: `scaleX(${pct})` }} />;
 }
 
 function Meta() {
@@ -176,19 +177,20 @@ function Frame(props: ReaderProps) {
         }
       >
         {outlineOpen && (
-          <aside className="hidden xl:block">
+          <aside className="hidden xl:block print:hidden">
             <div className="sidebar-scroll sticky top-16 max-h-[calc(100vh-5rem)] overflow-y-auto pr-4">
               <Outline />
             </div>
           </aside>
         )}
         <main className="min-w-0">
+          <PrintSummary />
           <h1 className="font-display text-[2.4rem] leading-[1.1] tracking-tight text-ink">{contract.title[locale]}</h1>
           <p className="mt-3 text-[1.1rem] leading-relaxed text-ink-2">{contract.summary[locale]}</p>
           <Meta />
           <ValidationLine list={validations.list} href={`/${locale}${props.path}/validations`} />
           {props.diagram && <Gist spec={props.diagram} />}
-          <div className="mt-6 border-b border-line pb-5">
+          <div className="mt-6 border-b border-line pb-5 print:hidden">
             <Toolbar title={contract.title[locale]} slug={props.slug} />
           </div>
           <article className="prose doc-body" data-level={level}>
@@ -196,7 +198,7 @@ function Frame(props: ReaderProps) {
           </article>
           <ValidatePanel series={props.id.split("/")[0]} slug={props.slug} onAdded={validations.add} canValidate={props.canValidate} />
           {(props.prev || props.next) && (
-            <nav className="ui mt-14 grid gap-3 border-t border-line pt-6 sm:grid-cols-2">
+            <nav className="ui mt-14 grid gap-3 border-t border-line pt-6 sm:grid-cols-2 print:hidden">
               {props.prev ? (
                 <Link href={props.prev.href} className="group rounded-md border border-line p-4 transition hover:border-line-2">
                   <span className="mb-1 flex items-center gap-1 text-[12px] text-ink-3">
@@ -218,7 +220,7 @@ function Frame(props: ReaderProps) {
             </nav>
           )}
         </main>
-        <aside>
+        <aside className="print:hidden">
           <div className="sidebar-scroll space-y-8 lg:sticky lg:top-16 lg:max-h-[calc(100vh-5rem)] lg:overflow-y-auto lg:pr-5">
             <div className="xl:hidden">
               <Outline />
@@ -230,6 +232,7 @@ function Frame(props: ReaderProps) {
       </div>
       <VarEditor />
       <GlossaryTips entries={props.glossary} />
+      <PrintSupport />
       <Tour open={tourOpen} onClose={closeTour} />
     </>
   );

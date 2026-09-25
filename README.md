@@ -105,6 +105,10 @@ Kinds: `user client server service store file net cloud` (the icon). `focus: tru
 
 `content/glossary.yaml` (and optionally `content/<series>/glossary.yaml`) lists terms and abbreviations with a definition in every locale, plus `aliases` for other spellings (including the other language's word). They are marked in the prose at compile time: abbreviations (`abbr: true`) on every occurrence, case-sensitively, with their expansion; terms on their first occurrence per step. Never inside code, links or headings. Hover to read; `/glossary` lists them all.
 
+### Printing
+
+"Print" in the toolbar (or ⌘P) prints the page as read: current depth, current path, values injected, folded boxes opened, code never split across pages, black on white whatever the skin. A head line states the URL, the depth, the stack and the values (secrets masked) the printout was made for.
+
 ### Human validation
 
 A page is only as good as the last person who ran it. At the end of every page, "Did everything work?" lets a reader record that they followed it end to end on a real machine: the validation is dated and stores **their stack choices only** (never their values), under a pseudonym or an anonymous tag. The line under the title shows how many validations the page has, the last one, and how many on the reader's own path; `/…/validations` lists them all. Validations live in `validations.yaml` next to the page, append-only. Recording needs the server (author mode); the static copy links to the issue tracker instead.

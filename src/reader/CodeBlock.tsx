@@ -158,7 +158,7 @@ export function CodeBlock({ code, lang = "", meta, title }: { code: string; lang
         type="button"
         onClick={copy}
         aria-label={t.code.copy}
-        className="ui absolute right-2 top-2 inline-flex items-center gap-1 rounded border border-line bg-paper px-2 py-1 text-[12px] text-ink-2 opacity-0 transition hover:text-ink focus:opacity-100 group-hover:opacity-100"
+        className="no-print ui absolute right-2 top-2 inline-flex items-center gap-1 rounded border border-line bg-paper px-2 py-1 text-[12px] text-ink-2 opacity-0 transition hover:text-ink focus:opacity-100 group-hover:opacity-100"
         style={{ top: dangers.length > 0 || caption ? undefined : "0.5rem" }}
       >
         {copied ? <Check className="h-3 w-3 text-ok" /> : <Copy className="h-3 w-3" />}

@@ -118,7 +118,7 @@ export function ValidatePanel({ series, slug, onAdded, canValidate }: { series: 
   const incomplete = checks.total > 0 && checks.done < checks.total;
 
   return (
-    <section data-tour="validate" className="ui mt-14 rounded-md border border-line bg-paper-2/60 p-5">
+    <section data-tour="validate" className="ui mt-14 rounded-md border border-line bg-paper-2/60 p-5 print:hidden">
       <h2 className="font-serif text-[1.25rem] font-semibold text-ink">{t.validated.title}</h2>
       <p className="mt-1 text-[13.5px] text-ink-2">{t.validated.intro}</p>
       {checks.total > 0 && (

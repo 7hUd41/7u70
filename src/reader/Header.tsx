@@ -35,7 +35,7 @@ export function Header({
   return (
     <header
       className={
-        "sticky top-0 z-30 border-b border-line bg-paper/90 backdrop-blur transition-transform duration-200 " +
+        "sticky top-0 z-30 border-b border-line bg-paper/90 backdrop-blur transition-transform duration-200 print:hidden " +
         (hidden ? "-translate-y-full" : "")
       }
     >

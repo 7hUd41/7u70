@@ -864,3 +864,67 @@ abbr.term:hover {
   font-weight: 400;
   font-size: 1.6rem;
 }
+
+/* ── Print: ink on paper whatever the skin, no chrome, nothing cut ── */
+@media print {
+  :root,
+  :root[data-theme="dark"],
+  :root[data-skin] {
+    --paper: #ffffff;
+    --paper-2: #f4f4f4;
+    --paper-3: #e8e8e8;
+    --ink: #000000;
+    --ink-2: #333333;
+    --ink-3: #666666;
+    --line: #cccccc;
+    --line-2: #999999;
+    --accent: #000000;
+    --accent-ink: #000000;
+    --accent-soft: #eeeeee;
+    --code-bg: #f6f6f6;
+    --code-line: #cccccc;
+    --code-ink: #000000;
+    --code-muted: #888888;
+    --shadow: none;
+  }
+  @page {
+    margin: 16mm 14mm;
+  }
+  html,
+  body {
+    background: #fff;
+    font-size: 11pt;
+  }
+  .doc-body figure,
+  .doc-body [data-check],
+  .doc-body details,
+  .doc-body table,
+  .doc-body aside {
+    break-inside: avoid;
+  }
+  .doc-body h2,
+  .doc-body h3 {
+    break-after: avoid;
+  }
+  .no-print,
+  [role="tooltip"] {
+    display: none !important;
+  }
+  /* Values stay visible as plain text. */
+  .token {
+    text-decoration: underline;
+    background: none;
+    color: #000;
+    font-weight: 600;
+  }
+  .prose a[href^="http"]::after {
+    content: " (" attr(href) ")";
+    font-size: 0.85em;
+    color: #666;
+  }
+  /* The whole main column, no sidebars. */
+  .mx-auto.grid {
+    display: block !important;
+    padding: 0 !important;
+  }
+}

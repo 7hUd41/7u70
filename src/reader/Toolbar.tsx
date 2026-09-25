@@ -8,6 +8,7 @@ import { useState } from "react";
 import { Check, Copy, FileDown } from "lucide-react";
 import { buildInstallScript, fill, joinCommands, type ShellBlock } from "@/engine";
 import { useReader } from "./store";
+import { PrintButton } from "./Print";
 
 function collect(root: HTMLElement, selector: string, exclude?: string): ShellBlock[] {
   const nodes = Array.from(root.querySelectorAll<HTMLElement>(`h2, ${selector}`));
@@ -85,6 +86,7 @@ export function Toolbar({ title, slug }: { title: string; slug: string }) {
         <FileDown className="h-3.5 w-3.5" />
         {run ? t.toolbar.downloadRun : t.toolbar.download}
       </button>
+      <PrintButton />
     </div>
   );
 }

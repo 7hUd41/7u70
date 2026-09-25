@@ -144,7 +144,7 @@ export function Check({ cmd, expect, id }: { cmd: string; expect?: string; id?: 
         <div className="min-w-0 flex-1">
           <div className="mb-1.5 flex items-center justify-between gap-2">
             <span className={"label " + (isDone ? "text-ok" : "")}>{isDone ? t.check.done : t.check.title}</span>
-            <button type="button" onClick={copy} className="ui inline-flex items-center gap-1 text-[12px] text-ink-3 hover:text-ink">
+            <button type="button" onClick={copy} className="no-print ui inline-flex items-center gap-1 text-[12px] text-ink-3 hover:text-ink">
               {copied ? <CheckIcon className="h-3 w-3 text-ok" /> : <Copy className="h-3 w-3" />}
               {copied ? t.code.copied : t.code.copy}
             </button>
