@@ -1,6 +1,7 @@
 # Quick: you, the API, the config file and what you switch on. Guided adds
 # the restart that makes configuration.py count. Deep spells out the token,
 # the transports, and where the plugins land.
+# `desc` is what the reader gets when hovering a box or an arrow.
 title: { en: "You, the API, and what you switch on", fr: "Toi, l'API, et ce que tu actives" }
 caption:
   en: "Most of this page goes through the REST API with a token, so it can be replayed on the next instance. Mail, LDAP groups and plugins are optional pieces you decide on in the margin."
@@ -9,12 +10,18 @@ caption:
 groups:
   - id: server
     label: { en: "NetBox server", fr: "Serveur NetBox" }
+    desc:
+      en: "The instance from the previous page. Two ways in: the API for data, SSH for the one file the API cannot change."
+      fr: "L'instance de la page précédente. Deux entrées : l'API pour les données, SSH pour le seul fichier que l'API ne peut pas changer."
 
 nodes:
   - id: you
     kind: user
     label: { en: "You (admin)", fr: "Toi (admin)" }
     sub: "curl · token"
+    desc:
+      en: "The superuser created at install, with an API token. Everything you do here is a command you can keep and replay."
+      fr: "Le superutilisateur créé à l'installation, avec un jeton d'API. Tout ce que tu fais ici est une commande que tu peux garder et rejouer."
     deep:
       sub: "curl · Authorization: Token … · JSON"
   - id: api
@@ -22,6 +29,9 @@ nodes:
     label: { en: "REST API", fr: "API REST" }
     sub: "https://${NETBOX_HOST}/api"
     in: server
+    desc:
+      en: "Same rights as the web interface, as JSON. Groups, permissions, custom fields: all of it is objects you POST."
+      fr: "Les mêmes droits que l'interface web, en JSON. Groupes, permissions, champs personnalisés : tout est objets que tu POST."
     deep:
       sub: "https://${NETBOX_HOST}/api · DRF · token → user → permissions"
   - id: config
@@ -30,6 +40,9 @@ nodes:
     sub: "${INSTALL_DIR}/netbox/netbox/"
     in: server
     focus: true
+    desc:
+      en: "The one file the API cannot touch: time zone, banners, mail, LDAP, plugins. Read once at start, hence the restart."
+      fr: "Le seul fichier que l'API ne peut pas toucher : fuseau, bandeaux, mail, LDAP, plugins. Lu une fois au démarrage, d'où le redémarrage."
     deep:
       sub: "${INSTALL_DIR}/netbox/netbox/configuration.py · read at start only"
   - id: restart
@@ -38,11 +51,17 @@ nodes:
     sub: "systemctl restart netbox netbox-rq"
     in: server
     level: guided
+    desc:
+      en: "Both services, every time configuration.py changes. A few seconds of downtime; users just see a reload."
+      fr: "Les deux services, à chaque changement de configuration.py. Quelques secondes d'indisponibilité ; les utilisateurs voient juste un rechargement."
   - id: groups
     kind: service
     label: { en: "Groups & permissions", fr: "Groupes et permissions" }
     sub: "netops · readers"
     in: server
+    desc:
+      en: "Who may change what. Two groups are enough to start: one that writes, one that only reads."
+      fr: "Qui peut changer quoi. Deux groupes suffisent pour commencer : un qui écrit, un qui ne fait que lire."
     deep:
       sub: "netops (write) · readers (view) · object permissions"
   - id: plugins
@@ -50,6 +69,9 @@ nodes:
     label: { en: "Plugins", fr: "Plugins" }
     sub: "local_requirements.txt"
     in: server
+    desc:
+      en: "Python packages installed in the venv and listed in PLUGINS. The upgrade script reinstalls them from local_requirements.txt."
+      fr: "Des paquets Python installés dans le venv et listés dans PLUGINS. Le script d'upgrade les réinstalle depuis local_requirements.txt."
     deep:
       sub: "local_requirements.txt → venv · PLUGINS = […] · migrate"
   - id: smtp
@@ -57,6 +79,9 @@ nodes:
     label: { en: "Mail relay", fr: "Relais mail" }
     sub: "${SMTP_HOST}:${SMTP_PORT}"
     when: { flag: MAIL }
+    desc:
+      en: "Where NetBox hands its mail: password resets, notifications. Any relay that accepts this server works."
+      fr: "Là où NetBox dépose ses mails : réinitialisations de mot de passe, notifications. N'importe quel relais qui accepte ce serveur convient."
     deep:
       sub: "${SMTP_HOST}:${SMTP_PORT} · STARTTLS · from ${FROM_EMAIL}"
   - id: ldap
@@ -64,16 +89,59 @@ nodes:
     label: { en: "LDAP / AD groups", fr: "Groupes LDAP / AD" }
     sub: "${LDAP_ADMIN_GROUP}"
     when: { flag: LDAP }
+    desc:
+      en: "Directory groups mirrored into NetBox at each login. Members of ${LDAP_ADMIN_GROUP} become superusers."
+      fr: "Les groupes de l'annuaire recopiés dans NetBox à chaque login. Les membres de ${LDAP_ADMIN_GROUP} deviennent superutilisateurs."
     deep:
       sub: "memberOf ${LDAP_ADMIN_GROUP} → superuser · mirrored at login"
 
 edges:
-  - { from: you, to: api, label: "HTTPS", deep: { label: "L7 HTTPS · Authorization: Token" } }
-  - { from: you, to: config, label: "ssh", dashed: true, deep: { label: "ssh · sudo · editor" } }
-  - { from: api, to: groups, deep: { label: "POST /users/…" } }
-  - { from: config, to: restart, label: "then", level: guided }
-  - { from: config, to: plugins, max: quick }
-  - { from: restart, to: plugins, level: guided, deep: { label: "loads PLUGINS" } }
-  - { from: config, to: smtp, dashed: true, when: { flag: MAIL }, max: quick }
-  - { from: restart, to: smtp, dashed: true, level: guided, when: { flag: MAIL }, deep: { label: "EMAIL = {…} · TCP ${SMTP_PORT}" } }
-  - { from: groups, to: ldap, label: "mirror", dashed: true, when: { flag: LDAP }, deep: { label: "AUTH_LDAP_MIRROR_GROUPS" } }
+  - from: you
+    to: api
+    label: "HTTPS"
+    deep: { label: "L7 HTTPS · Authorization: Token" }
+    desc: { en: "Each request carries the token in a header; the token decides what you may do.", fr: "Chaque requête porte le jeton dans un en-tête ; le jeton décide de ce que tu peux faire." }
+  - from: you
+    to: config
+    label: "ssh"
+    dashed: true
+    deep: { label: "ssh · sudo · editor" }
+    desc: { en: "The file is owned by root: an SSH session and sudo to edit it.", fr: "Le fichier appartient à root : une session SSH et sudo pour l'éditer." }
+  - from: api
+    to: groups
+    deep: { label: "POST /users/…" }
+    desc: { en: "Groups and permissions are created like any other object.", fr: "Groupes et permissions se créent comme n'importe quel autre objet." }
+  - from: config
+    to: restart
+    label: "then"
+    level: guided
+    desc: { en: "Nothing in configuration.py counts until both services restart.", fr: "Rien dans configuration.py ne compte tant que les deux services n'ont pas redémarré." }
+  - from: config
+    to: plugins
+    max: quick
+    desc: { en: "PLUGINS in configuration.py is what turns an installed package on.", fr: "PLUGINS dans configuration.py est ce qui active un paquet installé." }
+  - from: restart
+    to: plugins
+    level: guided
+    deep: { label: "loads PLUGINS" }
+    desc: { en: "At start, NetBox imports every plugin listed and runs its migrations.", fr: "Au démarrage, NetBox importe chaque plugin listé et exécute ses migrations." }
+  - from: config
+    to: smtp
+    dashed: true
+    when: { flag: MAIL }
+    max: quick
+    desc: { en: "The EMAIL block in configuration.py names the relay.", fr: "Le bloc EMAIL de configuration.py désigne le relais." }
+  - from: restart
+    to: smtp
+    dashed: true
+    level: guided
+    when: { flag: MAIL }
+    deep: { label: "EMAIL = {…} · TCP ${SMTP_PORT}" }
+    desc: { en: "After the restart, NetBox connects to the relay when it has something to send.", fr: "Après le redémarrage, NetBox se connecte au relais quand il a quelque chose à envoyer." }
+  - from: groups
+    to: ldap
+    label: "mirror"
+    dashed: true
+    when: { flag: LDAP }
+    deep: { label: "AUTH_LDAP_MIRROR_GROUPS" }
+    desc: { en: "Group membership is copied from the directory at each login, so permissions follow the directory.", fr: "L'appartenance aux groupes est recopiée depuis l'annuaire à chaque login, donc les permissions suivent l'annuaire." }

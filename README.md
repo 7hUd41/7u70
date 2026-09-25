@@ -88,14 +88,16 @@ In `page-<locale>.mdx`:
 
 A page may carry a diagram: boxes (`nodes`), containers (`groups`) and arrows (`edges`), never coordinates. Labels are localized; `sub` lines and arrow labels may use `${VARS}`; any element may carry a `when` and disappear with the reader's choices. Solid arrows lay the boxes out left to right; dashed arrows are secondary relations and do not move anything. The card renders at the top of the page, follows the skin, and scales to the column.
 
-The drawing also follows the reading level. Quick (and Run) show the simple picture; an element with `level: guided` or `level: deep` appears from that level up, one with `max: quick` is a simplification that richer levels replace, and `guided:` / `deep:` blocks override a node's `label`/`sub` or an arrow's `label` from that level up. Deep is where every layer goes: DNS, TLS, ports, sockets, units, log files — it may get wide, and then scrolls sideways. The magnifier on the card opens the same live drawing full screen (wheel to zoom, drag to pan, the level switch at hand); there the chain wraps into rows that snake back and forth, so it fills the screen instead of a strip.
+The drawing also follows the reading level. Quick (and Run) show the simple picture; an element with `level: guided` or `level: deep` appears from that level up, one with `max: quick` is a simplification that richer levels replace, and `guided:` / `deep:` blocks override a node's `label`/`sub` or an arrow's `label` from that level up. Deep is where every layer goes: DNS, TLS, ports, sockets, units, log files — it may get wide, and then scrolls sideways. The magnifier on the card opens the same live drawing full screen (wheel to zoom, drag to pan, the level switch at hand); there the chain wraps into rows that snake back and forth, so it fills the screen instead of a strip, and a container that spans rows keeps a single outline when the gap under it is free.
+
+Every box, arrow and container may carry a `desc` (localized, `${VARS}` allowed): hovering it lights the element and its neighbours and shows the text — as a tip in the page, on the reading line at the bottom in full screen. A `guided:` / `deep:` block may override `desc` too.
 
 ```yaml
 groups: [{ id: server, label: { en: Your server, fr: Ton serveur } }]
 nodes:
   - { id: users, kind: user, label: { en: Your team, fr: Ton équipe }, sub: "https://${NETBOX_HOST}" }
   - { id: nginx, kind: net, label: { en: nginx, fr: nginx }, in: server, when: { is: WEB, equals: nginx }, sub: "443 → 8001", deep: { sub: "TLS ends here · :443 → 127.0.0.1:8001" } }
-  - { id: firewall, kind: net, label: { en: Firewall, fr: Pare-feu }, in: server, level: guided }
+  - { id: firewall, kind: net, label: { en: Firewall, fr: Pare-feu }, in: server, level: guided, desc: { en: "ufw drops everything but SSH and the web ports.", fr: "ufw rejette tout sauf SSH et les ports web." } }
   - { id: netbox, kind: server, label: { en: NetBox, fr: NetBox }, in: server, focus: true }
 edges:
   - { from: users, to: nginx, label: HTTPS, max: quick }

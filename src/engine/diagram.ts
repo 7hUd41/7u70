@@ -24,8 +24,8 @@ const Text = z.union([z.string(), Localized]);
 /** Levels an element can be tied to (Run shows the Quick drawing). */
 const DiagramLevel = z.enum(["quick", "guided", "deep"]);
 /** Text overrides applied from a level up. */
-const NodeDetail = z.object({ label: Localized.optional(), sub: Text.optional() });
-const EdgeDetail = z.object({ label: Text.optional() });
+const NodeDetail = z.object({ label: Localized.optional(), sub: Text.optional(), desc: Localized.optional() });
+const EdgeDetail = z.object({ label: Text.optional(), desc: Localized.optional() });
 const Leveled = {
   /** Appears from this level up (default: always). */
   level: DiagramLevel.optional(),
@@ -43,6 +43,8 @@ export const DiagramNode = z.object({
   in: Id.optional(),
   /** Draws the node with the accent: the thing this page is about. */
   focus: z.boolean().default(false),
+  /** What this piece does, shown when the reader hovers it. May use ${VARS}. */
+  desc: Localized.optional(),
   when: ConditionSpec.optional(),
   ...Leveled,
   guided: NodeDetail.optional(),
@@ -52,6 +54,7 @@ export const DiagramNode = z.object({
 export const DiagramGroup = z.object({
   id: Id,
   label: Localized,
+  desc: Localized.optional(),
   when: ConditionSpec.optional(),
   ...Leveled,
 });
@@ -61,6 +64,8 @@ export const DiagramEdge = z.object({
   to: Id,
   label: Text.optional(),
   dashed: z.boolean().default(false),
+  /** What travels along this arrow, shown when the reader hovers it. */
+  desc: Localized.optional(),
   when: ConditionSpec.optional(),
   ...Leveled,
   guided: EdgeDetail.optional(),
@@ -121,10 +126,10 @@ export function atLevel(spec: DiagramSpec, level: Level): DiagramSpec {
 export const NODE_W = 172;
 export const NODE_H = 58;
 const GAP_X = 84;
-const GAP_Y = 18;
+const GAP_Y = 22;
 const GROUP_PAD = 14;
 const GROUP_HEAD = 24;
-const MARGIN = 12;
+const MARGIN = 16;
 const ROW_GAP = 56;
 /** Room kept on both sides of a wrapped drawing for arrows that swing round a column. */
 const SWING = 64;
@@ -132,11 +137,23 @@ const SWING_STEP = 22;
 
 export type Box = { x: number; y: number; w: number; h: number };
 export type LaidNode = DiagramNode & Box & { layer: number; row: number };
-export type LaidGroup = { id: string; label: Localized; /** Row segment of a group that wraps (0 = the first). */ part: number } & Box;
+export type LaidGroup = {
+  id: string;
+  label: Localized;
+  desc?: Localized;
+  /** Row segment of a group that wraps (0 = the first). */
+  part: number;
+  /** When a wrapped group's segments could be joined: one outline around all of them (SVG path, absolute coordinates); the box is then their union. */
+  path?: string;
+  /** Where the label goes (the first segment's corner); defaults to the box's own corner. */
+  lx?: number;
+  ly?: number;
+} & Box;
 export type LaidEdge = {
   from: string;
   to: string;
   label?: string | Localized;
+  desc?: Localized;
   dashed: boolean;
   /** SVG path, already routed. */
   d: string;
@@ -197,6 +214,13 @@ export type LayoutOptions = {
 };
 
 export function layoutDiagram(fullSpec: DiagramSpec, choices: Choices, level: Level = "deep", opts: LayoutOptions = {}): Layout {
+  // Wrapped drawings reserve room on both sides for arrows that swing round
+  // a column; when none does, the layout is redone without the reserve.
+  const first = layoutOnce(fullSpec, choices, level, opts, true);
+  return first.swung || first.rowCount < 2 ? first : layoutOnce(fullSpec, choices, level, opts, false);
+}
+
+function layoutOnce(fullSpec: DiagramSpec, choices: Choices, level: Level, opts: LayoutOptions, reserve: boolean): Layout & { swung: boolean; rowCount: number } {
   const spec = atLevel(fullSpec, level);
   const groupsVisible = visible(spec.groups, choices);
   const groupIds = new Set(groupsVisible.map((g) => g.id));
@@ -209,10 +233,17 @@ export function layoutDiagram(fullSpec: DiagramSpec, choices: Choices, level: Le
   // arrow join their group's first column.
   const layerOf = layers(nodes, edges.filter((e) => !e.dashed));
   const hasSolidPred = new Set(edges.filter((e) => !e.dashed).map((e) => e.to));
+  const byIdSpec = new Map(nodes.map((n) => [n.id, n]));
   for (const n of nodes) {
     if (hasSolidPred.has(n.id)) continue;
-    const dashedPreds = edges.filter((e) => e.dashed && e.to === n.id).map((e) => layerOf.get(e.from) ?? 0);
-    if (dashedPreds.length) layerOf.set(n.id, Math.max(...dashedPreds) + 1);
+    const dashedFrom = edges.filter((e) => e.dashed && e.to === n.id).map((e) => e.from);
+    if (dashedFrom.length === 0) continue;
+    const far = Math.max(...dashedFrom.map((id) => layerOf.get(id) ?? 0));
+    // A side note reached only by dashed arrows, outside any container and
+    // coming from outside any container (DNS next to the users, say), sits
+    // beside its source rather than one column on, out of the containers' way.
+    const aside = !n.in && dashedFrom.every((id) => !byIdSpec.get(id)?.in);
+    layerOf.set(n.id, aside ? far : far + 1);
   }
   for (const g of groupsVisible) {
     const members = nodes.filter((n) => n.in === g.id);
@@ -237,7 +268,8 @@ export function layoutDiagram(fullSpec: DiagramSpec, choices: Choices, level: Le
     return r % 2 === 0 ? i : perRow - 1 - i;
   };
   const rowCount = rowOf(layerCount - 1) + 1;
-  const sidePad = rowCount > 1 ? SWING + 3 * SWING_STEP : 0;
+  const sidePad = reserve && rowCount > 1 ? SWING + 3 * SWING_STEP : 0;
+  let swung = false;
   const colX = (col: number) => MARGIN + sidePad + col * (nodeW + gapX);
 
   // Rows, one after the other. Inside a row, groups come first, as bands: a
@@ -276,7 +308,7 @@ export function layoutDiagram(fullSpec: DiagramSpec, choices: Choices, level: Le
       const x0 = colX(lo) - GROUP_PAD;
       const y0 = top - GROUP_HEAD - GROUP_PAD;
       const part = groups.filter((x) => x.id === g.id).length;
-      groups.push({ id: g.id, label: g.label, part, x: x0, y: y0, w: colX(hi) + nodeW + GROUP_PAD - x0, h: bottom + GROUP_PAD - y0 });
+      groups.push({ id: g.id, label: g.label, desc: g.desc, part, x: x0, y: y0, w: colX(hi) + nodeW + GROUP_PAD - x0, h: bottom + GROUP_PAD - y0 });
       for (let c = lo; c <= hi; c++) cursor[c] = bottom + GROUP_PAD + GAP_Y;
     }
     for (const n of ordered) {
@@ -289,6 +321,7 @@ export function layoutDiagram(fullSpec: DiagramSpec, choices: Choices, level: Le
   }
 
   laid.sort((a, b) => nodes.findIndex((n) => n.id === a.id) - nodes.findIndex((n) => n.id === b.id));
+  joinGroups(groups, laid);
 
   const byId = new Map(laid.map((n) => [n.id, n]));
   const routed: LaidEdge[] = edges.map((e) => {
@@ -327,6 +360,7 @@ export function layoutDiagram(fullSpec: DiagramSpec, choices: Choices, level: Le
         mx = x2 + swing * 0.8;
         my = (sy + y2) / 2;
         align = fromRight ? "start" : "end";
+        swung = true;
       }
     } else if (b.x > a.x) {
       const x1 = a.x + a.w;
@@ -353,16 +387,75 @@ export function layoutDiagram(fullSpec: DiagramSpec, choices: Choices, level: Le
       const y1 = down ? a.y + a.h : a.y;
       const y2 = down ? b.y : b.y + b.h;
       d = `M ${x} ${y1} L ${x} ${y2}`;
-      mx = x;
+      // The hop is short: its label sits beside it rather than on it.
+      mx = x + 8;
       my = (y1 + y2) / 2;
+      align = "start";
     }
-    return { from: e.from, to: e.to, label: e.label, dashed: e.dashed, d, mx, my, align };
+    return { from: e.from, to: e.to, label: e.label, desc: e.desc, dashed: e.dashed, d, mx, my, align };
   });
 
   const cols = Math.min(perRow, layerCount);
   const width = (MARGIN + sidePad) * 2 + cols * nodeW + Math.max(0, cols - 1) * gapX;
   const height = Math.max(...laid.map((n) => n.y + n.h + MARGIN), ...groups.map((g) => g.y + g.h + MARGIN));
-  return { width, height, nodes: laid, groups, edges: routed };
+  return { width, height, nodes: laid, groups, edges: routed, swung, rowCount };
+}
+
+/* A group that wraps over rows is drawn as one outline when the row gap
+   under it is free of other boxes: each pair of consecutive segments is
+   joined by a bridge through the columns where nothing sits between them.
+   The result is a rectilinear outline (an I or an L), one dashed line
+   around the whole thing. When some gap is blocked, the segments stay. */
+function joinGroups(groups: LaidGroup[], laid: LaidNode[]) {
+  const ids = [...new Set(groups.map((g) => g.id))];
+  for (const id of ids) {
+    const parts = groups.filter((g) => g.id === id).sort((a, b) => a.y - b.y);
+    if (parts.length < 2) continue;
+    const others = laid.filter((n) => n.in !== id);
+    const bridges: { x0: number; x1: number; y0: number; y1: number }[] = [];
+    for (let i = 0; i < parts.length - 1; i++) {
+      const a = parts[i];
+      const b = parts[i + 1];
+      const y0 = a.y + a.h;
+      const y1 = b.y;
+      const x0 = Math.max(a.x, b.x);
+      const x1 = Math.min(a.x + a.w, b.x + b.w);
+      // Columns blocked by a box lying in the gap.
+      const blocked = others.filter((n) => n.y < y1 && n.y + n.h > y0 && n.x < x1 && n.x + n.w > x0);
+      // Widest free span inside [x0, x1].
+      const cuts = [x0, ...blocked.flatMap((n) => [Math.max(x0, n.x - GROUP_PAD), Math.min(x1, n.x + n.w + GROUP_PAD)]), x1].sort((p, q) => p - q);
+      let best: [number, number] | null = null;
+      for (let k = 0; k + 1 < cuts.length; k += 2) {
+        const span: [number, number] = [cuts[k], cuts[k + 1]];
+        if (span[1] - span[0] >= NODE_W / 2 && (!best || span[1] - span[0] > best[1] - best[0])) best = span;
+      }
+      if (!best) break;
+      bridges.push({ x0: best[0], x1: best[1], y0, y1 });
+    }
+    if (bridges.length !== parts.length - 1) continue;
+    // Outline: down the right side (part, bridge, part…), back up the left side.
+    const left: [number, number][] = [];
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i];
+      left.push([p.x, p.y + p.h], [p.x, p.y]);
+      const br = bridges[i - 1];
+      if (br) left.push([br.x0, br.y1], [br.x0, br.y0]);
+    }
+    const right: [number, number][] = [];
+    parts.forEach((p, i) => {
+      right.push([p.x + p.w, p.y], [p.x + p.w, p.y + p.h]);
+      const br = bridges[i];
+      if (br) right.push([br.x1, br.y0], [br.x1, br.y1]);
+    });
+    const outline = [...right, ...left];
+    const path = outline.map(([x, y], i) => `${i === 0 ? "M" : "L"} ${x} ${y}`).join(" ") + " Z";
+    const x0 = Math.min(...parts.map((p) => p.x));
+    const y0 = Math.min(...parts.map((p) => p.y));
+    const x1 = Math.max(...parts.map((p) => p.x + p.w));
+    const y1 = Math.max(...parts.map((p) => p.y + p.h));
+    Object.assign(parts[0], { path, lx: parts[0].x, ly: parts[0].y, x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+    for (const p of parts.slice(1)) groups.splice(groups.indexOf(p), 1);
+  }
 }
 
 /** The wrapping that fills a stage best: tries every row length and keeps the one with the largest fit scale. */

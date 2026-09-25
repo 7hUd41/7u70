@@ -321,6 +321,56 @@ describe("diagram layout", () => {
     expect(deep.width).toBeGreaterThan(guided.width);
   });
 
+  it("wraps into rows and joins a group's segments when the gap is free", () => {
+    const chain = DiagramSpec.parse({
+      groups: [{ id: "srv", label: { en: "S", fr: "S" } }],
+      nodes: ["a", "b", "c", "d"].map((id) => ({ id, label: { en: id, fr: id }, in: id === "a" ? undefined : "srv" })),
+      edges: [{ from: "a", to: "b" }, { from: "b", to: "c" }, { from: "c", to: "d" }],
+    });
+    const l = layoutDiagram(chain, {}, "deep", { perRow: 2 });
+    const row = (id: string) => l.nodes.find((n) => n.id === id)!.row;
+    expect([row("a"), row("b"), row("c"), row("d")]).toEqual([0, 0, 1, 1]);
+    // Row 1 snakes back: c sits under b.
+    expect(l.nodes.find((n) => n.id === "c")!.x).toBe(l.nodes.find((n) => n.id === "b")!.x);
+    // One outline for the group, not two boxes.
+    expect(l.groups.filter((g) => g.id === "srv")).toHaveLength(1);
+    expect(l.groups[0].path).toMatch(/^M .* Z$/);
+    expect(l.width).toBeLessThan(layoutDiagram(chain, {}, "deep").width);
+  });
+
+  it("keeps a wrapped group in segments when a stranger sits in the gap", () => {
+    const d = DiagramSpec.parse({
+      groups: [{ id: "srv", label: { en: "S", fr: "S" } }],
+      nodes: [
+        { id: "a", label: { en: "a", fr: "a" } },
+        { id: "b", label: { en: "b", fr: "b" }, in: "srv" },
+        { id: "x", label: { en: "x", fr: "x" } },
+        { id: "c", label: { en: "c", fr: "c" }, in: "srv" },
+        { id: "d", label: { en: "d", fr: "d" }, in: "srv" },
+      ],
+      edges: [{ from: "a", to: "b" }, { from: "b", to: "x", dashed: true }, { from: "b", to: "c" }, { from: "c", to: "d" }],
+    });
+    const l = layoutDiagram(d, {}, "deep", { perRow: 3 });
+    expect(l.groups.filter((g) => g.id === "srv")).toHaveLength(2);
+    expect(l.groups.every((g) => !g.path)).toBe(true);
+  });
+
+  it("puts a dashed-only side note beside its source, out of the containers' way", () => {
+    const d = DiagramSpec.parse({
+      groups: [{ id: "srv", label: { en: "S", fr: "S" } }],
+      nodes: [
+        { id: "you", label: { en: "You", fr: "Toi" } },
+        { id: "dns", label: { en: "DNS", fr: "DNS" } },
+        { id: "web", label: { en: "web", fr: "web" }, in: "srv" },
+      ],
+      edges: [{ from: "you", to: "web" }, { from: "you", to: "dns", dashed: true }],
+    });
+    const l = layoutDiagram(d, {});
+    const n = (id: string) => l.nodes.find((x) => x.id === id)!;
+    expect(n("dns").layer).toBe(0);
+    expect(n("dns").y).toBeGreaterThan(n("you").y);
+  });
+
   it("rejects an edge to an unknown node", () => {
     expect(() => DiagramSpec.parse({ nodes: [{ id: "a", label: { en: "A", fr: "A" } }], edges: [{ from: "a", to: "zz" }] })).toThrow(/unknown node/);
   });

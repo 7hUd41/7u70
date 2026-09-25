@@ -1,6 +1,7 @@
 # The gist: what this page builds. Follows the reader's stack and level:
 # Quick shows four pieces, Guided adds the firewall and the worker, Deep
 # shows every layer (DNS, TLS, ports, sockets, units, databases).
+# `desc` is what the reader gets when hovering a box or an arrow.
 title: { en: "One server, four pieces", fr: "Un serveur, quatre briques" }
 caption:
   en: "The web server takes HTTPS from users and hands requests to gunicorn, which runs NetBox. NetBox keeps everything in PostgreSQL and uses Redis for its queue and cache. With LDAP, logins are checked against your directory."
@@ -9,15 +10,24 @@ caption:
 groups:
   - id: server
     label: { en: "Your server", fr: "Ton serveur" }
+    desc:
+      en: "One Linux machine runs everything on this page. Every piece listens on localhost except the web server, the only one exposed."
+      fr: "Une seule machine Linux fait tourner tout ce qui est sur cette page. Chaque brique écoute sur localhost, sauf le serveur web, le seul exposé."
   - id: directory
     label: { en: "Your directory", fr: "Ton annuaire" }
     when: { flag: LDAP }
+    desc:
+      en: "Your existing LDAP or Active Directory. NetBox never stores passwords when it is on: it asks the directory at each login."
+      fr: "Ton LDAP ou Active Directory existant. NetBox ne stocke aucun mot de passe quand il est activé : il interroge l'annuaire à chaque connexion."
 
 nodes:
   - id: users
     kind: user
     label: { en: "Your team", fr: "Ton équipe" }
     sub: "https://${NETBOX_HOST}"
+    desc:
+      en: "Anyone with a browser and the URL. They only ever talk to the web server, over HTTPS."
+      fr: "Toute personne avec un navigateur et l'URL. Elle ne parle jamais qu'au serveur web, en HTTPS."
     deep:
       sub: "browser · L7 HTTPS → ${NETBOX_HOST}"
   - id: dns
@@ -25,12 +35,18 @@ nodes:
     label: { en: "DNS", fr: "DNS" }
     sub: "${NETBOX_HOST} → A / AAAA"
     level: deep
+    desc:
+      en: "The name must resolve to this server before anything else works: the browser, the certificate and ALLOWED_HOSTS all rely on it."
+      fr: "Le nom doit résoudre vers ce serveur avant que quoi que ce soit fonctionne : le navigateur, le certificat et ALLOWED_HOSTS en dépendent."
   - id: firewall
     kind: net
     label: { en: "Firewall", fr: "Pare-feu" }
     sub: "in: 22, 80, 443/tcp"
     in: server
     level: guided
+    desc:
+      en: "ufw drops everything inbound except SSH and the two web ports. PostgreSQL, Redis and gunicorn are not reachable from outside."
+      fr: "ufw rejette tout ce qui entre sauf SSH et les deux ports web. PostgreSQL, Redis et gunicorn ne sont pas joignables de l'extérieur."
     deep:
       sub: "ufw · L3/L4 · allow 22, 80, 443/tcp · deny the rest"
   - id: cert
@@ -40,6 +56,9 @@ nodes:
     in: server
     level: deep
     when: { is: TLS, equals: selfsigned }
+    desc:
+      en: "A certificate you sign yourself. Browsers warn once; fine for a lab or an internal tool, not for something users must trust blindly."
+      fr: "Un certificat que tu signes toi-même. Les navigateurs avertissent une fois ; bien pour un lab ou un outil interne, pas pour un service que les utilisateurs doivent croire les yeux fermés."
   - id: le
     kind: file
     label: { en: "TLS certificate", fr: "Certificat TLS" }
@@ -47,12 +66,18 @@ nodes:
     in: server
     level: deep
     when: { is: TLS, equals: letsencrypt }
+    desc:
+      en: "Issued by Let's Encrypt through certbot, trusted by every browser, renewed automatically. Needs the name to resolve publicly."
+      fr: "Émis par Let's Encrypt via certbot, reconnu par tous les navigateurs, renouvelé tout seul. Le nom doit résoudre publiquement."
   - id: nginx
     kind: net
     label: { en: "nginx", fr: "nginx" }
     sub: "443 → 8001"
     in: server
     when: { is: WEB, equals: nginx }
+    desc:
+      en: "The front door. Terminates TLS, serves static files, and forwards everything else to gunicorn on the loopback."
+      fr: "La porte d'entrée. Termine le TLS, sert les fichiers statiques, et transmet tout le reste à gunicorn sur la boucle locale."
     guided:
       sub: ":443 → 127.0.0.1:8001"
     deep:
@@ -63,6 +88,9 @@ nodes:
     sub: "443 → 8001"
     in: server
     when: { is: WEB, equals: apache }
+    desc:
+      en: "The front door. Terminates TLS, serves static files, and proxies everything else to gunicorn on the loopback."
+      fr: "La porte d'entrée. Termine le TLS, sert les fichiers statiques, et relaie tout le reste vers gunicorn sur la boucle locale."
     guided:
       sub: ":443 → 127.0.0.1:8001"
     deep:
@@ -73,12 +101,18 @@ nodes:
     sub: "netbox.service · 127.0.0.1:8001 · 5 workers"
     in: server
     level: deep
+    desc:
+      en: "The Python application server: a few worker processes that run Django. Managed by systemd as netbox.service."
+      fr: "Le serveur d'application Python : quelques processus workers qui exécutent Django. Géré par systemd sous netbox.service."
   - id: netbox
     kind: server
     label: { en: "NetBox (gunicorn)", fr: "NetBox (gunicorn)" }
     sub: "${INSTALL_DIR}"
     in: server
     focus: true
+    desc:
+      en: "The application itself: the code in ${INSTALL_DIR}, its virtualenv, and configuration.py, the one file you edit."
+      fr: "L'application elle-même : le code dans ${INSTALL_DIR}, son virtualenv, et configuration.py, le seul fichier que tu édites."
     deep:
       label: { en: "NetBox (Django)", fr: "NetBox (Django)" }
       sub: "${INSTALL_DIR} · venv · configuration.py"
@@ -88,6 +122,9 @@ nodes:
     sub: "netbox-rq.service"
     in: server
     level: guided
+    desc:
+      en: "A second process that runs background jobs pulled from Redis: webhooks, custom scripts, reports. Without it those silently queue up."
+      fr: "Un second processus qui exécute les tâches de fond tirées de Redis : webhooks, scripts, rapports. Sans lui, elles s'empilent en silence."
     deep:
       sub: "netbox-rq.service · webhooks, scripts, reports"
   - id: postgres
@@ -95,6 +132,9 @@ nodes:
     label: { en: "PostgreSQL", fr: "PostgreSQL" }
     sub: "netbox / netbox"
     in: server
+    desc:
+      en: "The only thing that matters in a backup: every device, IP, cable and change lives in this database."
+      fr: "La seule chose qui compte dans une sauvegarde : chaque équipement, IP, câble et changement vit dans cette base."
     guided:
       sub: "localhost:5432 · netbox / netbox"
     deep:
@@ -104,6 +144,9 @@ nodes:
     label: { en: "Redis", fr: "Redis" }
     sub: "db 0 tasks · db 1 cache"
     in: server
+    desc:
+      en: "In-memory store used twice: database 0 is the job queue, database 1 the cache. Losing it loses nothing durable."
+      fr: "Stockage en mémoire utilisé deux fois : la base 0 est la file de tâches, la base 1 le cache. Le perdre ne perd rien de durable."
     deep:
       sub: "L4 TCP 127.0.0.1:6379 · db 0 tasks · db 1 cache"
   - id: ldap
@@ -112,29 +155,116 @@ nodes:
     sub: "${LDAP_URI}"
     in: directory
     when: { flag: LDAP }
+    desc:
+      en: "The directory NetBox binds to at each login to check the password and read group membership."
+      fr: "L'annuaire auquel NetBox se connecte à chaque login pour vérifier le mot de passe et lire les groupes."
     deep:
       sub: "${LDAP_URI} · 636 LDAPS or 389 + STARTTLS"
 
 edges:
   # Quick: users reach the web server directly.
-  - { from: users, to: nginx, label: "HTTPS", max: quick }
-  - { from: users, to: apache, label: "HTTPS", max: quick }
+  - from: users
+    to: nginx
+    label: "HTTPS"
+    max: quick
+    desc: { en: "Encrypted web traffic on port 443, the only port users need.", fr: "Trafic web chiffré sur le port 443, le seul dont les utilisateurs ont besoin." }
+  - from: users
+    to: apache
+    label: "HTTPS"
+    max: quick
+    desc: { en: "Encrypted web traffic on port 443, the only port users need.", fr: "Trafic web chiffré sur le port 443, le seul dont les utilisateurs ont besoin." }
   # Guided and up: through the firewall, with the layers spelled out.
-  - { from: users, to: dns, label: "L7 DNS · L4 UDP 53", dashed: true, level: deep }
-  - { from: users, to: firewall, label: "HTTPS · TCP 443", level: guided, deep: { label: "L7 HTTPS · L4 TCP 443 · L3 IP" } }
-  - { from: firewall, to: nginx, level: guided, deep: { label: "accept" } }
-  - { from: firewall, to: apache, level: guided, deep: { label: "accept" } }
-  - { from: cert, to: nginx, label: "loads", dashed: true, level: deep }
-  - { from: cert, to: apache, label: "loads", dashed: true, level: deep }
-  - { from: le, to: nginx, label: "loads", dashed: true, level: deep }
-  - { from: le, to: apache, label: "loads", dashed: true, level: deep }
+  - from: users
+    to: dns
+    label: "L7 DNS · L4 UDP 53"
+    dashed: true
+    level: deep
+    desc: { en: "Before the first request, the browser asks DNS which address ${NETBOX_HOST} points to.", fr: "Avant la première requête, le navigateur demande au DNS vers quelle adresse pointe ${NETBOX_HOST}." }
+  - from: users
+    to: firewall
+    label: "HTTPS · TCP 443"
+    level: guided
+    deep: { label: "L7 HTTPS · L4 TCP 443 · L3 IP" }
+    desc: { en: "The TCP connection to port 443 hits the firewall first; 80 is only there to redirect to HTTPS.", fr: "La connexion TCP vers le port 443 rencontre d'abord le pare-feu ; le 80 ne sert qu'à rediriger vers HTTPS." }
+  - from: firewall
+    to: nginx
+    level: guided
+    deep: { label: "accept" }
+    desc: { en: "Allowed through: the port is in the rules.", fr: "Laissé passer : le port est dans les règles." }
+  - from: firewall
+    to: apache
+    level: guided
+    deep: { label: "accept" }
+    desc: { en: "Allowed through: the port is in the rules.", fr: "Laissé passer : le port est dans les règles." }
+  - from: cert
+    to: nginx
+    label: "loads"
+    dashed: true
+    level: deep
+    desc: { en: "The web server reads the certificate and key at start; renewals need a reload.", fr: "Le serveur web lit le certificat et la clé au démarrage ; un renouvellement demande un reload." }
+  - from: cert
+    to: apache
+    label: "loads"
+    dashed: true
+    level: deep
+    desc: { en: "The web server reads the certificate and key at start; renewals need a reload.", fr: "Le serveur web lit le certificat et la clé au démarrage ; un renouvellement demande un reload." }
+  - from: le
+    to: nginx
+    label: "loads"
+    dashed: true
+    level: deep
+    desc: { en: "certbot writes the certificate and reloads the web server after each renewal.", fr: "certbot écrit le certificat et recharge le serveur web après chaque renouvellement." }
+  - from: le
+    to: apache
+    label: "loads"
+    dashed: true
+    level: deep
+    desc: { en: "certbot writes the certificate and reloads the web server after each renewal.", fr: "certbot écrit le certificat et recharge le serveur web après chaque renouvellement." }
   # Up to Guided, gunicorn is folded into the NetBox box; Deep separates them.
-  - { from: nginx, to: netbox, max: guided, guided: { label: "proxy_pass" } }
-  - { from: apache, to: netbox, max: guided, guided: { label: "ProxyPass" } }
-  - { from: nginx, to: gunicorn, label: "proxy_pass · HTTP/1.1 · loopback", level: deep }
-  - { from: apache, to: gunicorn, label: "ProxyPass · HTTP/1.1 · loopback", level: deep }
-  - { from: gunicorn, to: netbox, label: "WSGI", level: deep }
-  - { from: netbox, to: postgres, deep: { label: "psycopg · TCP 5432" } }
-  - { from: netbox, to: redis, deep: { label: "TCP 6379" } }
-  - { from: redis, to: rq, label: "jobs", dashed: true, level: guided, deep: { label: "queue db 0 → jobs" } }
-  - { from: netbox, to: ldap, label: "bind", dashed: true, when: { flag: LDAP }, deep: { label: "bind · TLS · then search" } }
+  - from: nginx
+    to: netbox
+    max: guided
+    guided: { label: "proxy_pass" }
+    desc: { en: "Plain HTTP on the loopback: nginx hands each request to gunicorn on port 8001 and waits for the answer.", fr: "HTTP en clair sur la boucle locale : nginx passe chaque requête à gunicorn sur le port 8001 et attend la réponse." }
+  - from: apache
+    to: netbox
+    max: guided
+    guided: { label: "ProxyPass" }
+    desc: { en: "Plain HTTP on the loopback: Apache hands each request to gunicorn on port 8001 and waits for the answer.", fr: "HTTP en clair sur la boucle locale : Apache passe chaque requête à gunicorn sur le port 8001 et attend la réponse." }
+  - from: nginx
+    to: gunicorn
+    label: "proxy_pass · HTTP/1.1 · loopback"
+    level: deep
+    desc: { en: "Unencrypted, but never leaves the machine. The X-Forwarded-* headers tell NetBox the original scheme and client.", fr: "Non chiffré, mais ne quitte jamais la machine. Les en-têtes X-Forwarded-* disent à NetBox le schéma et le client d'origine." }
+  - from: apache
+    to: gunicorn
+    label: "ProxyPass · HTTP/1.1 · loopback"
+    level: deep
+    desc: { en: "Unencrypted, but never leaves the machine. The X-Forwarded-* headers tell NetBox the original scheme and client.", fr: "Non chiffré, mais ne quitte jamais la machine. Les en-têtes X-Forwarded-* disent à NetBox le schéma et le client d'origine." }
+  - from: gunicorn
+    to: netbox
+    label: "WSGI"
+    level: deep
+    desc: { en: "The Python interface between a web server and an application: gunicorn calls Django with each request.", fr: "L'interface Python entre un serveur web et une application : gunicorn appelle Django à chaque requête." }
+  - from: netbox
+    to: postgres
+    deep: { label: "psycopg · TCP 5432" }
+    desc: { en: "Every read and write. The credentials are in configuration.py, DATABASE section.", fr: "Chaque lecture et écriture. Les identifiants sont dans configuration.py, section DATABASE." }
+  - from: netbox
+    to: redis
+    deep: { label: "TCP 6379" }
+    desc: { en: "Jobs pushed to the queue, pages and API results kept in the cache.", fr: "Tâches poussées dans la file, pages et résultats d'API gardés en cache." }
+  - from: redis
+    to: rq
+    label: "jobs"
+    dashed: true
+    level: guided
+    deep: { label: "queue db 0 → jobs" }
+    desc: { en: "The worker blocks on the queue and runs each job as it arrives.", fr: "Le worker attend sur la file et exécute chaque tâche à son arrivée." }
+  - from: netbox
+    to: ldap
+    label: "bind"
+    dashed: true
+    when: { flag: LDAP }
+    deep: { label: "bind · TLS · then search" }
+    desc: { en: "At login: bind with a service account, find the user, bind again with their password, read their groups.", fr: "Au login : bind avec un compte de service, recherche de l'utilisateur, second bind avec son mot de passe, lecture de ses groupes." }

@@ -26,25 +26,106 @@ const ICON: Record<NodeKind, LucideIcon> = {
 };
 
 /* The drawing itself, at its natural size. */
-function Drawing({ l }: { l: Layout }) {
+/* What the pointer is on: a box, an arrow (by index) or a container. */
+export type Hover = { kind: "node"; id: string } | { kind: "edge"; i: number } | { kind: "group"; id: string };
+
+function sameHover(a: Hover | null, b: Hover | null): boolean {
+  if (!a || !b || a.kind !== b.kind) return false;
+  return a.kind === "edge" ? a.i === (b as { i: number }).i : a.id === (b as { id: string }).id;
+}
+
+/** The element under the pointer, with what to say about it. */
+export function describe(l: Layout, h: Hover | null, locale: "en" | "fr"): { title: string; desc?: string } | null {
+  if (!h) return null;
+  if (h.kind === "node") {
+    const n = l.nodes.find((x) => x.id === h.id);
+    return n ? { title: n.label[locale], desc: n.desc?.[locale] } : null;
+  }
+  if (h.kind === "group") {
+    const g = l.groups.find((x) => x.id === h.id);
+    return g ? { title: g.label[locale], desc: g.desc?.[locale] } : null;
+  }
+  const e = l.edges[h.i];
+  if (!e) return null;
+  const name = (id: string) => l.nodes.find((x) => x.id === id)?.label[locale] ?? id;
+  const label = e.label === undefined ? "" : typeof e.label === "string" ? e.label : e.label[locale];
+  return { title: `${name(e.from)} → ${name(e.to)}${label ? ` · ${label}` : ""}`, desc: e.desc?.[locale] };
+}
+
+/* The drawing itself, at its natural size. Hovering a box lights its
+   arrows and their other ends; hovering an arrow lights both ends; the
+   rest steps back. `onHover` reports what is under the pointer and where. */
+function Drawing({ l, hover, onHover }: { l: Layout; hover: Hover | null; onHover: (h: Hover | null, rect?: DOMRect) => void }) {
   const { locale } = useReader();
   const text = (t: string | Localized | undefined) => (t === undefined ? undefined : typeof t === "string" ? t : t[locale]);
+
+  // Which elements are lit for the current hover.
+  const litNodes = new Set<string>();
+  const litEdges = new Set<number>();
+  if (hover?.kind === "node") {
+    litNodes.add(hover.id);
+    l.edges.forEach((e, i) => {
+      if (e.from === hover.id || e.to === hover.id) {
+        litEdges.add(i);
+        litNodes.add(e.from);
+        litNodes.add(e.to);
+      }
+    });
+  } else if (hover?.kind === "edge") {
+    litEdges.add(hover.i);
+    const e = l.edges[hover.i];
+    if (e) {
+      litNodes.add(e.from);
+      litNodes.add(e.to);
+    }
+  } else if (hover?.kind === "group") {
+    for (const n of l.nodes) if (n.in === hover.id) litNodes.add(n.id);
+  }
+  const dimmed = hover !== null;
+  const dim = (lit: boolean) => (dimmed && !lit ? " opacity-40" : "");
+  const enter = (h: Hover) => (e: ReactMouseEvent) => onHover(h, (e.currentTarget as HTMLElement).getBoundingClientRect());
+  const leave = () => onHover(null);
+
   return (
-    <div className="relative" style={{ width: l.width, height: l.height }}>
-      <svg className="absolute inset-0" width={l.width} height={l.height} aria-hidden>
+    <div className="relative" style={{ width: l.width, height: l.height }} onMouseLeave={leave}>
+      <svg className="pointer-events-none absolute inset-0" width={l.width} height={l.height} aria-hidden>
         <defs>
           <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
             <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ink-3)" />
           </marker>
+          <marker id="arrow-lit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)" />
+          </marker>
         </defs>
-        {l.edges.map((e, i) => (
-          <path key={i} d={e.d} fill="none" stroke="var(--ink-3)" strokeWidth={1.5} strokeDasharray={e.dashed ? "5 4" : undefined} markerEnd="url(#arrow)" />
-        ))}
+        {l.groups
+          .filter((g) => g.path)
+          .map((g) => (
+            <path key={"g" + g.id} d={g.path} fill="none" stroke="var(--line-2)" strokeWidth={1} strokeDasharray="4 4" strokeLinejoin="round" />
+          ))}
+        {l.edges.map((e, i) => {
+          const lit = litEdges.has(i);
+          return (
+            <g key={i} className={"transition" + dim(lit)}>
+              <path d={e.d} fill="none" stroke={lit ? "var(--accent)" : "var(--ink-3)"} strokeWidth={lit ? 2 : 1.5} strokeDasharray={e.dashed ? "5 4" : undefined} markerEnd={lit ? "url(#arrow-lit)" : "url(#arrow)"} />
+              {/* A wide invisible stroke to make the arrow easy to hover. */}
+              <path d={e.d} fill="none" stroke="transparent" strokeWidth={16} className="pointer-events-auto cursor-help" onMouseEnter={enter({ kind: "edge", i })} onMouseLeave={leave} />
+            </g>
+          );
+        })}
       </svg>
 
       {l.groups.map((g) => (
-        <div key={`${g.id}/${g.part}`} className="absolute rounded-lg border border-dashed border-line-2" style={{ left: g.x, top: g.y, width: g.w, height: g.h }}>
-          <span className="label absolute left-3 top-1.5">
+        <div
+          key={`${g.id}/${g.part}`}
+          className={"pointer-events-none absolute rounded-lg" + (g.path ? "" : " border border-dashed border-line-2")}
+          style={{ left: g.x, top: g.y, width: g.w, height: g.h }}
+        >
+          <span
+            className="label pointer-events-auto absolute cursor-help"
+            style={{ left: (g.lx ?? g.x) - g.x + 12, top: (g.ly ?? g.y) - g.y + 6 }}
+            onMouseEnter={enter({ kind: "group", id: g.id })}
+            onMouseLeave={leave}
+          >
             {g.label[locale]}
             {g.part > 0 && " ↵"}
           </span>
@@ -53,29 +134,44 @@ function Drawing({ l }: { l: Layout }) {
 
       {l.edges
         .filter((e) => e.label)
-        .map((e, i) => (
-          <span
-            key={"l" + i}
-            className={
-              "ui absolute -translate-y-1/2 whitespace-nowrap rounded bg-paper px-1.5 py-px text-[11px] text-ink-2 " +
-              (e.align === "start" ? "" : e.align === "end" ? "-translate-x-full" : "-translate-x-1/2")
-            }
-            style={{ left: e.mx, top: e.my }}
-          >
-            <Tokenized template={text(e.label) ?? ""} />
-          </span>
-        ))}
+        .map((e) => {
+          const i = l.edges.indexOf(e);
+          const lit = litEdges.has(i);
+          return (
+            <span
+              key={"l" + i}
+              className={
+                "ui absolute -translate-y-1/2 cursor-help whitespace-nowrap rounded bg-paper px-1.5 py-px text-[11px] transition " +
+                (lit ? "text-accent-ink" : "text-ink-2") +
+                dim(lit) +
+                " " +
+                (e.align === "start" ? "" : e.align === "end" ? "-translate-x-full" : "-translate-x-1/2")
+              }
+              style={{ left: e.mx, top: e.my }}
+              onMouseEnter={enter({ kind: "edge", i })}
+              onMouseLeave={leave}
+            >
+              <Tokenized template={text(e.label) ?? ""} />
+            </span>
+          );
+        })}
 
       {l.nodes.map((n) => {
         const Icon = ICON[n.kind];
+        const lit = litNodes.has(n.id);
+        const self = hover?.kind === "node" && hover.id === n.id;
         return (
           <div
             key={n.id}
             className={
-              "absolute flex items-center gap-2.5 rounded-md border px-3 shadow-soft " +
-              (n.focus ? "border-accent bg-accent-soft/60" : "border-line bg-paper-2")
+              "absolute flex items-center gap-2.5 rounded-md border px-3 shadow-soft transition " +
+              (n.focus ? "border-accent bg-accent-soft/60" : "border-line bg-paper-2") +
+              (self ? " ring-2 ring-accent/50" : lit && dimmed ? " border-accent" : "") +
+              dim(lit)
             }
             style={{ left: n.x, top: n.y, width: n.w, height: n.h }}
+            onMouseEnter={enter({ kind: "node", id: n.id })}
+            onMouseLeave={leave}
           >
             <Icon className={"h-4 w-4 shrink-0 " + (n.focus ? "text-accent" : "text-ink-3")} />
             <span className="min-w-0">
@@ -89,6 +185,26 @@ function Drawing({ l }: { l: Layout }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/* A small card next to the hovered element, in the page. */
+function HoverTip({ rect, what }: { rect: DOMRect; what: { title: string; desc?: string } }) {
+  const below = window.innerHeight - rect.bottom > 160;
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - 320));
+  return (
+    <div
+      role="tooltip"
+      className="ui pointer-events-none fixed z-50 w-[300px] rounded-md border border-line bg-paper p-2.5 text-[12.5px] leading-snug text-ink shadow-soft"
+      style={{ left, top: below ? rect.bottom + 6 : undefined, bottom: below ? undefined : window.innerHeight - rect.top + 6 }}
+    >
+      <div className="mb-0.5 font-bold">{what.title}</div>
+      {what.desc && (
+        <div className="text-ink-2">
+          <Tokenized template={what.desc} />
+        </div>
+      )}
     </div>
   );
 }
@@ -112,14 +228,18 @@ function useFit(width: number) {
 }
 
 export function Diagram({ spec }: { spec: DiagramSpec }) {
-  const { choices, level } = useReader();
+  const { choices, level, locale } = useReader();
   const l = layoutDiagram(spec, choices, level);
   const { ref, scale } = useFit(l.width);
+  const [hover, setHover] = useState<{ h: Hover; rect: DOMRect } | null>(null);
+  const onHover = useCallback((h: Hover | null, rect?: DOMRect) => setHover(h && rect ? { h, rect } : null), []);
+  const what = hover ? describe(l, hover.h, locale) : null;
   return (
     <div ref={ref} className="w-full overflow-x-auto overflow-y-hidden" style={{ height: l.height * scale }}>
       <div className="origin-top-left" style={{ width: l.width, height: l.height, transform: `scale(${scale})` }}>
-        <Drawing l={l} />
+        <Drawing l={l} hover={hover?.h ?? null} onHover={onHover} />
       </div>
+      {hover && what?.desc && <HoverTip rect={hover.rect} what={what} />}
     </div>
   );
 }
@@ -136,6 +256,8 @@ function Fullscreen({ spec, onClose }: { spec: DiagramSpec; onClose: () => void 
   const stage = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
+  const [hover, setHover] = useState<Hover | null>(null);
+  const onHover = useCallback((h: Hover | null) => setHover((prev) => (sameHover(prev, h) ? prev : h)), []);
   const drag = useRef<{ x: number; y: number; vx: number; vy: number; moved: boolean } | null>(null);
 
   // The stage size decides how the chain wraps: as many rows as fill the screen best.
@@ -149,6 +271,7 @@ function Fullscreen({ spec, onClose }: { spec: DiagramSpec; onClose: () => void 
     return () => ro.disconnect();
   }, []);
   const l = size ? layoutForStage(spec, choices, level, size.w - STAGE_PAD, size.h - STAGE_PAD) : layoutDiagram(spec, choices, level);
+  const what = describe(l, hover, locale);
 
   const fit = useCallback(() => {
     const el = stage.current;
@@ -261,12 +384,25 @@ function Fullscreen({ spec, onClose }: { spec: DiagramSpec; onClose: () => void 
         onClickCapture={onClickCapture}
       >
         <div className="absolute left-0 top-0 origin-top-left" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }}>
-          <Drawing l={l} />
+          <Drawing l={l} hover={hover} onHover={onHover} />
         </div>
       </div>
-      <div className="flex items-center justify-between border-t border-line px-4 py-1.5 text-[12px] text-ink-3">
-        <span>{t.gist.hint}</span>
-        {spec.caption && <span className="hidden max-w-[60%] truncate sm:inline">{spec.caption[locale]}</span>}
+      {/* The reading line: the caption, or what the pointer is on. */}
+      <div className="grid min-h-[64px] grid-cols-[1fr_auto] items-center gap-4 border-t border-line px-4 py-2">
+        {what ? (
+          <p className="text-[14px] leading-snug text-ink">
+            <span className="ui font-bold">{what.title}</span>
+            {what.desc && (
+              <>
+                {" — "}
+                <Tokenized template={what.desc} />
+              </>
+            )}
+          </p>
+        ) : (
+          <p className="text-[14px] leading-snug text-ink-2">{spec.caption?.[locale] ?? t.gist.hoverHint}</p>
+        )}
+        <span className="text-[11.5px] text-ink-3">{t.gist.hint}</span>
       </div>
     </div>
   );

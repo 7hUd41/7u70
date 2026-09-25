@@ -1,5 +1,6 @@
 # Quick: five boxes. Guided: the config file that drives sshd and the layers
 # on the arrows. Deep: the key file, the log, and the loop that feeds fail2ban.
+# `desc` is what the reader gets when hovering a box or an arrow.
 title: { en: "Before and after, in one picture", fr: "Avant et après, en une image" }
 caption:
   en: "Only your key reaches sshd, on your port, through the firewall. Root and passwords are refused; with fail2ban, repeat offenders are banned before they even reach sshd."
@@ -8,18 +9,27 @@ caption:
 groups:
   - id: server
     label: { en: "Your server", fr: "Ton serveur" }
+    desc:
+      en: "The fresh machine. Everything inside this box is what the page changes."
+      fr: "La machine neuve. Tout ce qui est dans cette boîte est ce que la page modifie."
 
 nodes:
   - id: you
     kind: client
     label: { en: "Your laptop", fr: "Ton portable" }
     sub: "~/.ssh/id_ed25519"
+    desc:
+      en: "Where the private key lives. It never leaves this machine; only its public half goes to the server."
+      fr: "Là où vit la clé privée. Elle ne quitte jamais cette machine ; seule sa moitié publique va sur le serveur."
     deep:
       sub: "ssh client · ~/.ssh/id_ed25519 (private key)"
   - id: bots
     kind: cloud
     label: { en: "The internet's bots", fr: "Les robots d'internet" }
     sub: "root / password…"
+    desc:
+      en: "Within minutes of going online, scanners try root and common passwords on port 22. They are the reason for everything else here."
+      fr: "Quelques minutes après la mise en ligne, des scanners essaient root et des mots de passe courants sur le port 22. Ils sont la raison de tout le reste."
     deep:
       sub: "scanners · TCP 22 · root / password lists"
   - id: firewall
@@ -27,6 +37,9 @@ nodes:
     label: { en: "Firewall", fr: "Pare-feu" }
     sub: "${SSH_PORT}/tcp only"
     in: server
+    desc:
+      en: "ufw: the only inbound port open is ${SSH_PORT}. Open it before moving SSH, or you lock yourself out."
+      fr: "ufw : le seul port entrant ouvert est ${SSH_PORT}. Ouvre-le avant de déplacer SSH, sinon tu te verrouilles dehors."
     guided:
       sub: "ufw · allow ${SSH_PORT}/tcp · deny in"
     deep:
@@ -37,6 +50,9 @@ nodes:
     sub: "keys only · no root"
     in: server
     focus: true
+    desc:
+      en: "The SSH daemon, after hardening: listens on ${SSH_PORT}, accepts keys only, refuses root. Three lines of configuration."
+      fr: "Le démon SSH, après durcissement : écoute sur ${SSH_PORT}, n'accepte que les clés, refuse root. Trois lignes de configuration."
     deep:
       sub: "Port ${SSH_PORT} · PubkeyAuthentication yes · PasswordAuthentication no · PermitRootLogin no"
   - id: config
@@ -45,6 +61,9 @@ nodes:
     sub: "/etc/ssh/sshd_config.d/"
     in: server
     level: guided
+    desc:
+      en: "A drop-in file rather than the main sshd_config: package upgrades leave it alone, and a diff shows only your changes."
+      fr: "Un fichier de surcharge plutôt que le sshd_config principal : les mises à jour du paquet n'y touchent pas, et un diff ne montre que tes changements."
     deep:
       sub: "/etc/ssh/sshd_config.d/hardening.conf · read at start"
   - id: keys
@@ -53,6 +72,9 @@ nodes:
     sub: "/home/${USERNAME}/.ssh/"
     in: server
     level: deep
+    desc:
+      en: "The public keys allowed to log in as ${USERNAME}. One line per key; permissions must be strict or sshd ignores the file."
+      fr: "Les clés publiques autorisées à se connecter en ${USERNAME}. Une ligne par clé ; les permissions doivent être strictes, sinon sshd ignore le fichier."
   - id: log
     kind: file
     label: { en: "Auth log", fr: "Journal d'auth" }
@@ -60,12 +82,18 @@ nodes:
     in: server
     level: deep
     when: { flag: FAIL2BAN }
+    desc:
+      en: "Every login attempt, success or failure, with the source IP. fail2ban reads it to decide who to ban."
+      fr: "Chaque tentative de connexion, réussie ou non, avec l'IP source. fail2ban le lit pour décider qui bannir."
   - id: fail2ban
     kind: service
     label: { en: "fail2ban", fr: "fail2ban" }
     sub: "3 failures → 1h ban"
     in: server
     when: { flag: FAIL2BAN }
+    desc:
+      en: "Watches the log; after three failures from one IP it adds a firewall rule dropping that IP for an hour. Keeps the noise out of sshd."
+      fr: "Surveille le journal ; après trois échecs depuis une IP, il ajoute une règle de pare-feu qui la rejette pendant une heure. Épargne le bruit à sshd."
     deep:
       sub: "jail sshd · port ${SSH_PORT} · maxretry 3 · bantime 1h"
   - id: user
@@ -73,16 +101,63 @@ nodes:
     label: { en: "Your account", fr: "Ton compte" }
     sub: "${USERNAME} · sudo"
     in: server
+    desc:
+      en: "A personal account with sudo. You log in as ${USERNAME}; root is only ever reached through sudo, which is logged."
+      fr: "Un compte personnel avec sudo. Tu te connectes en ${USERNAME} ; root n'est atteint que par sudo, qui est journalisé."
     deep:
       sub: "${USERNAME} · sudo group · a shell, no root"
 
 edges:
-  - { from: you, to: firewall, label: "ssh -p ${SSH_PORT}", guided: { label: "ssh -p ${SSH_PORT} · TCP" }, deep: { label: "L7 SSH-2 · L4 TCP ${SSH_PORT} · L3 IP" } }
-  - { from: bots, to: firewall, label: "22, refused", dashed: true, deep: { label: "TCP 22 SYN → DROP" } }
-  - { from: firewall, to: sshd, deep: { label: "accept ${SSH_PORT}" } }
-  - { from: config, to: sshd, label: "loads", dashed: true, level: guided }
-  - { from: sshd, to: keys, label: "checks key", dashed: true, level: deep }
-  - { from: sshd, to: user, deep: { label: "key matches → session" } }
-  - { from: sshd, to: log, label: "logs failures", dashed: true, level: deep, when: { flag: FAIL2BAN } }
-  - { from: log, to: fail2ban, label: "reads", dashed: true, level: deep, when: { flag: FAIL2BAN } }
-  - { from: fail2ban, to: firewall, label: "ban", dashed: true, when: { flag: FAIL2BAN }, deep: { label: "ban IP · nftables set" } }
+  - from: you
+    to: firewall
+    label: "ssh -p ${SSH_PORT}"
+    guided: { label: "ssh -p ${SSH_PORT} · TCP" }
+    deep: { label: "L7 SSH-2 · L4 TCP ${SSH_PORT} · L3 IP" }
+    desc: { en: "Your connection, on the new port. Keep the old session open until this one works.", fr: "Ta connexion, sur le nouveau port. Garde l'ancienne session ouverte tant que celle-ci ne marche pas." }
+  - from: bots
+    to: firewall
+    label: "22, refused"
+    dashed: true
+    deep: { label: "TCP 22 SYN → DROP" }
+    desc: { en: "Port 22 is closed: the packets are dropped, the scanner sees nothing.", fr: "Le port 22 est fermé : les paquets sont rejetés, le scanner ne voit rien." }
+  - from: firewall
+    to: sshd
+    deep: { label: "accept ${SSH_PORT}" }
+    desc: { en: "Only traffic to ${SSH_PORT} gets through to the daemon.", fr: "Seul le trafic vers ${SSH_PORT} passe jusqu'au démon." }
+  - from: config
+    to: sshd
+    label: "loads"
+    dashed: true
+    level: guided
+    desc: { en: "Read at start. Test with `sshd -t` and reload; a typo here can lock you out.", fr: "Lu au démarrage. Teste avec `sshd -t` puis recharge ; une faute de frappe ici peut te verrouiller dehors." }
+  - from: sshd
+    to: keys
+    label: "checks key"
+    dashed: true
+    level: deep
+    desc: { en: "sshd looks for your public key in the file; the client proves it holds the private half.", fr: "sshd cherche ta clé publique dans le fichier ; le client prouve qu'il détient la moitié privée." }
+  - from: sshd
+    to: user
+    deep: { label: "key matches → session" }
+    desc: { en: "The key matched: a shell as ${USERNAME}, never as root.", fr: "La clé correspond : un shell en ${USERNAME}, jamais en root." }
+  - from: sshd
+    to: log
+    label: "logs failures"
+    dashed: true
+    level: deep
+    when: { flag: FAIL2BAN }
+    desc: { en: "Each failed attempt is one line in the journal, with the source IP.", fr: "Chaque tentative échouée est une ligne dans le journal, avec l'IP source." }
+  - from: log
+    to: fail2ban
+    label: "reads"
+    dashed: true
+    level: deep
+    when: { flag: FAIL2BAN }
+    desc: { en: "fail2ban tails the journal and counts failures per IP.", fr: "fail2ban suit le journal et compte les échecs par IP." }
+  - from: fail2ban
+    to: firewall
+    label: "ban"
+    dashed: true
+    when: { flag: FAIL2BAN }
+    deep: { label: "ban IP · nftables set" }
+    desc: { en: "The ban is a firewall rule: the IP is dropped for an hour, then the rule is removed.", fr: "Le ban est une règle de pare-feu : l'IP est rejetée pendant une heure, puis la règle est retirée." }
