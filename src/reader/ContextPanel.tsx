@@ -17,6 +17,10 @@ const TIP_MAX_HEIGHT = 320;
 
 type TipPos = { left: number; top?: number; bottom?: number };
 
+/* One tip at a time: opening a tip closes whichever one is still open (the
+   grace period of the previous ? must not leave two tips on screen). */
+let closeOpenTip: (() => void) | null = null;
+
 function Help({ spec, anchor }: { spec: VarSpec; anchor: React.RefObject<HTMLDivElement | null> }) {
   const { locale, t } = useReader();
   const [pos, setPos] = useState<TipPos | null>(null);
@@ -26,11 +30,17 @@ function Help({ spec, anchor }: { spec: VarSpec; anchor: React.RefObject<HTMLDiv
     if (hideTimer.current) clearTimeout(hideTimer.current);
     hideTimer.current = null;
   };
+  const closeNow = useRef(() => {
+    cancelHide();
+    setPos(null);
+  }).current;
 
   // Beside the field, never over it: to the left of the panel when there is
   // room (the usual case, the panel sits in the right margin), else under it.
   // Fixed positioning escapes the scrolling margin.
   const show = (el: HTMLElement) => {
+    if (closeOpenTip && closeOpenTip !== closeNow) closeOpenTip();
+    closeOpenTip = closeNow;
     const r = (anchor.current ?? el).getBoundingClientRect();
     if (r.left - TIP_WIDTH - 12 >= 8) {
       const top = Math.max(8, Math.min(r.top, window.innerHeight - TIP_MAX_HEIGHT - 8));
@@ -43,7 +53,10 @@ function Help({ spec, anchor }: { spec: VarSpec; anchor: React.RefObject<HTMLDiv
   };
   const hide = () => {
     cancelHide();
-    hideTimer.current = setTimeout(() => setPos(null), 300);
+    hideTimer.current = setTimeout(() => {
+      setPos(null);
+      if (closeOpenTip === closeNow) closeOpenTip = null;
+    }, 300);
   };
 
   return (
@@ -116,7 +129,7 @@ function Field({ spec }: { spec: VarSpec }) {
         type={spec.kind === "secret" ? "password" : "text"}
         aria-invalid={err ? true : undefined}
         className={
-          "w-full rounded border bg-paper px-2.5 py-1.5 font-mono text-[13px] text-ink transition placeholder:text-ink-3/60 focus:outline-none focus:ring-2 " +
+          "w-full rounded border bg-paper px-2.5 py-1.5 font-mono text-[13px] text-ink transition placeholder:text-ink-3/60 focus:outline-none focus:ring-2 focus:ring-inset " +
           (err ? "border-warn focus:ring-warn" : lit ? "border-accent bg-accent-soft/40 focus:ring-accent" : "border-line focus:border-accent focus:ring-accent")
         }
       />

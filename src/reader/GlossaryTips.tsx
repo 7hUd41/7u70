@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { GlossaryEntry } from "@/engine";
 import { useReader } from "./store";
+import { glossaryUrl } from "@/urls";
 
 type Tip = { key: string; left: number; top?: number; bottom?: number };
 
@@ -72,7 +73,7 @@ export function GlossaryTips({ entries }: { entries: GlossaryEntry[] }) {
         {entry.expansion && <span className="text-ink-3">{entry.expansion[locale]}</span>}
       </div>
       <p className="font-serif text-[14px] text-ink-2">{entry.def[locale]}</p>
-      <Link href={`/${locale}/glossary#${encodeURIComponent(entry.term)}`} className="mt-2 inline-block text-[12px] text-accent-ink hover:underline">
+      <Link href={`${glossaryUrl(locale)}#${encodeURIComponent(entry.term)}`} className="mt-2 inline-block text-[12px] text-accent-ink hover:underline">
         {t.glossary.link} →
       </Link>
     </div>

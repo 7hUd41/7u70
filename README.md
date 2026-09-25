@@ -43,7 +43,18 @@ src/
   content/                     loads and validates content/, compiles MDX. Integrity-tested.
   reader/                      the reading UI: state, context panel, code blocks, levels.
   i18n/                        UI strings (en, fr).
-  app/[locale]/                routes.
+  urls.ts                      every URL the site links to, in one place.
+  app/[seg]/                   routes (see below).
+```
+
+URLs: languages live at the article level, since a page is written in one or several languages.
+
+```
+/fr  /en                                   catalogue, in that language; /fr/glossary likewise
+/netbox                                    a series: lands on its first page
+/netbox/install-from-scratch               an article: lands on the language you read last, else your browser's
+/netbox/install-from-scratch/fr            the article, in French
+/netbox/install-from-scratch/fr/validations
 ```
 
 ### Writing a page

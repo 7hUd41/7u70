@@ -6,6 +6,7 @@ import { Compass, PanelLeft } from "lucide-react";
 import type { Level, Locale } from "@/engine";
 import { dict } from "@/i18n";
 import { LevelSwitch, SkinMenu, ThemeToggle } from "./controls";
+import { homeUrl } from "@/urls";
 import { SearchButton } from "./Search";
 
 export function Header({
@@ -51,7 +52,7 @@ export function Header({
           </button>
         )}
         <nav className="ui flex min-w-0 items-center gap-2 text-[13px]">
-          <Link href={`/${locale}`} className="font-bold text-ink">
+          <Link href={homeUrl(locale)} className="font-bold text-ink">
             {t.brand}
           </Link>
           {crumbs.map((c) => (

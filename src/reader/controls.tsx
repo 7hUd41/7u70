@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Languages, Moon, Palette, Sun } from "lucide-react";
-import { LEVELS, LOCALES, type Level, type Locale } from "@/engine";
+import { LEVELS, type Level, type Locale } from "@/engine";
+import type { LocaleLink } from "@/urls";
 import { dict } from "@/i18n";
 
 /* ── Reading depth ─────────────────────────────────────────── */
@@ -58,21 +59,21 @@ export function ThemeToggle({ locale }: { locale: Locale }) {
 /* ── EN / FR, same page ────────────────────────────────────── */
 /* The languages a page (or the site) is written in. A page written in one
    language shows one code, not a choice. */
-export function LocaleSwitch({ locale, path, locales = LOCALES }: { locale: Locale; path: string; locales?: readonly Locale[] }) {
+export function LocaleSwitch({ locale, links }: { locale: Locale; links: LocaleLink[] }) {
   const t = dict(locale);
   return (
     <nav aria-label={t.localeLabel} data-tour="locale" className="ui inline-flex items-center gap-1.5 text-[12.5px]">
       <Languages className="h-3.5 w-3.5 text-ink-3" aria-hidden />
-      {locales.map((l, i) => (
-        <span key={l} className="inline-flex items-center gap-1.5">
+      {links.map((l, i) => (
+        <span key={l.locale} className="inline-flex items-center gap-1.5">
           {i > 0 && <span className="text-line-2">·</span>}
-          {l === locale ? (
-            <span aria-current="page" className="font-bold text-ink" title={t.locale[l]}>
-              {l.toUpperCase()}
+          {l.locale === locale ? (
+            <span aria-current="page" className="font-bold text-ink" title={t.locale[l.locale]}>
+              {l.locale.toUpperCase()}
             </span>
           ) : (
-            <Link href={`/${l}${path}`} hrefLang={l} className="text-ink-3 hover:text-ink" title={t.locale[l]}>
-              {l.toUpperCase()}
+            <Link href={l.href} hrefLang={l.locale} className="text-ink-3 hover:text-ink" title={t.locale[l.locale]}>
+              {l.locale.toUpperCase()}
             </Link>
           )}
         </span>

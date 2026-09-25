@@ -13,6 +13,7 @@
    ────────────────────────────────────────────────────────────── */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { LANG_KEY } from "@/urls";
 import { DEFAULT_LEVEL, defaultsOf, isLevel, type ChoiceValue, type Level, type Locale, type TutoContract } from "@/engine";
 import { dict, type Dict } from "@/i18n";
 
@@ -103,6 +104,13 @@ export function ReaderProvider({ id, locale, contract, children }: { id: string;
   useEffect(() => {
     if (hydrated) writeJson(LEVEL_KEY, level);
   }, [level, hydrated]);
+  // The language read last: the bare article URL lands there next time.
+  useEffect(() => {
+    document.documentElement.lang = locale;
+    try {
+      localStorage.setItem(LANG_KEY, locale);
+    } catch {}
+  }, [locale]);
   useEffect(() => {
     if (hydrated) writeJson(profileKey(id), profile);
   }, [profile, id, hydrated]);

@@ -79,6 +79,7 @@ export async function buildIndex(locale: Locale): Promise<IndexEntry[]> {
   const entries: IndexEntry[] = [];
   for (const s of all) {
     for (const p of s.pages) {
+      if (!p.locales.includes(locale)) continue;
       const src = await readPageSource(p, locale);
       entries.push({
         series: s.slug,

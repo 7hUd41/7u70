@@ -24,6 +24,7 @@ import { Header } from "./Header";
 import { Outline, ProgressPill } from "./Outline";
 import { ReaderProvider, useReader } from "./store";
 import { LocaleSwitch } from "./controls";
+import { localeLinks, pageUrl, validationsUrl } from "@/urls";
 import { Toolbar } from "./Toolbar";
 import { Tour, TOUR_DONE_KEY } from "./Tour";
 import { VarEditor } from "./VarEditor";
@@ -34,8 +35,7 @@ export type ReaderProps = {
   id: string;
   locale: Locale;
   contract: TutoContract;
-  series: { href: string; title: string };
-  path: string;
+  series: { slug: string; href: string; title: string };
   slug: string;
   prev?: PageLink;
   next?: PageLink;
@@ -78,7 +78,7 @@ const DIFFICULTY_DOT = {
   advanced: "bg-warn",
 } as const;
 
-function Meta({ locales, path }: { locales: Locale[]; path: string }) {
+function Meta({ locales, series, slug }: { locales: Locale[]; series: string; slug: string }) {
   const { contract, locale, t } = useReader();
   return (
     <div className="ui mt-4 space-y-2 text-[12.5px] text-ink-2">
@@ -111,7 +111,7 @@ function Meta({ locales, path }: { locales: Locale[]; path: string }) {
           </span>
         )}
         <span className="ml-auto">
-          <LocaleSwitch locale={locale} path={path} locales={locales} />
+          <LocaleSwitch locale={locale} links={localeLinks((l) => pageUrl(series, slug, l), locales)} />
         </span>
       </div>
       {contract.tags.length > 0 && (
@@ -246,10 +246,10 @@ function Frame(props: ReaderProps) {
           <p className="mt-3 text-[1.1rem] leading-relaxed text-ink-2">
             {contract.summary[locale]}
           </p>
-          <Meta locales={props.locales} path={props.path} />
+          <Meta locales={props.locales} series={props.series.slug} slug={props.slug} />
           <ValidationLine
             list={validations.list}
-            href={`/${locale}${props.path}/validations`}
+            href={validationsUrl(props.series.slug, props.slug, locale)}
           />
           {props.diagram && <Gist spec={props.diagram} />}
           <div className="mt-6 border-b border-line pb-5 print:hidden">

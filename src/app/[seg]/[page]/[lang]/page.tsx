@@ -1,28 +1,31 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { isLocale, LOCALES, type Locale } from "@/engine";
+import { isLocale, type Locale } from "@/engine";
+import { dict } from "@/i18n";
+import { pageUrl, seriesInCatalogueUrl } from "@/urls";
 import { getPage, listSeries, neighbors, readDiagram, readGlossary, readPageSource, readValidations } from "@/content/loader";
 import { site } from "@/site.config";
 import { compileMdx } from "@/content/mdx";
 import { mdxComponents } from "@/reader/mdx-components";
 import { Reader } from "@/reader/Reader";
 
-type Params = { locale: string; series: string; page: string };
+/* /<series>/<page>/<lang>: the article, in one of the languages it is written in. */
+type Params = { seg: string; page: string; lang: string };
 
 export async function generateStaticParams() {
   const all = await listSeries();
-  return LOCALES.flatMap((locale) => all.flatMap((s) => s.pages.filter((p) => p.locales.includes(locale)).map((p) => ({ locale, series: s.slug, page: p.slug }))));
+  return all.flatMap((s) => s.pages.flatMap((p) => p.locales.map((lang) => ({ seg: s.slug, page: p.slug, lang }))));
 }
 
 export async function generateMetadata({ params }: { params: Promise<Params> }): Promise<Metadata> {
-  const { locale, series, page } = await params;
+  const { seg: series, page, lang: locale } = await params;
   if (!isLocale(locale)) return {};
   const p = await getPage(series, page);
-  return p ? { title: p.contract.title[locale], description: p.contract.summary[locale] } : {};
+  return p ? { title: `${p.contract.title[locale]} · ${dict(locale).brand}`, description: p.contract.summary[locale] } : {};
 }
 
 export default async function TutorialPage({ params }: { params: Promise<Params> }) {
-  const { locale, series, page: slug } = await params;
+  const { seg: series, page: slug, lang: locale } = await params;
   if (!isLocale(locale)) notFound();
   const page = await getPage(series, slug);
   if (!page || !page.locales.includes(locale)) notFound();
@@ -36,15 +39,14 @@ export default async function TutorialPage({ params }: { params: Promise<Params>
   ]);
   const Content = await compileMdx(source, glossary);
   // A neighbour not written in this language links to the language it has.
-  const href = (p: { slug: string; locales: Locale[] }) => `/${p.locales.includes(locale) ? locale : p.locales[0]}/${series}/${p.slug}`;
+  const href = (p: { slug: string; locales: Locale[] }) => pageUrl(series, p.slug, p.locales.includes(locale) ? locale : p.locales[0]);
 
   return (
     <Reader
       id={`${series}/${slug}`}
       locale={locale}
       contract={page.contract}
-      series={{ href: `/${locale}/${series}`, title: nav.series.contract.title[locale] }}
-      path={`/${series}/${slug}`}
+      series={{ slug: series, href: seriesInCatalogueUrl(locale, series), title: nav.series.contract.title[locale] }}
       slug={slug}
       locales={page.locales}
       prev={nav.prev && { href: href(nav.prev), title: nav.prev.contract.title[locale] }}

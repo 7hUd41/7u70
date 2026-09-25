@@ -14,6 +14,7 @@ import { BookA, Search as SearchIcon } from "lucide-react";
 import type { Locale } from "@/engine";
 import { dict } from "@/i18n";
 import type { IndexEntry } from "@/content/search-index";
+import { glossaryUrl, pageUrl, searchIndexUrl } from "@/urls";
 
 type Hit = { entry: IndexEntry; sectionId: string; heading: string; snippet: string; score: number };
 
@@ -105,7 +106,7 @@ function SearchPalette({ locale, onClose }: { locale: Locale; onClose: () => voi
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`/${locale}/search-index.json`)
+    fetch(searchIndexUrl(locale))
       .then((r) => r.json())
       .then((data: IndexEntry[]) => {
         if (!cancelled) setIndex(data);
@@ -143,7 +144,7 @@ function SearchPalette({ locale, onClose }: { locale: Locale; onClose: () => voi
 
   const goPage = (e: IndexEntry, sectionId = "") => {
     onClose();
-    router.push(`/${locale}/${e.series}/${e.page}${sectionId ? `#${sectionId}` : ""}`);
+    router.push(pageUrl(e.series, e.page, locale) + (sectionId ? `#${sectionId}` : ""));
   };
 
   const rows = browsing ? filtered.map((e) => ({ key: `${e.series}/${e.page}`, entry: e, sectionId: "", heading: "", snippet: e.summary })) : hits.map((h) => ({ key: `${h.entry.series}/${h.entry.page}#${h.sectionId}`, ...h }));
@@ -202,7 +203,7 @@ function SearchPalette({ locale, onClose }: { locale: Locale; onClose: () => voi
             ))}
           </ul>
           <div className="flex items-center justify-between border-t border-line px-4 py-2 text-[12.5px]">
-            <Link href={`/${locale}/glossary`} onClick={onClose} className="inline-flex items-center gap-1.5 text-ink-2 hover:text-ink">
+            <Link href={glossaryUrl(locale)} onClick={onClose} className="inline-flex items-center gap-1.5 text-ink-2 hover:text-ink">
               <BookA className="h-3.5 w-3.5" /> {t.search.glossary}
             </Link>
             <span className="text-ink-3">↑↓ · ⏎ · esc</span>

@@ -5,19 +5,20 @@ import { readGlossary } from "@/content/loader";
 import { dict } from "@/i18n";
 import { Header } from "@/reader/Header";
 import { LocaleSwitch } from "@/reader/controls";
+import { glossaryUrl, localeLinks } from "@/urls";
 
 export function generateStaticParams() {
-  return LOCALES.map((locale) => ({ locale }));
+  return LOCALES.map((seg) => ({ seg }));
 }
 
-export async function generateMetadata({ params }: { params: Promise<{ locale: string }> }): Promise<Metadata> {
-  const { locale } = await params;
+export async function generateMetadata({ params }: { params: Promise<{ seg: string }> }): Promise<Metadata> {
+  const { seg: locale } = await params;
   return isLocale(locale) ? { title: dict(locale).glossary.title } : {};
 }
 
 /* Every term and abbreviation the site marks in its prose, alphabetically. */
-export default async function GlossaryPage({ params }: { params: Promise<{ locale: string }> }) {
-  const { locale } = await params;
+export default async function GlossaryPage({ params }: { params: Promise<{ seg: string }> }) {
+  const { seg: locale } = await params;
   if (!isLocale(locale)) notFound();
   const t = dict(locale);
   const entries = (await readGlossary()).sort((a, b) => a.term.localeCompare(b.term, locale, { sensitivity: "base" }));
@@ -28,7 +29,7 @@ export default async function GlossaryPage({ params }: { params: Promise<{ local
       <main className="mx-auto w-full max-w-4xl px-6 py-12 lg:px-10">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <h1 className="font-display text-[2.2rem] leading-[1.1] text-ink">{t.glossary.title}</h1>
-          <LocaleSwitch locale={locale} path="/glossary" />
+          <LocaleSwitch locale={locale} links={localeLinks(glossaryUrl)} />
         </div>
         <p className="mt-2 text-ink-2">{t.glossary.intro}</p>
         <dl className="mt-10 grid gap-x-8 gap-y-6 sm:grid-cols-[minmax(0,200px)_1fr]">

@@ -2,14 +2,20 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { isLocale } from "@/engine";
-import { getPage, readValidations } from "@/content/loader";
+import { getPage, listSeries, readValidations } from "@/content/loader";
+import { pageUrl } from "@/urls";
 import { dict } from "@/i18n";
 import { Header } from "@/reader/Header";
 
-type Params = { locale: string; series: string; page: string };
+type Params = { seg: string; page: string; lang: string };
+
+export async function generateStaticParams() {
+  const all = await listSeries();
+  return all.flatMap((s) => s.pages.flatMap((p) => p.locales.map((lang) => ({ seg: s.slug, page: p.slug, lang }))));
+}
 
 export async function generateMetadata({ params }: { params: Promise<Params> }): Promise<Metadata> {
-  const { locale, series, page } = await params;
+  const { seg: series, page, lang: locale } = await params;
   if (!isLocale(locale)) return {};
   const p = await getPage(series, page);
   return p ? { title: `${dict(locale).validated.pageTitle} · ${p.contract.title[locale]}` } : {};
@@ -18,10 +24,10 @@ export async function generateMetadata({ params }: { params: Promise<Params> }):
 /* Everyone who validated this page, with the path they took. Choices only:
    the file never holds a reader's values. */
 export default async function ValidationsPage({ params }: { params: Promise<Params> }) {
-  const { locale, series, page: slug } = await params;
+  const { seg: series, page: slug, lang: locale } = await params;
   if (!isLocale(locale)) notFound();
   const page = await getPage(series, slug);
-  if (!page) notFound();
+  if (!page || !page.locales.includes(locale)) notFound();
   const t = dict(locale);
   const list = (await readValidations(page)).sort((a, b) => b.at.localeCompare(a.at));
 
@@ -34,12 +40,12 @@ export default async function ValidationsPage({ params }: { params: Promise<Para
 
   return (
     <>
-      <Header locale={locale} crumbs={[{ href: `/${locale}/${series}/${slug}`, label: page.contract.title[locale] }]} />
+      <Header locale={locale} crumbs={[{ href: pageUrl(series, slug, locale), label: page.contract.title[locale] }]} />
       <main className="mx-auto w-full max-w-4xl px-6 py-12 lg:px-10">
         <h1 className="font-display text-[2.2rem] leading-[1.1] text-ink">{t.validated.pageTitle}</h1>
         <p className="mt-2 text-ink-2">
           {t.validated.pageIntro}{" "}
-          <Link href={`/${locale}/${series}/${slug}`} className="underline hover:text-ink">
+          <Link href={pageUrl(series, slug, locale)} className="underline hover:text-ink">
             {page.contract.title[locale]}
           </Link>
         </p>
