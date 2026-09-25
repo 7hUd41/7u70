@@ -724,10 +724,14 @@ button:disabled {
   cursor: not-allowed;
 }
 
-/* Focus ring, one rule for everything. */
-:where(button, a, input, select, textarea, [tabindex]):focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+/* Focus ring, one rule for everything. In the base layer, so a utility
+   such as `focus:outline-none` (a search field that is obviously focused)
+   can still turn it off. */
+@layer base {
+  :where(button, a, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
 }
 
 /* Transit skin: typography that matches the rounder shapes. */

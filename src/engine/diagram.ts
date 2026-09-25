@@ -125,10 +125,14 @@ const GAP_Y = 18;
 const GROUP_PAD = 14;
 const GROUP_HEAD = 24;
 const MARGIN = 12;
+const ROW_GAP = 56;
+/** Room kept on both sides of a wrapped drawing for arrows that swing round a column. */
+const SWING = 64;
+const SWING_STEP = 22;
 
 export type Box = { x: number; y: number; w: number; h: number };
-export type LaidNode = DiagramNode & Box & { layer: number };
-export type LaidGroup = { id: string; label: Localized } & Box;
+export type LaidNode = DiagramNode & Box & { layer: number; row: number };
+export type LaidGroup = { id: string; label: Localized; /** Row segment of a group that wraps (0 = the first). */ part: number } & Box;
 export type LaidEdge = {
   from: string;
   to: string;
@@ -139,6 +143,8 @@ export type LaidEdge = {
   /** Label anchor. */
   mx: number;
   my: number;
+  /** Where the label sits relative to its anchor (default: centred on it). */
+  align?: "start" | "end";
 };
 export type Layout = { width: number; height: number; nodes: LaidNode[]; groups: LaidGroup[]; edges: LaidEdge[] };
 
@@ -185,7 +191,12 @@ function subLines(t: string | Localized | undefined, nodeW: number): number {
   return t === undefined ? 0 : Math.min(SUB_MAX_LINES, Math.ceil(textLength(t) / subChars(nodeW)));
 }
 
-export function layoutDiagram(fullSpec: DiagramSpec, choices: Choices, level: Level = "deep"): Layout {
+export type LayoutOptions = {
+  /** Layers per row; beyond it the chain wraps to the next row, snaking back. Default: no wrapping. */
+  perRow?: number;
+};
+
+export function layoutDiagram(fullSpec: DiagramSpec, choices: Choices, level: Level = "deep", opts: LayoutOptions = {}): Layout {
   const spec = atLevel(fullSpec, level);
   const groupsVisible = visible(spec.groups, choices);
   const groupIds = new Set(groupsVisible.map((g) => g.id));
@@ -215,42 +226,69 @@ export function layoutDiagram(fullSpec: DiagramSpec, choices: Choices, level: Le
   const gapX = Math.max(GAP_X, ...edges.map((e) => textWidth(e.label)));
   const nodeW = nodes.some((n) => n.sub && textLength(n.sub) > 2 * subChars(NODE_W)) ? WIDE_NODE_W : NODE_W;
 
-  // Rows. Groups come first, as bands: a group's members stack from the top
-  // of every column the group spans, and the band's bottom is the tallest
-  // column. Nodes outside any group then stack in the free space below, so a
-  // container never covers a box that is not one of its members.
-  const colX = (li: number) => MARGIN + li * (nodeW + gapX);
+  // Columns. A single row by default (the page card scrolls sideways);
+  // `perRow` wraps the layers into rows that snake back and forth, so a
+  // long chain fills a screen instead of a strip.
+  const perRow = Math.max(1, Math.min(layerCount, opts.perRow ?? layerCount));
+  const rowOf = (layer: number) => Math.floor(layer / perRow);
+  const colOf = (layer: number) => {
+    const r = rowOf(layer);
+    const i = layer - r * perRow;
+    return r % 2 === 0 ? i : perRow - 1 - i;
+  };
+  const rowCount = rowOf(layerCount - 1) + 1;
+  const sidePad = rowCount > 1 ? SWING + 3 * SWING_STEP : 0;
+  const colX = (col: number) => MARGIN + sidePad + col * (nodeW + gapX);
+
+  // Rows, one after the other. Inside a row, groups come first, as bands: a
+  // group's members stack from the top of every column the group spans, and
+  // the band's bottom is the tallest column. Nodes outside any group then
+  // stack in the free space below, so a container never covers a box that
+  // is not one of its members. A group spanning several rows gets one box
+  // per row.
+  // Inside a column, the box the solid flow reaches comes first (it gets the
+  // straight arrow); the others follow in declaration order.
+  const ordered = [...nodes].sort((a, b) => Number(hasSolidPred.has(b.id)) - Number(hasSolidPred.has(a.id)) || nodes.indexOf(a) - nodes.indexOf(b));
   const laid: LaidNode[] = [];
   const groups: LaidGroup[] = [];
-  const cursor: number[] = Array.from({ length: layerCount }, () => MARGIN);
-  const place = (n: DiagramNode, li: number, y: number): number => {
+  const place = (n: DiagramNode, layer: number, y: number): number => {
     const h = NODE_H + 14 * subLines(n.sub, nodeW);
-    laid.push({ ...n, layer: li, x: colX(li), y, w: nodeW, h });
+    laid.push({ ...n, layer, row: rowOf(layer), x: colX(colOf(layer)), y, w: nodeW, h });
     return y + h;
   };
-  for (const g of groupsVisible) {
-    const members = nodes.filter((n) => n.in === g.id);
-    if (members.length === 0) continue;
-    const cols = members.map((m) => layerOf.get(m.id) ?? 0);
-    const lo = Math.min(...cols);
-    const hi = Math.max(...cols);
-    const top = Math.max(...cursor.slice(lo, hi + 1)) + GROUP_HEAD + GROUP_PAD;
-    let bottom = top;
-    for (let c = lo; c <= hi; c++) {
-      let y = top;
-      for (const m of members) if ((layerOf.get(m.id) ?? 0) === c) y = place(m, c, y) + GAP_Y;
-      bottom = Math.max(bottom, y - GAP_Y);
+  let rowTop = MARGIN;
+  for (let r = 0; r < rowCount; r++) {
+    const inRow = (n: DiagramNode) => rowOf(layerOf.get(n.id) ?? 0) === r;
+    const cursor: number[] = Array.from({ length: perRow }, () => rowTop);
+    for (const g of groupsVisible) {
+      const members = ordered.filter((n) => n.in === g.id && inRow(n));
+      if (members.length === 0) continue;
+      const cols = members.map((m) => colOf(layerOf.get(m.id) ?? 0));
+      const lo = Math.min(...cols);
+      const hi = Math.max(...cols);
+      const top = Math.max(...cursor.slice(lo, hi + 1)) + GROUP_HEAD + GROUP_PAD;
+      let bottom = top;
+      for (let c = lo; c <= hi; c++) {
+        let y = top;
+        for (const m of members) if (colOf(layerOf.get(m.id) ?? 0) === c) y = place(m, layerOf.get(m.id) ?? 0, y) + GAP_Y;
+        bottom = Math.max(bottom, y - GAP_Y);
+      }
+      const x0 = colX(lo) - GROUP_PAD;
+      const y0 = top - GROUP_HEAD - GROUP_PAD;
+      const part = groups.filter((x) => x.id === g.id).length;
+      groups.push({ id: g.id, label: g.label, part, x: x0, y: y0, w: colX(hi) + nodeW + GROUP_PAD - x0, h: bottom + GROUP_PAD - y0 });
+      for (let c = lo; c <= hi; c++) cursor[c] = bottom + GROUP_PAD + GAP_Y;
     }
-    const x0 = colX(lo) - GROUP_PAD;
-    const y0 = top - GROUP_HEAD - GROUP_PAD;
-    groups.push({ id: g.id, label: g.label, x: x0, y: y0, w: colX(hi) + nodeW + GROUP_PAD - x0, h: bottom + GROUP_PAD - y0 });
-    for (let c = lo; c <= hi; c++) cursor[c] = bottom + GROUP_PAD + GAP_Y;
+    for (const n of ordered) {
+      if (n.in || !inRow(n)) continue;
+      const layer = layerOf.get(n.id) ?? 0;
+      const c = colOf(layer);
+      cursor[c] = place(n, layer, cursor[c]) + GAP_Y;
+    }
+    rowTop = Math.max(...cursor) - GAP_Y + ROW_GAP;
   }
-  for (const n of nodes) {
-    if (n.in) continue;
-    const c = layerOf.get(n.id) ?? 0;
-    cursor[c] = place(n, c, cursor[c]) + GAP_Y;
-  }
+
+  laid.sort((a, b) => nodes.findIndex((n) => n.id === a.id) - nodes.findIndex((n) => n.id === b.id));
 
   const byId = new Map(laid.map((n) => [n.id, n]));
   const routed: LaidEdge[] = edges.map((e) => {
@@ -259,7 +297,38 @@ export function layoutDiagram(fullSpec: DiagramSpec, choices: Choices, level: Le
     let d: string;
     let mx: number;
     let my: number;
-    if (b.layer > a.layer) {
+    let align: LaidEdge["align"];
+    if (a.row !== b.row) {
+      // Another row: leave from the bottom (or top). Arrive from the top (or
+      // bottom) when the target heads its column, else swing round and enter
+      // by the side the row flows from, so stacked targets do not share a line.
+      const down = b.row > a.row;
+      const x1 = a.x + a.w / 2;
+      const y1 = down ? a.y + a.h : a.y;
+      const heads = !laid.some((n) => n.row === b.row && n.x === b.x && (down ? n.y < b.y : n.y > b.y));
+      if (heads) {
+        const x2 = b.x + b.w / 2;
+        const y2 = down ? b.y : b.y + b.h;
+        const c = (y2 - y1) / 2;
+        d = `M ${x1} ${y1} C ${x1} ${y1 + c}, ${x2} ${y2 - c}, ${x2} ${y2}`;
+        mx = (x1 + x2) / 2;
+        my = (y1 + y2) / 2;
+      } else {
+        // Out of the source's side, round the column, into the target's side.
+        // Targets further down the column swing wider, so the arrows nest.
+        const fromRight = b.row % 2 === 1;
+        const rank = laid.filter((n) => n.row === b.row && n.x === b.x && (down ? n.y < b.y : n.y > b.y)).length;
+        const swing = (fromRight ? 1 : -1) * (SWING + SWING_STEP * (rank - 1));
+        const sx = fromRight ? a.x + a.w : a.x;
+        const sy = a.y + a.h / 2;
+        const x2 = fromRight ? b.x + b.w : b.x;
+        const y2 = b.y + b.h / 2;
+        d = `M ${sx} ${sy} C ${sx + swing} ${sy}, ${x2 + swing} ${y2}, ${x2} ${y2}`;
+        mx = x2 + swing * 0.8;
+        my = (sy + y2) / 2;
+        align = fromRight ? "start" : "end";
+      }
+    } else if (b.x > a.x) {
       const x1 = a.x + a.w;
       const y1 = a.y + a.h / 2;
       const x2 = b.x;
@@ -268,7 +337,7 @@ export function layoutDiagram(fullSpec: DiagramSpec, choices: Choices, level: Le
       d = `M ${x1} ${y1} C ${x1 + c} ${y1}, ${x2 - c} ${y2}, ${x2} ${y2}`;
       mx = (x1 + x2) / 2;
       my = (y1 + y2) / 2;
-    } else if (b.layer < a.layer) {
+    } else if (b.x < a.x) {
       const x1 = a.x;
       const y1 = a.y + a.h / 2;
       const x2 = b.x + b.w;
@@ -278,7 +347,7 @@ export function layoutDiagram(fullSpec: DiagramSpec, choices: Choices, level: Le
       mx = (x1 + x2) / 2;
       my = (y1 + y2) / 2;
     } else {
-      // Same layer: a short vertical hop between the two boxes.
+      // Same column: a short vertical hop between the two boxes.
       const down = b.y > a.y;
       const x = a.x + a.w / 2;
       const y1 = down ? a.y + a.h : a.y;
@@ -287,10 +356,29 @@ export function layoutDiagram(fullSpec: DiagramSpec, choices: Choices, level: Le
       mx = x;
       my = (y1 + y2) / 2;
     }
-    return { from: e.from, to: e.to, label: e.label, dashed: e.dashed, d, mx, my };
+    return { from: e.from, to: e.to, label: e.label, dashed: e.dashed, d, mx, my, align };
   });
 
-  const width = MARGIN * 2 + layerCount * nodeW + Math.max(0, layerCount - 1) * gapX;
+  const cols = Math.min(perRow, layerCount);
+  const width = (MARGIN + sidePad) * 2 + cols * nodeW + Math.max(0, cols - 1) * gapX;
   const height = Math.max(...laid.map((n) => n.y + n.h + MARGIN), ...groups.map((g) => g.y + g.h + MARGIN));
   return { width, height, nodes: laid, groups, edges: routed };
+}
+
+/** The wrapping that fills a stage best: tries every row length and keeps the one with the largest fit scale. */
+export function layoutForStage(spec: DiagramSpec, choices: Choices, level: Level, stageW: number, stageH: number): Layout {
+  let best: Layout | null = null;
+  let bestScale = 0;
+  const single = layoutDiagram(spec, choices, level);
+  const layerCount = Math.max(0, ...single.nodes.map((n) => n.layer)) + 1;
+  for (let k = layerCount; k >= 1; k--) {
+    const l = k === layerCount ? single : layoutDiagram(spec, choices, level, { perRow: k });
+    const scale = Math.min(stageW / l.width, stageH / l.height);
+    // Prefer fewer rows when the gain is small: a strip reads better than a stack.
+    if (scale > bestScale * 1.15) {
+      best = l;
+      bestScale = scale;
+    }
+  }
+  return best ?? single;
 }

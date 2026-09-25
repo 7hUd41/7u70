@@ -88,7 +88,7 @@ In `page-<locale>.mdx`:
 
 A page may carry a diagram: boxes (`nodes`), containers (`groups`) and arrows (`edges`), never coordinates. Labels are localized; `sub` lines and arrow labels may use `${VARS}`; any element may carry a `when` and disappear with the reader's choices. Solid arrows lay the boxes out left to right; dashed arrows are secondary relations and do not move anything. The card renders at the top of the page, follows the skin, and scales to the column.
 
-The drawing also follows the reading level. Quick (and Run) show the simple picture; an element with `level: guided` or `level: deep` appears from that level up, one with `max: quick` is a simplification that richer levels replace, and `guided:` / `deep:` blocks override a node's `label`/`sub` or an arrow's `label` from that level up. Deep is where every layer goes: DNS, TLS, ports, sockets, units, log files — it may get wide, and then scrolls sideways.
+The drawing also follows the reading level. Quick (and Run) show the simple picture; an element with `level: guided` or `level: deep` appears from that level up, one with `max: quick` is a simplification that richer levels replace, and `guided:` / `deep:` blocks override a node's `label`/`sub` or an arrow's `label` from that level up. Deep is where every layer goes: DNS, TLS, ports, sockets, units, log files — it may get wide, and then scrolls sideways. The magnifier on the card opens the same live drawing full screen (wheel to zoom, drag to pan, the level switch at hand); there the chain wraps into rows that snake back and forth, so it fills the screen instead of a strip.
 
 ```yaml
 groups: [{ id: server, label: { en: Your server, fr: Ton serveur } }]

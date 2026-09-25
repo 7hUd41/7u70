@@ -149,8 +149,15 @@ function SearchPalette({ locale, onClose }: { locale: Locale; onClose: () => voi
   const rows = browsing ? filtered.map((e) => ({ key: `${e.series}/${e.page}`, entry: e, sectionId: "", heading: "", snippet: e.summary })) : hits.map((h) => ({ key: `${h.entry.series}/${h.entry.page}#${h.sectionId}`, ...h }));
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-start justify-center bg-ink/40 p-4 pt-[10vh]" onClick={onClose} role="dialog" aria-modal aria-label={t.search.open}>
-      <div className="ui grid w-full max-w-3xl overflow-hidden rounded-md border border-line bg-paper shadow-soft sm:grid-cols-[minmax(0,1fr)_200px]" onClick={(e) => e.stopPropagation()}>
+    <div
+      className="fixed inset-0 z-[70] flex cursor-pointer items-start justify-center bg-ink/40 p-4 pt-[10vh]"
+      onClick={onClose}
+      title={t.search.close}
+      role="dialog"
+      aria-modal
+      aria-label={t.search.open}
+    >
+      <div className="ui grid w-full max-w-3xl cursor-default overflow-hidden rounded-md border border-line bg-paper shadow-soft sm:grid-cols-[minmax(0,1fr)_200px]" onClick={(e) => e.stopPropagation()} title="">
         <div className="flex min-h-0 flex-col">
           <div className="flex items-center gap-2 border-b border-line px-3">
             <SearchIcon className="h-4 w-4 shrink-0 text-ink-3" />
@@ -168,7 +175,7 @@ function SearchPalette({ locale, onClose }: { locale: Locale; onClose: () => voi
                 else if (e.key === "Enter" && rows[sel]) goPage(rows[sel].entry, rows[sel].sectionId);
               }}
               placeholder={t.search.placeholder}
-              className="w-full bg-transparent py-3 text-[15px] text-ink placeholder:text-ink-3 focus:outline-none"
+              className="w-full bg-transparent py-3 text-[15px] text-ink outline-none placeholder:text-ink-3 focus-visible:outline-none"
             />
             <kbd className="rounded border border-line px-1 font-mono text-[10.5px] text-ink-3">esc</kbd>
           </div>

@@ -57,6 +57,7 @@ const en = {
   glossary: { title: "Glossary", intro: "The terms and abbreviations these pages use. Hover any underlined term in a page to read its definition there.", link: "Open the glossary" },
   search: {
     open: "Search",
+    close: "Close the search",
     placeholder: "Search every tutorial…",
     loading: "Loading the index…",
     empty: "Nothing found.",
@@ -219,6 +220,7 @@ const fr: Dict = {
   glossary: { title: "Glossaire", intro: "Les termes et abréviations que ces pages emploient. Survole un terme souligné dans une page pour lire sa définition sur place.", link: "Ouvrir le glossaire" },
   search: {
     open: "Rechercher",
+    close: "Fermer la recherche",
     placeholder: "Chercher dans tous les tutos…",
     loading: "Chargement de l'index…",
     empty: "Rien trouvé.",

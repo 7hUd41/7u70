@@ -18,7 +18,7 @@ export function VarEditor() {
   const left = Math.max(8, Math.min(editing.rect.left, vw - 288));
   return (
     <>
-      <div className="fixed inset-0 z-40" onClick={closeEdit} />
+      <div className="fixed inset-0 z-40 cursor-pointer" onClick={closeEdit} />
       <div role="dialog" className="ui fixed z-50 w-72 rounded-md border border-line bg-paper p-3 shadow-soft" style={{ top, left }}>
         <div className="mb-0.5 text-[13px] font-bold text-ink">{spec.label[locale]}</div>
         {spec.hint && <p className="mb-1 text-[12px] leading-snug text-ink-3">{spec.hint[locale]}</p>}

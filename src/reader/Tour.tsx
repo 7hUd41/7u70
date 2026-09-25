@@ -150,7 +150,7 @@ export function Tour({ open, onClose }: { open: boolean; onClose: () => void }) 
         className="pointer-events-none absolute rounded-lg ring-2 ring-accent transition-all duration-500 ease-out"
         style={{ ...box, boxShadow: "0 0 0 9999px rgb(20 18 14 / 0.55)" }}
       />
-      <div className="absolute inset-0" onClick={onClose} />
+      <div className="absolute inset-0 cursor-pointer" onClick={onClose} />
       <div
         className="ui absolute w-[340px] rounded-md border border-line bg-paper p-4 shadow-soft transition-all duration-500 ease-out"
         style={card}

@@ -123,7 +123,7 @@ export function SkinMenu({ locale }: { locale: Locale }) {
       </button>
       {open && (
         <>
-          <span className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <span className="fixed inset-0 z-40 cursor-pointer" onClick={() => setOpen(false)} />
           <ul role="menu" className="ui absolute right-0 top-full z-50 mt-2 w-56 rounded-md border border-line bg-paper p-1 shadow-soft">
             {SKINS.map((s) => (
               <li key={s} role="none">

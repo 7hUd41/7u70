@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { Cloud, Database, FileText, Globe, Maximize2, Minus, Monitor, Network, Plus, Scan, Server, User, X, type LucideIcon } from "lucide-react";
-import { layoutDiagram, type DiagramSpec, type Layout, type Localized, type NodeKind } from "@/engine";
+import { layoutDiagram, layoutForStage, type DiagramSpec, type Layout, type Localized, type NodeKind } from "@/engine";
 import { useReader } from "./store";
 import { Tokenized } from "./Tokenized";
 import { LevelSwitch } from "./controls";
@@ -43,8 +43,11 @@ function Drawing({ l }: { l: Layout }) {
       </svg>
 
       {l.groups.map((g) => (
-        <div key={g.id} className="absolute rounded-lg border border-dashed border-line-2" style={{ left: g.x, top: g.y, width: g.w, height: g.h }}>
-          <span className="label absolute left-3 top-1.5">{g.label[locale]}</span>
+        <div key={`${g.id}/${g.part}`} className="absolute rounded-lg border border-dashed border-line-2" style={{ left: g.x, top: g.y, width: g.w, height: g.h }}>
+          <span className="label absolute left-3 top-1.5">
+            {g.label[locale]}
+            {g.part > 0 && " ↵"}
+          </span>
         </div>
       ))}
 
@@ -53,7 +56,10 @@ function Drawing({ l }: { l: Layout }) {
         .map((e, i) => (
           <span
             key={"l" + i}
-            className="ui absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded bg-paper px-1.5 py-px text-[11px] text-ink-2"
+            className={
+              "ui absolute -translate-y-1/2 whitespace-nowrap rounded bg-paper px-1.5 py-px text-[11px] text-ink-2 " +
+              (e.align === "start" ? "" : e.align === "end" ? "-translate-x-full" : "-translate-x-1/2")
+            }
             style={{ left: e.mx, top: e.my }}
           >
             <Tokenized template={text(e.label) ?? ""} />
@@ -123,18 +129,31 @@ type View = { x: number; y: number; k: number };
 const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 4;
 
+const STAGE_PAD = 48;
+
 function Fullscreen({ spec, onClose }: { spec: DiagramSpec; onClose: () => void }) {
   const { choices, locale, level, setLevel, t } = useReader();
-  const l = layoutDiagram(spec, choices, level);
   const stage = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
   const drag = useRef<{ x: number; y: number; vx: number; vy: number; moved: boolean } | null>(null);
+
+  // The stage size decides how the chain wraps: as many rows as fill the screen best.
+  useEffect(() => {
+    const el = stage.current;
+    if (!el) return;
+    const update = () => setSize({ w: el.clientWidth, h: el.clientHeight });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const l = size ? layoutForStage(spec, choices, level, size.w - STAGE_PAD, size.h - STAGE_PAD) : layoutDiagram(spec, choices, level);
 
   const fit = useCallback(() => {
     const el = stage.current;
     if (!el) return;
-    const pad = 48;
-    const k = Math.min(ZOOM_MAX, (el.clientWidth - pad) / l.width, (el.clientHeight - pad) / l.height);
+    const k = Math.min(ZOOM_MAX, (el.clientWidth - STAGE_PAD) / l.width, (el.clientHeight - STAGE_PAD) / l.height);
     setView({ k, x: (el.clientWidth - l.width * k) / 2, y: (el.clientHeight - l.height * k) / 2 });
   }, [l.width, l.height]);
 
