@@ -86,6 +86,7 @@ export default async function FirstSegment({ params }: { params: Promise<{ seg: 
                       <span className="label mb-2 flex items-center gap-2 font-mono normal-case tracking-normal">
                         {String(i + 1).padStart(2, "0")}
                         {!inLocale && <span className="rounded border border-line px-1 text-[10.5px] uppercase text-ink-3">{l}</span>}
+                        {p.contract.status === "draft" && <span className="rounded border border-warn/50 px-1 text-[10.5px] normal-case text-warn">{t.draft.badge}</span>}
                       </span>
                       <span className="font-serif text-[1.2rem] font-semibold leading-snug text-ink">{p.contract.title[locale]}</span>
                       <span className="mt-2 text-[0.95rem] leading-relaxed text-ink-2">{p.contract.summary[locale]}</span>

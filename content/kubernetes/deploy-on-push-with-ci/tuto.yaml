@@ -17,6 +17,7 @@ authors: [thudal]
 created: 2026-09-25
 minutes: 35
 validated: k3s v1.31 · GitHub Actions · GitLab 17
+status: draft             # not yet run end to end by its author
 
 groups:
   - id: ci
@@ -27,7 +28,7 @@ vars:
   - key: REPO
     kind: text
     group: ci
-    default: tugdual/indicat
+    default: 7hUd41/indicat
     label: { en: Repository, fr: Dépôt }
     hint:
       en: owner/name on GitHub, or group/project on GitLab.
@@ -38,7 +39,7 @@ vars:
   - key: IMAGE_REPO
     kind: text
     group: ci
-    default: ghcr.io/tugdual/indicat
+    default: ghcr.io/7hud41/indicat
     label: { en: Image name (no tag), fr: Nom de l'image (sans tag) }
     hint:
       en: The image of the previous page without its tag. On GitLab, registry.gitlab.com/group/project.

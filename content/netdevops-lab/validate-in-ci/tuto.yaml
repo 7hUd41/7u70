@@ -19,6 +19,7 @@ authors: [thudal]
 created: 2026-09-25
 minutes: 40
 validated: containerlab 0.60 · GitHub Actions runner 2.3xx · GitLab Runner 17 · pytest 8
+status: draft             # not yet run end to end by its author
 
 groups:
   - id: ci

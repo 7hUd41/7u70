@@ -19,6 +19,7 @@ authors: [thudal]
 created: 2026-09-25
 minutes: 45
 validated: NetBox 4.4 · Nornir 3.x · scrapli 2024.x · Ansible core 2.17 · netbox.netbox 3.x
+status: draft             # not yet run end to end by its author
 
 vars:
   - key: LOOPBACK_PREFIX

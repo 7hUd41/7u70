@@ -17,6 +17,7 @@ authors: [thudal]
 created: 2026-09-25
 minutes: 30
 validated: containerlab 0.60 · Ubuntu 24.04 · SR Linux 24.10 · cEOS-lab 4.32
+status: draft             # not yet run end to end by its author
 
 groups:
   - id: srlinux

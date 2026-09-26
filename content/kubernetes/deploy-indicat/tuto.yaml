@@ -19,6 +19,7 @@ authors: [thudal]
 created: 2026-09-25
 minutes: 50
 validated: k3s v1.31 · CloudNativePG 1.24 · PostgreSQL 16
+status: draft             # not yet run end to end by its author
 
 groups:
   - id: db
@@ -33,7 +34,7 @@ vars:
   - key: APP_IMAGE
     kind: text
     group: app
-    default: ghcr.io/tugdual/indicat:latest
+    default: ghcr.io/7hud41/indicat:latest
     label: { en: Image, fr: Image }
     hint:
       en: The full image reference, registry included, with a tag. The next page replaces the tag with the commit SHA.

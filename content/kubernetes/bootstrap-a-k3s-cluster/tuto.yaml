@@ -19,6 +19,7 @@ authors: [thudal]
 created: 2026-09-25
 minutes: 40
 validated: k3s v1.31 · Ubuntu 24.04
+status: draft             # not yet run end to end by its author
 
 groups:
   - id: ha

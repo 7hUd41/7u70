@@ -1,0 +1,8 @@
+name: Idea or new page
+description: A feature for the reader, or a tutorial you would like to see.
+labels: [idea]
+body:
+  - type: textarea
+    id: idea
+    attributes: { label: The idea, description: What you would like, and the situation where you needed it. }
+    validations: { required: true }

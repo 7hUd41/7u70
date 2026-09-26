@@ -17,6 +17,7 @@ authors: [thudal]
 created: 2026-09-24
 minutes: 45
 validated: NetBox 4.4 · Ubuntu 24.04
+status: draft             # not yet run end to end by its author
 
 groups:
   - id: db

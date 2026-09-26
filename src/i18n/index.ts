@@ -36,6 +36,11 @@ const en = {
     sourceCopied: "Source copied",
     sourceDownload: "Download the source as .md",
   },
+  draft: {
+    badge: "Draft",
+    title: "Draft — not yet run end to end",
+    body: "This page was written but its author has not yet run it on a real machine. Commands may be wrong: read before you run, and tell us what breaks.",
+  },
   carry: {
     button: "Share / carry",
     title: "Take this tutorial with you",
@@ -222,6 +227,11 @@ const fr: Dict = {
     sourceTitle: "Copier les fichiers source de cette page (et le guide de rédaction) en Markdown, à coller dans une conversation avec un modèle",
     sourceCopied: "Source copiée",
     sourceDownload: "Télécharger la source en .md",
+  },
+  draft: {
+    badge: "Brouillon",
+    title: "Brouillon — pas encore exécuté de bout en bout",
+    body: "Cette page est écrite mais son auteur ne l'a pas encore déroulée sur une vraie machine. Des commandes peuvent être fausses : lis avant de lancer, et dis-nous ce qui casse.",
   },
   carry: {
     button: "Partager / emporter",

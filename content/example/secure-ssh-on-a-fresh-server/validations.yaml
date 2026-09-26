@@ -1,10 +1,1 @@
 # Human validations of this page, append-only. Choices only, never values.
-- at: 2026-09-25T10:43:04.844Z
-  by: anon-abb1
-  locale: fr
-  choices:
-    OS: debian
-    FAIL2BAN: true
-  checks:
-    done: 0
-    total: 0

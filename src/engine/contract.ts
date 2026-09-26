@@ -96,6 +96,8 @@ export const PageContract = z
     minutes: z.number().int().positive().optional(),
     /** Upstream project version / platform the tutorial was validated against. */
     validated: z.string().optional(),
+    /** draft = written but not yet run end to end by its author: the page says so. */
+    status: z.enum(["draft", "published"]).default("published"),
     groups: z.array(GroupSpec).default([]),
     vars: z.array(VarSpec).default([]),
     choices: z.array(ChoiceSpec).default([]),

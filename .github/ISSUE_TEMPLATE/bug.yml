@@ -1,0 +1,11 @@
+name: Bug in the site
+description: Something in the reader itself misbehaves (display, levels, values, search, diagram…).
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes: { label: What happened, description: What you did, what you expected, what you saw. A screenshot helps. }
+    validations: { required: true }
+  - type: input
+    id: where
+    attributes: { label: Page and browser, description: "e.g. /netbox/install-from-scratch/fr · Firefox 131 · Transit skin, dark" }

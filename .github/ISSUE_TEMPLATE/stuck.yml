@@ -1,0 +1,18 @@
+name: Stuck on a step
+description: A command failed or a step did not do what the page said. (The "Stuck here?" link on each step fills most of this for you.)
+labels: [stuck, content]
+body:
+  - type: input
+    id: page
+    attributes: { label: Page, description: The URL of the page, with the step anchor if you have it. }
+    validations: { required: true }
+  - type: input
+    id: step
+    attributes: { label: Step }
+  - type: input
+    id: stack
+    attributes: { label: Your stack, description: "The choices from the margin (e.g. Ubuntu 24.04 · nginx · Let's Encrypt). Never paste your values or secrets." }
+  - type: textarea
+    id: what
+    attributes: { label: What you ran and what happened, description: Paste the command and its output. }
+    validations: { required: true }

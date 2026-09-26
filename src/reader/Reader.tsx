@@ -5,7 +5,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { ArrowLeft, ArrowRight, CalendarDays, Clock } from "lucide-react";
+import { ArrowLeft, ArrowRight, CalendarDays, Clock, FlaskConical } from "lucide-react";
 import {
   LEVELS,
   type DiagramSpec,
@@ -125,6 +125,19 @@ function Meta({ locales, series, slug }: { locales: Locale[]; series: string; sl
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/* Pages written but not yet run end to end by their author say so, loudly. */
+function DraftNotice() {
+  const { t } = useReader();
+  return (
+    <div role="note" className="ui mt-4 flex gap-3 rounded-md border border-warn/40 bg-warn/10 px-4 py-3 text-[13px] leading-snug text-ink">
+      <FlaskConical className="mt-0.5 h-4 w-4 shrink-0 text-warn" aria-hidden />
+      <p>
+        <strong className="font-bold">{t.draft.title}.</strong> {t.draft.body}
+      </p>
     </div>
   );
 }
@@ -254,6 +267,7 @@ function Frame(props: ReaderProps) {
             href={validationsUrl(props.series.slug, props.slug, locale)}
           />
           <ImportedNotice />
+          {contract.status === "draft" && <DraftNotice />}
           {props.diagram && <Gist spec={props.diagram} />}
           <div className="mt-6 border-b border-line pb-5 print:hidden">
             <Toolbar title={contract.title[locale]} slug={props.slug} />

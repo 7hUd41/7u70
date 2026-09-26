@@ -19,6 +19,7 @@ authors: [thudal]
 created: 2026-09-25
 minutes: 40
 validated: NetBox 4.4 · pynetbox 7.x · Python 3.12
+status: draft             # not yet run end to end by its author
 
 groups:
   - id: nodes
