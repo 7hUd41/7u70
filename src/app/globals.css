@@ -963,3 +963,17 @@ button:disabled {
     padding: 0 !important;
   }
 }
+
+/* Runfold mark in the header (see scripts/brand.py): colours follow the skin. */
+.rf-mark {
+  --rf-deep: var(--ink);
+  --rf-guided: color-mix(in oklab, var(--ink) 45%, var(--accent));
+  --rf-quick: var(--accent-ink);
+  --rf-core: color-mix(in oklab, var(--accent) 14%, white);
+}
+:root[data-theme="dark"] .rf-mark {
+  --rf-deep: color-mix(in oklab, var(--accent) 35%, #6b5cd6);
+  --rf-guided: color-mix(in oklab, var(--accent) 45%, #9a6bd0);
+  --rf-quick: var(--accent);
+  --rf-core: white;
+}
