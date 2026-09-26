@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { fontClassName } from "./fonts";
 import "./globals.css";
 
-export const metadata: Metadata = { title: "Adaptive tutorials" };
+export const metadata: Metadata = { title: "Runfold" };
 
 /* One root layout for every language: the html lang is set before paint by
    public/theme.js from the URL (a language segment, first or last), and

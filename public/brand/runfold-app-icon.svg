@@ -1,6 +1,22 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <rect width="64" height="64" rx="14.08" fill="#e0378f"/><g transform="translate(6 6) scale(0.8125)"><path d="M5 20 L21 32 L5 44 Z" fill="#fff" stroke="#fff" stroke-width="4" stroke-linejoin="round"/>
-  <path d="M27 21 L38 15 L38 41 L27 47 Z" fill="#fff" fill-opacity="0.62" stroke="#fff" stroke-opacity="0.62" stroke-width="1.2" stroke-linejoin="round"/>
-  <path d="M38 15 L49 21 L49 47 L38 41 Z" fill="#fff" fill-opacity="0.82" stroke="#fff" stroke-opacity="0.82" stroke-width="1.2" stroke-linejoin="round"/>
-  <path d="M49 21 L60 15 L60 41 L49 47 Z" fill="#fff" fill-opacity="1" stroke="#fff" stroke-opacity="1" stroke-width="1.2" stroke-linejoin="round"/></g>
+  <rect width="64" height="64" rx="14" fill="#e0378f"/>
+  <g transform="translate(7 18.331) scale(0.708)"><defs>
+    <linearGradient id="ic-g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#fff"/>
+    </linearGradient>
+    <mask id="ic-m" maskUnits="userSpaceOnUse" x="-2" y="-2" width="74.6" height="42.6">
+      <rect x="-2" y="-2" width="74.6" height="42.6" fill="#fff"/>
+      <path d="M27.3 5.444 L51.3 19.3 L27.3 33.156 Z" fill="#000" stroke="#000" stroke-width="8.4" stroke-linejoin="round"/>
+    </mask>
+    <mask id="ic-w" maskUnits="userSpaceOnUse" x="-2" y="-2" width="74.6" height="42.6">
+      <rect x="-2" y="-2" width="74.6" height="42.6" fill="#fff"/>
+      <path d="M47.19 30.006 A16 16 0 0 1 38.627 34.95" fill="none" stroke="#000" stroke-width="11"/>
+    </mask>
+  </defs>
+  <g mask="url(#ic-m)">
+    <circle cx="19.3" cy="19.3" r="16" fill="none" stroke="#fff" stroke-width="4.6"/>
+    <circle cx="35.3" cy="19.3" r="16" fill="none" stroke="#fff" stroke-width="4.6"/>
+    <g mask="url(#ic-w)"><circle cx="51.3" cy="19.3" r="16" fill="none" stroke="#fff" stroke-width="4.6"/></g>
+  </g>
+  <path d="M27.3 5.444 L51.3 19.3 L27.3 33.156 Z" fill="url(#ic-g)" stroke="url(#ic-g)" stroke-width="2.4" stroke-linejoin="round"/></g>
 </svg>

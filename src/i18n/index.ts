@@ -6,7 +6,7 @@
 import type { Locale } from "@/engine";
 
 const en = {
-  brand: "Adaptive tutorials",
+  brand: "Runfold",
   tagline: "Fill in your context once. Read at the depth you need.",
   home: "All tutorials",
   series: "Series",
@@ -193,7 +193,7 @@ const en = {
 export type Dict = typeof en;
 
 const fr: Dict = {
-  brand: "Tutos adaptatifs",
+  brand: "Runfold",
   tagline: "Renseigne ton contexte une fois. Lis à la profondeur qu'il te faut.",
   home: "Tous les tutos",
   series: "Série",

@@ -1,4 +1,4 @@
-# Writing a page for Adaptive Tutorials
+# Writing a page for Runfold
 
 A self-contained brief. Hand it to a person or a model with a subject ("set up a VPS to host a Next.js site behind nginx with TLS") and you get back the files a page is made of. Nothing else is needed to write; the site's test suite then checks the result.
 

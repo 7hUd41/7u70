@@ -7,6 +7,7 @@ import type { Level, Locale } from "@/engine";
 import { dict } from "@/i18n";
 import { LevelSwitch, SkinMenu, ThemeToggle } from "./controls";
 import { homeUrl } from "@/urls";
+import { RunfoldMark } from "./RunfoldMark";
 import { SearchButton } from "./Search";
 
 export function Header({
@@ -52,7 +53,8 @@ export function Header({
           </button>
         )}
         <nav className="ui flex min-w-0 items-center gap-2 text-[13px]">
-          <Link href={homeUrl(locale)} className="font-bold text-ink">
+          <Link href={homeUrl(locale)} className="inline-flex items-center gap-2 font-bold text-ink">
+            <RunfoldMark className="h-5 w-auto" />
             {t.brand}
           </Link>
           {crumbs.map((c) => (
