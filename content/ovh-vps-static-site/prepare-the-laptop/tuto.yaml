@@ -1,0 +1,21 @@
+# Inherits from ../series.yaml: SERVER_IP, SERVER_IPV6, USERNAME, SSH_PORT, DEPLOY_USER, DOMAIN, WEB_ROOT, ADMIN_EMAIL, LOCAL_DIR.
+
+title:
+  en: Prepare your laptop
+  fr: Préparer ton portable
+summary:
+  en: >-
+    Before ordering anything: the site builds cleanly from scratch, you know what you are about
+    to ship, the project folder (the only original of the site) is backed up, and your Mac has
+    the SSH key the rest of the series uses.
+  fr: >-
+    Avant de commander quoi que ce soit : le site se construit proprement à partir de zéro, tu
+    sais ce que tu vas envoyer, le dossier du projet (le seul original du site) est sauvegardé, et
+    ton Mac a la clé SSH que tout le reste de la série utilise.
+difficulty: beginner
+tags: [ssh, nextjs, macos, backup, time-machine]
+authors: [thudal]
+created: 2026-09-26
+minutes: 20
+validated: macOS 15 · Node 22 · Next.js 16
+status: draft             # not yet run end to end by its author

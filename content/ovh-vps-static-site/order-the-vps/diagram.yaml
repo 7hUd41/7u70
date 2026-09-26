@@ -1,0 +1,171 @@
+# Quick: you, the OVH control panel, the VPS, the delivery email and your public key.
+# Guided: the KVM console, the rescue path. Deep: cloud-init, authorized_keys, automated backup.
+title: { en: "From an order to a login", fr: "D'une commande à une connexion" }
+caption:
+  en: "You order in the OVH control panel with your public key; OVH builds the VPS and emails you its address. From then on you reach it over SSH as debian, and the KVM console is the way back in if SSH ever fails."
+  fr: "Tu commandes dans l'espace client OVH avec ta clé publique ; OVH construit le VPS et t'envoie son adresse par email. Dès lors tu l'atteins en SSH sous debian, et la console KVM est le chemin de secours si SSH lâche."
+
+groups:
+  - id: dc
+    label: { en: "OVH datacenter", fr: "Datacenter OVH" }
+    desc:
+      en: "A French OVH datacenter (Gravelines, Roubaix, Strasbourg or Paris). The location is fixed for the life of the VPS."
+      fr: "Un datacenter OVH en France (Gravelines, Roubaix, Strasbourg ou Paris). La localisation est figée pour toute la vie du VPS."
+
+nodes:
+  - id: you
+    kind: client
+    label: { en: "Your laptop", fr: "Ton portable" }
+    sub: "~/.ssh/id_ed25519"
+    desc:
+      en: "Your Mac. It holds the private key, which never leaves it, and runs the ssh client."
+      fr: "Ton Mac. Il détient la clé privée, qui ne le quitte jamais, et fait tourner le client ssh."
+    deep:
+      sub: "ssh client · ~/.ssh/id_ed25519 · ~/.ssh/known_hosts"
+  - id: key
+    kind: file
+    label: { en: "Public key", fr: "Clé publique" }
+    sub: "id_ed25519.pub"
+    desc:
+      en: "The public half of your key, one line. Pasted into the order form, it ends up in the authorized_keys of debian on the VPS."
+      fr: "La moitié publique de ta clé, une ligne. Collée dans le formulaire de commande, elle finit dans l'authorized_keys de debian sur le VPS."
+    deep:
+      sub: "ssh-ed25519 AAAA… · name: laptop"
+  - id: panel
+    kind: cloud
+    label: { en: "OVH control panel", fr: "Espace client OVH" }
+    sub: "2FA · order · KVM"
+    desc:
+      en: "Where you order, pay, find the IPs and open the console. Whoever controls this account controls the server: two-factor authentication first."
+      fr: "Là où tu commandes, paies, trouves les IP et ouvres la console. Qui contrôle ce compte contrôle le serveur : double authentification d'abord."
+    deep:
+      sub: "billing · VPS · KVM · rescue · reinstall · 2FA (TOTP / key)"
+  - id: email
+    kind: file
+    label: { en: "Delivery email", fr: "Email de livraison" }
+    sub: "IPv4 · debian · password link"
+    desc:
+      en: "Sent when the VPS is ready: the IPv4, the user debian and a one-time link to the temporary password."
+      fr: "Envoyé quand le VPS est prêt : l'IPv4, l'utilisateur debian et un lien à usage unique vers le mot de passe temporaire."
+  - id: vps
+    kind: server
+    label: { en: "VPS-1 · Debian 13", fr: "VPS-1 · Debian 13" }
+    sub: "${SERVER_IP}"
+    in: dc
+    focus: true
+    desc:
+      en: "Your server: 2 vCores, 4 GB RAM, 40 GB NVMe, plain Debian 13. Reachable at ${SERVER_IP} and ${SERVER_IPV6}, as debian, with your key."
+      fr: "Ton serveur : 2 vCores, 4 Go de RAM, 40 Go NVMe, Debian 13 nue. Joignable en ${SERVER_IP} et ${SERVER_IPV6}, sous debian, avec ta clé."
+    guided:
+      sub: "${SERVER_IP} · debian"
+    deep:
+      sub: "${SERVER_IP} · ${SERVER_IPV6} · 2 vCores · 4 GB · 40 GB NVMe · trixie"
+  - id: kvm
+    kind: net
+    label: { en: "KVM console", fr: "Console KVM" }
+    sub: "... → KVM"
+    in: dc
+    level: guided
+    desc:
+      en: "A screen and keyboard for the VPS in your browser. Works with SSH down or the firewall closed; logs in with a password, never a key."
+      fr: "Un écran et un clavier pour le VPS dans ton navigateur. Marche avec SSH arrêté ou le pare-feu fermé ; connexion par mot de passe, jamais par clé."
+    deep:
+      sub: "VNC relayed by OVH · bypasses the VPS network"
+  - id: cloudinit
+    kind: service
+    label: { en: "cloud-init", fr: "cloud-init" }
+    sub: "first boot"
+    in: dc
+    level: deep
+    desc:
+      en: "Runs once at first boot: creates the user debian, installs your key, grants password-less sudo, may enable password login in 50-cloud-init.conf."
+      fr: "Tourne une fois au premier démarrage : crée l'utilisateur debian, installe ta clé, donne un sudo sans mot de passe, peut activer la connexion par mot de passe dans 50-cloud-init.conf."
+    deep:
+      sub: "user debian · 90-cloud-init-users · 50-cloud-init.conf"
+  - id: authkeys
+    kind: file
+    label: { en: "authorized_keys", fr: "authorized_keys" }
+    sub: "/home/debian/.ssh/"
+    in: dc
+    level: deep
+    desc:
+      en: "The public keys allowed to log in as debian. Yours is written here at first boot."
+      fr: "Les clés publiques autorisées à se connecter sous debian. La tienne y est écrite au premier démarrage."
+  - id: backup
+    kind: store
+    label: { en: "Automated backup", fr: "Sauvegarde automatique" }
+    sub: "daily · 1 day kept"
+    in: dc
+    level: deep
+    desc:
+      en: "Included in the price: a daily copy of the VPS kept one day, stored by OVH outside the VPS. Snapshots (option) sit next to it."
+      fr: "Inclus dans le prix : une copie quotidienne du VPS gardée un jour, stockée par OVH hors du VPS. Les snapshots (option) sont à côté."
+    deep:
+      sub: "daily · 1 day retention · snapshot option"
+
+edges:
+  - from: you
+    to: panel
+    label: "order · 2FA"
+    desc: { en: "You log in with two factors and order the VPS in the browser.", fr: "Tu te connectes avec deux facteurs et tu commandes le VPS dans le navigateur." }
+  - from: panel
+    to: vps
+    label: "provisions"
+    deep: { label: "Debian 13 image + key → cloud-init" }
+    desc: { en: "OVH installs the Debian 13 image in the chosen datacenter and boots it.", fr: "OVH installe l'image Debian 13 dans le datacenter choisi et la démarre." }
+  - from: you
+    to: vps
+    label: "ssh debian@${SERVER_IP}"
+    guided: { label: "ssh debian@${SERVER_IP} · TCP 22" }
+    deep: { label: "SSH-2 · TCP 22 · host key trusted on first use" }
+    desc: { en: "Your first login, with the key and no password. Port 22 until page 3 moves it.", fr: "Ta première connexion, avec la clé et sans mot de passe. Port 22 jusqu'à ce que la page 3 le déplace." }
+  - from: you
+    to: key
+    label: "pbcopy"
+    dashed: true
+    desc: { en: "The public key is copied to the clipboard.", fr: "La clé publique est copiée dans le presse-papiers." }
+  - from: key
+    to: panel
+    label: "pasted at order"
+    dashed: true
+    desc: { en: "Pasted into the SSH key field of the order form, named e.g. laptop.", fr: "Collée dans le champ clé SSH du formulaire de commande, nommée par exemple laptop." }
+  - from: panel
+    to: email
+    label: "sends"
+    dashed: true
+    desc: { en: "When the VPS is ready, OVH sends the delivery email.", fr: "Quand le VPS est prêt, OVH envoie l'email de livraison." }
+  - from: email
+    to: you
+    label: "IPv4 · password link"
+    dashed: true
+    desc: { en: "You note the IPv4, open the password link once and store the password.", fr: "Tu notes l'IPv4, tu ouvres le lien du mot de passe une fois et tu le ranges." }
+  - from: panel
+    to: kvm
+    label: "... → KVM"
+    dashed: true
+    level: guided
+    desc: { en: "The console opens from the VPS page of the control panel.", fr: "La console s'ouvre depuis la page du VPS dans l'espace client." }
+  - from: kvm
+    to: vps
+    label: "rescue path"
+    dashed: true
+    level: guided
+    desc: { en: "The way back in when SSH does not answer: log in with the password, fix, retry.", fr: "Le chemin de retour quand SSH ne répond plus : connexion par mot de passe, correction, nouvel essai." }
+  - from: cloudinit
+    to: authkeys
+    label: "writes key"
+    dashed: true
+    level: deep
+    desc: { en: "At first boot, cloud-init writes the key you gave at order into this file.", fr: "Au premier démarrage, cloud-init écrit dans ce fichier la clé donnée à la commande." }
+  - from: vps
+    to: authkeys
+    label: "checks key"
+    dashed: true
+    level: deep
+    desc: { en: "sshd looks up your public key here; your laptop proves it holds the private half.", fr: "sshd cherche ta clé publique ici ; ton portable prouve qu'il détient la moitié privée." }
+  - from: vps
+    to: backup
+    label: "nightly"
+    dashed: true
+    level: deep
+    desc: { en: "OVH copies the whole VPS once a day and keeps the copy one day.", fr: "OVH copie le VPS entier une fois par jour et garde la copie un jour." }

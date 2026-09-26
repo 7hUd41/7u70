@@ -1,0 +1,207 @@
+{/* First pass — to be validated against nextjs.org/docs/app/guides/static-exports, support.apple.com (Back up your Mac with Time Machine; Full Disk Access), man tmutil, man ssh-add (Apple) and man ssh_config before publishing. */}
+
+Before you order a server, get your Mac in order. This page makes sure the site builds from nothing, shows you what you are about to ship, checks that the project folder is backed up (it is the only original of the site), and creates the SSH key every later page uses: in the OVH order form first, then on the server.
+
+<Run>
+
+The script runs **on your Mac**, as you, in the project folder <V name="LOCAL_DIR" />. It expects Node 22 and the SSH key from step 2 already created: the key has a passphrase, so you create it by hand, and the script stops if it is missing. It only reports on the backup; it never fails because of it.
+
+Open a new file `laptop-setup.sh` in the project folder, paste every code block of this section into it in order, then run `bash laptop-setup.sh`.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Prepare your laptop — ${LOCAL_DIR}
+cd ${LOCAL_DIR}
+
+# SSH key: created by hand (it has a passphrase), only checked here
+test -f ~/.ssh/id_ed25519 || { echo "No ~/.ssh/id_ed25519: create it first (step 2)."; exit 1; }
+ssh-add -l 2>/dev/null | grep -q ED25519 || echo "Note: key not in the agent yet; run ssh-add --apple-use-keychain ~/.ssh/id_ed25519 once."
+touch ~/.ssh/config && chmod 600 ~/.ssh/config
+grep -q 'UseKeychain yes' ~/.ssh/config || printf '\nHost *\n  AddKeysToAgent yes\n  UseKeychain yes\n  IdentityFile ~/.ssh/id_ed25519\n' >> ~/.ssh/config
+ssh-keygen -lf ~/.ssh/id_ed25519.pub
+
+# Clean build from the lockfile
+node -v | grep -q '^v22\.' || echo "Warning: Node is $(node -v), this page is written for v22."
+rm -rf node_modules .next out
+npm ci
+npm run build
+{ test -f out/index.html && test -f out/404.html; } || { echo "Build incomplete: no out/index.html or out/404.html."; exit 1; }
+echo "build OK"
+
+# What you ship
+echo "out/ weighs $(du -sh out | cut -f1), $(find out -type f | wc -l | tr -d ' ') files"
+echo "Files over 20 MB (they deploy fine; their weight for visitors is for the launch checklist):"
+find out -type f -size +20M -exec du -h {} +
+
+# Backup status (reported, never fatal)
+dest=$(tmutil destinationinfo 2>&1 || true)
+case "$dest" in
+  *Name*) echo "$dest" | grep -E '^(Name|Kind)' || true ;;
+  *) echo "WARNING: no Time Machine destination. This folder is the only original of the site." ;;
+esac
+latest=$(tmutil latestbackup 2>/dev/null || true)
+if [ -n "$latest" ]; then echo "Latest backup: $latest"
+else echo "WARNING: no latest backup found (none yet, or Terminal lacks Full Disk Access)."; fi
+for d in ${LOCAL_DIR} ${LOCAL_DIR}/photos-26-og; do
+  [ -e "$d" ] || continue
+  tmutil isexcluded "$d" | grep -q '\[Included\]' || echo "WARNING: $d is excluded from Time Machine."
+done
+echo "Done. Next: order the VPS, with ~/.ssh/id_ed25519.pub at hand."
+```
+
+</Run>
+
+## Before you start
+
+You need Node 22 with npm. Everything on this page runs in Terminal on your Mac, in the project folder <V name="LOCAL_DIR" />.
+
+```bash
+node -v
+npm -v
+```
+
+<Guided>If `node` is missing, the LTS installer from nodejs.org is the shortest way; it installs `npm` with it. Homebrew works too, but is not required anywhere on this page.</Guided>
+
+<Note>Next.js 16 needs Node 20.9 or later; this series is tested with Node 22 (Homebrew's `node@22` is keg-only: follow the PATH line `brew` prints). Current LTS lines are listed at nodejs.org/en/about/previous-releases.</Note>
+
+<Deep>Why pin a major version at all: the build runs on this Mac only, so the server never needs Node. But `npm ci` and `next build` behave slightly differently across Node majors (native modules, the bundled npm version), and "it built last month" is only reassuring if the same Node built it. If you juggle several projects, a version manager (fnm, nvm, or Volta) and an `.nvmrc` file containing `22` in the project keep this one on the right version.</Deep>
+
+<Check cmd="node -v | cut -d. -f1" expect="v22" />
+
+## An SSH key for the whole series
+
+One key pair, made once on this Mac, identifies you on every machine in this series: you paste its public half into the OVH order form, and it ends up in `authorized_keys` on the server. Create it **with a passphrase**:
+
+```bash
+ssh-keygen -t ed25519 -C "${USERNAME}@laptop"
+```
+
+<Guided>Accept the default file (`~/.ssh/id_ed25519`) and type a passphrase when asked. The passphrase encrypts the private key on disk: a stolen laptop or a leaked backup then gives the thief a useless file. You will not type it all day, because macOS keeps it in the Keychain and hands the key to the SSH agent.</Guided>
+
+<Warn>If `~/.ssh/id_ed25519` already exists, `ssh-keygen` asks before overwriting. Answer **n** and keep using the existing key: overwriting it cuts you off from every server and service that already trusts it.</Warn>
+
+Store the passphrase in the Keychain and load the key into the agent:
+
+```bash
+ssh-add --apple-use-keychain ~/.ssh/id_ed25519
+```
+
+Then add this block at the end of `~/.ssh/config` (create the file if it does not exist):
+
+```ini title="~/.ssh/config"
+Host *
+  AddKeysToAgent yes
+  UseKeychain yes
+  IdentityFile ~/.ssh/id_ed25519
+```
+
+<Guided>`AddKeysToAgent` loads the key into the agent on first use, `UseKeychain` fetches the passphrase from the Keychain instead of asking you, and `IdentityFile` names the key to offer. After a reboot, the first `ssh` or `rsync` works without a prompt.</Guided>
+
+Keep the public half at hand; the next page asks for it. This copies it to the clipboard:
+
+```bash
+pbcopy < ~/.ssh/id_ed25519.pub
+```
+
+<Deep>
+
+Ed25519 keys are short (a 68-character public key), fast, and have no size or curve parameter you could get wrong, which is why OpenSSH and OVH both recommend them over RSA. Passphrase plus agent gives you both properties you want: the key is encrypted at rest, and unlocked only in memory while you are logged in.
+
+The public half, `~/.ssh/id_ed25519.pub`, is the one you hand out: to OVH at order time (the next page), then into `~/.ssh/authorized_keys` of your accounts on the server (the page after). The private half never leaves this Mac. If you ever suspect it leaked, make a new pair and replace the line in every `authorized_keys`; the old key then opens nothing.
+
+`UseKeychain` only exists in Apple's build of OpenSSH. If you share this config file with a Linux machine, add `IgnoreUnknown UseKeychain` above it. Later pages add `Host vps` and `Host vps-deploy` blocks to the same file; they set other options (`HostName`, `Port`, `User`), so the order of the blocks does not matter here.
+
+</Deep>
+
+<Check cmd="ssh-keygen -lf ~/.ssh/id_ed25519.pub | awk '{print $1, $NF}'" expect="256 (ED25519)" />
+
+## Check the build from scratch
+
+A build that works on your machine can depend on a stale `node_modules` or a leftover `.next` cache. Remove both, reinstall from the lockfile, and build:
+
+```bash
+cd ${LOCAL_DIR} && rm -rf node_modules .next out
+npm ci
+npm run build
+```
+
+<Note>The three deleted folders are all regenerated by the commands that follow; nothing of yours is in them. The `&&` makes sure `rm` only runs if the `cd` succeeded. Do not put quotes around the path: the `~` would no longer expand.</Note>
+
+<Guided>`npm ci` installs exactly what `package-lock.json` records, and fails if `package.json` and the lockfile disagree, where `npm install` would quietly update the lockfile. That makes the build repeatable: the same lockfile gives the same site next month. `npm run build` runs `next build`, which writes the finished site into `out/`.</Guided>
+
+<Deep>
+
+`next.config.ts` sets `output: "export"`: `next build` pre-renders every page to plain HTML and writes it into `out/`, with the hashed JavaScript and CSS under `out/_next/static/`. Nothing runs on the server at request time; any web server that can send files can host it. That is why the rest of the series needs Caddy and rsync, and no Node on the VPS.
+
+`trailingSlash: true` makes every route a folder: `/about` becomes `out/about/index.html`, served as `/about/`. `out/404.html` is the page a static server shows for a missing path; the Caddy page wires it in. Pages that rely on server features (API routes, `cookies()`, on-demand revalidation) make the export fail at build time, which is the moment you want to find out. The contact form and the chess save are stubs for now; a backend for them is a later page.
+
+</Deep>
+
+<Check cmd="cd ${LOCAL_DIR} && test -f out/index.html && test -f out/404.html && echo build OK" expect="build OK" />
+
+## Know what you ship
+
+`out/` is exactly what the server will hold. Look at its size and at the heaviest files in it:
+
+```bash
+du -sh out
+find out -type f -size +20M -exec du -h {} +
+```
+
+<Guided>`next build` copies everything in `public/` into `out/` as is, so the list shows the site's big media: the WAV files of 44 to 55 MB, and some MP4s. Expect `out/` to weigh about what `public/` weighs (around 220 MB) plus a few megabytes of HTML and JavaScript.</Guided>
+
+These files deploy fine as they are. Nothing to compress or move today:
+
+- The first deploy (page 6) uploads everything once; a few hundred megabytes take minutes on a home connection.
+- Every later deploy sends only the files that changed, so an unchanged 55 MB WAV costs nothing after the first time.
+- The VPS disk (40 GB on the smallest OVH plan) holds dozens of releases of a site this size.
+
+What those files cost your **visitors** (a 55 MB download on a phone) is a separate question, handled on the launch checklist (page 8).
+
+<Deep>rsync compares each file with the one already in the live release and only transfers the differences; with `--link-dest`, files identical to the live release are hard-linked on the server instead of copied, so each release costs disk space only for what changed. A fresh build rewrites `out/` and may give unchanged media new modification times, which is why the deploy page decides how rsync recognises an unchanged file. The hashed files in `out/_next/static/` change name when their content changes, which is also why they can be cached for a year.</Deep>
+
+## Back up the project folder
+
+There is no other copy of this site. The folder <V name="LOCAL_DIR" /> holds the only original of the source and of the media; `photos-26-og/` holds the only originals of the photos (276 MB of HEIC and MOV). The server will only ever hold **built copies**, which cannot be turned back into the project.
+
+<Warn>If this Mac dies, is stolen, or the folder is deleted, the site cannot be rebuilt from the server. Do not order anything before a backup covers <V name="LOCAL_DIR" /> and `photos-26-og/`.</Warn>
+
+Time Machine is the simplest backup on a Mac. Check that a destination is set up and when it last ran:
+
+```bash
+tmutil destinationinfo
+tmutil latestbackup
+```
+
+<Guided>`destinationinfo` lists the backup disks (name, kind, mount point); "No destinations configured" means Time Machine is off: set it up in System Settings → General → Time Machine with an external disk or a network share. `latestbackup` prints the path of the last completed backup; its name starts with the date. If it is weeks old, the disk has not been plugged in for weeks.</Guided>
+
+<Note>On recent macOS, `tmutil latestbackup` needs Full Disk Access for Terminal (System Settings → Privacy & Security → Full Disk Access). Without it, the command prints an error or nothing, even if backups are fine. Confirm the current behaviour in `man tmutil` and Apple's Time Machine support pages.</Note>
+
+Then make sure the project folder is not excluded (excluding big folders is a common way to save backup space):
+
+```bash
+tmutil isexcluded ${LOCAL_DIR}
+```
+
+<Guided>The answer starts with `[Included]` or `[Excluded]`. Run it on the `photos-26-og` folder inside the project too. To remove an exclusion: System Settings → General → Time Machine → Options, select the folder, press −.</Guided>
+
+<Check cmd="tmutil isexcluded ${LOCAL_DIR}" expect="[Included]" />
+
+<Deep>
+
+One backup is better than none; the usual target is **3-2-1**: three copies of the data, on two different media, one of them somewhere else. Here, that means the Mac itself, the Time Machine disk on your desk, and a second copy off-site: an external disk you keep at another address and refresh once a month, or an encrypted cloud backup (Backblaze, Arq to any object storage, or similar). A fire or a burglary takes the Mac and the disk next to it together.
+
+iCloud Drive, if "Desktop & Documents" sync is on, is not a backup: a deletion syncs everywhere within seconds. With "Optimize Mac Storage", some files may even exist only in iCloud, which Time Machine does not back up. The OVH automated backup (included, one day of retention) protects the server's copy of the built site, not this folder.
+
+</Deep>
+
+<Deep>The day you publish the code structure on GitHub, write the `.gitignore` excluding the `public/` media and `photos-26-og/` **before** the first commit: anything committed once stays in the history, even if you delete it later. A later page may cover it.</Deep>
+
+## Done
+
+The site builds from an empty folder, you know what `out/` weighs and which files make it heavy, the project folder is covered by a backup, and your Mac has the SSH key the rest of the series relies on, its public half ready to paste.
+
+<Guided>What you carry to the next page: the contents of `~/.ssh/id_ed25519.pub` (one line starting with `ssh-ed25519`), and the confidence that `npm run build` produces a complete `out/`.</Guided>
+
+Next page: **Order the VPS at OVH**, where the public key goes into the order form.

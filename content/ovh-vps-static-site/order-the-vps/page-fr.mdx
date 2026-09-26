@@ -1,0 +1,249 @@
+{/* First pass — to be validated against https://www.ovhcloud.com/fr/vps/ and https://docs.ovhcloud.com/en/guides/bare-metal-cloud/virtual-private-servers/starting-with-a-vps (plus the OVHcloud guide "Securing your OVHcloud account with two-factor authentication") before publishing. */}
+
+Cette page te donne un serveur. Tu protèges d'abord le compte OVH, puis tu commandes un VPS-1 sous Debian 13 nue, dans un datacenter français, avec ta clé SSH préinstallée ; tu attends l'email de livraison, tu notes les deux adresses IP et tu te connectes une première fois en `debian`. L'essentiel se passe en clics dans l'espace client OVH ; le terminal n'arrive qu'à la fin.
+
+<Run>
+
+La commande se passe dans ton navigateur : ce script ne fait que la partie portable. Lance-le **sur ton Mac**, avec ton compte, la clé de la page 1 (Préparer ton portable) étant dans `~/.ssh/id_ed25519.pub`. Ouvre un nouveau fichier `vps-first-contact.sh` sur ton portable, colles-y le bloc de code de cette section, puis lance `bash vps-first-contact.sh`. Premier lancement, avant de commander : il copie la clé publique dans le presse-papiers pour le formulaire de commande et s'arrête, parce que l'IPv4 du panneau des valeurs est encore celle de l'exemple. Second lancement, une fois <V name="SERVER_IP" /> renseignée depuis l'email de livraison : il attend que SSH réponde, puis affiche ce que tu as reçu. Après 10 minutes sans réponse, il s'arrête et affiche la dernière erreur ssh avec les causes probables.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Order the VPS (laptop side) — debian@${SERVER_IP}
+KEY="$HOME/.ssh/id_ed25519.pub"
+if [ ! -f "$KEY" ]; then
+  echo "No $KEY found. Create it first (page 1, Prepare your laptop): ssh-keygen -t ed25519" >&2
+  exit 1
+fi
+pbcopy < "$KEY"
+echo "Public key copied to the clipboard. Paste it in the SSH key field of the OVH order."
+if [ "${SERVER_IP}" = "203.0.113.10" ]; then
+  echo "SERVER_IP is still the example value. Order the VPS, fill SERVER_IP from the delivery email, run again."
+  exit 0
+fi
+echo "Waiting for debian@${SERVER_IP} to answer on SSH (10 minutes at most)..."
+tries=0
+until ERR=$(ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new debian@${SERVER_IP} true 2>&1); do
+  tries=$((tries+1))
+  if [ "$tries" -ge 60 ]; then
+    echo "No SSH answer from debian@${SERVER_IP} after 60 tries. Last error:" >&2
+    echo "$ERR" >&2
+    echo "Likely causes:" >&2
+    echo "  1. SERVER_IP is wrong: compare it with the delivery email and the control panel." >&2
+    echo "  2. No key was added at order: log in with the temporary password, then run ssh-copy-id debian@${SERVER_IP}" >&2
+    echo "  3. The host key changed (VPS reinstalled): run ssh-keygen -R ${SERVER_IP}, then run this script again." >&2
+    exit 1
+  fi
+  sleep 10
+done
+ssh -o BatchMode=yes debian@${SERVER_IP} '
+  grep VERSION_CODENAME /etc/os-release
+  echo "vCores: $(nproc)"
+  free -h | grep Mem
+  df -h /
+  ip -6 addr show scope global
+'
+echo "Reachable. Next page: Secure the server in the first hour. Do it now."
+```
+
+<Warn>Le script ne commande et ne paie rien, mais `StrictHostKeyChecking=accept-new` fait confiance à la clé d'hôte du serveur au premier contact sans te la montrer. La partie Exhaustif de « Première connexion » montre comment la comparer avec la console KVM.</Warn>
+
+</Run>
+
+## Avant de commencer
+
+Il te faut quatre choses :
+
+- Un compte OVHcloud, créé sur [ovhcloud.com/fr](https://www.ovhcloud.com/fr/). Il te donne un identifiant client (NIC handle, du genre `ab12345-ovh`) et l'accès à l'espace client.
+- Un moyen de paiement enregistré sur ce compte : carte, PayPal ou prélèvement SEPA.
+- Ta clé SSH publique, créée en page 1, Préparer ton portable.
+- Rien côté domaine : il reste enregistré et hébergé chez Infomaniak. Tu le fais pointer vers le VPS en page 4, sans transfert.
+
+```bash
+cat ~/.ssh/id_ed25519.pub
+```
+
+<Check cmd="cat ~/.ssh/id_ed25519.pub" expect="ssh-ed25519 AAAA…" />
+
+<Guided>Cette ligne unique, c'est la moitié publique de ta paire de clés. Tu peux la coller dans un formulaire web sans crainte : elle permet seulement à un serveur de te reconnaître, elle ne sert pas à se connecter à elle seule. La moitié privée, `~/.ssh/id_ed25519` sans `.pub`, ne quitte jamais ton Mac.</Guided>
+
+## Protéger le compte OVH
+
+Avant de commander quoi que ce soit, active la double authentification. Dans l'espace client, ouvre ton compte (tes initiales, en haut à droite) → **Sécurité** → **Double authentification**, et ajoute une méthode.
+
+<Warn>Ce compte contrôle la facturation, le VPS, sa console, son mode rescue et son bouton de réinstallation. Qui entre dans ce compte a le serveur, quoi que tu fasses en page 3. Protège-le en premier.</Warn>
+
+Trois méthodes sont proposées : une application d'authentification (TOTP), une clé de sécurité (FIDO/U2F) ou le SMS. Préfère l'application ou une clé ; le SMS est la plus faible des trois. À l'ajout de la première méthode, OVH affiche des codes de secours : range-les dans ton gestionnaire de mots de passe, à côté du mot de passe du compte.
+
+<Guided>TOTP, c'est l'appli de ton téléphone (1Password, Bitwarden, Google Authenticator, Aegis…) qui affiche un code à six chiffres renouvelé toutes les 30 secondes. Tu scannes un QR code une fois ; ensuite, la connexion demande le mot de passe et le code du moment. Perdre le téléphone sans les codes de secours, c'est une procédure auprès du support avec pièces d'identité, qui prend des jours.</Guided>
+
+<Deep>Ajoute deux méthodes si tu peux : l'appli plus une clé physique, ou l'appli sur deux appareils. OVH en accepte plusieurs, et n'importe laquelle déverrouille le compte. Vérifie aussi l'email de contact du compte : les réinitialisations de mot de passe et toutes les notifications du VPS y arrivent, il doit donc s'agir d'une adresse que tu lis et qui est elle-même protégée.</Deep>
+
+<Note>OVH déplace ses menus de temps en temps. Si le chemin ci-dessus a changé, cherche dans la documentation OVHcloud le guide « Sécuriser son compte OVHcloud avec la double authentification ».</Note>
+
+## Choisir le modèle
+
+Sur [ovhcloud.com/fr/vps](https://www.ovhcloud.com/fr/vps/), prends le **VPS-1** et clique sur Commander. La gamme en septembre 2026 :
+
+| Modèle | vCores | RAM | Disque NVMe | À partir de, par mois TTC |
+|---|---|---|---|---|
+| VPS-1 | 2 | 4 Go | 40 Go | 4,57 € (3,81 € HT) |
+| VPS-2 | 4 | 8 Go | 75 Go | 8,65 € |
+| VPS-3 | 6 | 12 Go | 100 Go | 12,48 € |
+| VPS-4 | 8 | 24 Go | 200 Go | 23,95 € |
+
+<Note>Les prix bougent et les promotions vont et viennent. Vérifie le prix du moment sur ovhcloud.com/fr/vps avant de commander.</Note>
+
+Le VPS-1 suffit largement. Le site est statique : Caddy lit des fichiers sur le disque et les envoie. Quelques centaines de visites par jour consomment bien moins de 1 % d'un vCore. Les 40 Go de disque contiennent le système (environ 2 Go), une vingtaine de versions du site (~217 Mo chacune, et en grande partie liées entre elles par liens physiques, voir page 6), les journaux et les sauvegardes locales.
+
+<Guided>Un **vCore**, c'est une part d'un cœur de processeur physique, réservée pour toi ; deux, c'est confortable pour un serveur web plus un `apt upgrade` de temps en temps. La **RAM**, c'est la mémoire de travail ; Caddy en prend quelques dizaines de Mo, Debian elle-même environ 200 Mo, donc 4 Go laissent de la place pour le backend que tu ajouteras plus tard. **NVMe**, c'est le type de SSD ; il rend la lecture des fichiers rapide, et lire des fichiers, c'est l'essentiel du travail d'un site statique.</Guided>
+
+<Deep>
+
+- **Trafic** : la gamme est vendue en trafic illimité ; ce qui change d'un modèle à l'autre, c'est le débit maximal, annoncé jusqu'à 3 Gbit/s en haut de gamme. Avec des fichiers WAV de 44 à 55 Mo sur le site, le débit décide de la vitesse à laquelle un visiteur les reçoit, pas de ce que tu paies. Lis la ligne débit du modèle choisi.
+- **Engagement** : le formulaire propose sans engagement (au mois) ou un engagement de 12 ou 24 mois avec remise. Le mensuel coûte un peu plus et te laisse partir n'importe quel mois ; pour un premier serveur, ça vaut le coup.
+- **TVA** : les prix « HT » excluent les 20 % de TVA ; en tant que particulier, tu paies le prix TTC.
+- **Changer de modèle plus tard** : monter vers un modèle plus gros se fait depuis l'espace client, garde les données et l'IP, et demande un redémarrage. Redescendre n'est en général pas possible, parce qu'un disque ne rétrécit pas. Commence petit.
+
+</Deep>
+
+<Note>Les règles de montée/descente de gamme et le débit par modèle viennent de la page produit OVH et peuvent changer : confirme-les sur ovhcloud.com/fr/vps et dans les guides VPS d'OVH.</Note>
+
+## Choisir le datacenter
+
+Dans le formulaire, choisis une localisation en **France** : Gravelines, Roubaix, Strasbourg ou Paris, selon ce qui est disponible pour le modèle.
+
+<Guided>Tes lecteurs sont surtout en France : un datacenter français, c'est 5 à 20 ms d'aller-retour au lieu de 80 à 150 ms depuis l'Amérique du Nord ou l'Asie, et ça se voit sur chaque image que charge la page. Des données hébergées en France gardent aussi le volet RGPD trivial : aucun transfert hors UE à documenter.</Guided>
+
+<Deep>La localisation est figée pour toute la vie du VPS : l'IPv4 et l'IPv6 appartiennent au réseau de ce datacenter. Déménager, c'est commander un nouveau VPS ailleurs, migrer, puis changer le DNS. Certaines localisations ont un tarif différent ; le formulaire affiche le prix final par localisation avant la validation.</Deep>
+
+## Choisir l'image : Debian 13
+
+Pour l'image, prends **Debian 13** parmi les images « distribution seule ». Pas d'image avec Plesk, cPanel, Docker ou une application préinstallée.
+
+Si seule Debian 12 est proposée, prends-la : chaque page de cette série fonctionne pareil en 12 et en 13.
+
+<Guided>Un panneau comme Plesk ou cPanel installe son propre serveur web, son serveur mail et sa base de données, tous à l'écoute sur internet, tous à tenir à jour. Cette série installe un seul service, Caddy, et tu connaîtras chaque port ouvert. C'est l'image nue qui rend ça possible.</Guided>
+
+<Deep>Debian est choisie parce qu'elle est ennuyeuse : une version stable tous les deux ans, des mises à jour de sécurité pendant environ trois ans, puis deux ans de plus en LTS, soit à peu près cinq ans par version sans mise à niveau surprise. Ubuntu LTS est l'alternative habituelle et marcherait avec des changements mineurs (même `apt`, même `ufw`, mêmes paquets Caddy) ; la série est écrite et testée pour Debian uniquement.</Deep>
+
+## Ajouter ta clé SSH
+
+Le formulaire propose un champ facultatif pour une clé SSH. Colles-y ta clé publique (la ligne entière `ssh-ed25519 AAAA… commentaire`) et donne-lui un nom, par exemple `laptop`.
+
+```bash
+pbcopy < ~/.ssh/id_ed25519.pub
+```
+
+<Guided>Avec la clé préinstallée, ta première connexion ne demande aucun mot de passe : le serveur connaît déjà ta clé publique quand il démarre. Sans elle, tu te connecterais avec le mot de passe temporaire de l'email et tu copierais la clé toi-même avec `ssh-copy-id`.</Guided>
+
+<Deep>OVH transmet la clé à **cloud-init**, l'outil de premier démarrage des images cloud. Au premier boot, cloud-init crée l'utilisateur `debian`, écrit ta clé dans `/home/debian/.ssh/authorized_keys`, donne à `debian` un sudo sans mot de passe dans `/etc/sudoers.d/90-cloud-init-users`, et peut écrire `/etc/ssh/sshd_config.d/50-cloud-init.conf` avec `PasswordAuthentication yes`. La page 3 s'occupe de ce fichier.</Deep>
+
+## Options et engagement
+
+La **sauvegarde automatique** avec un jour de rétention est incluse dans le prix : laisse-la active. Le reste est facultatif :
+
+- **Sauvegarde premium**, à partir d'environ 1,32 € TTC par mois : garde plus de jours de sauvegardes. Pas nécessaire ici ; la page 7 met en place la sauvegarde de ce qui compte.
+- **Snapshot**, à partir d'environ 0,36 € TTC par mois : une copie manuelle, à un instant donné, du VPS entier, que tu restaures en un clic. Prends-le : les pages 3 et 7 s'en servent avant les changements risqués.
+
+<Warn>Une commande, c'est un contrat. Avant de payer, relis le récapitulatif : modèle, localisation, options, **durée d'engagement** et total TTC. Un engagement de 12 ou 24 mois ne se résilie pas en avance avec remboursement, et les options sont facturées chaque mois tant que tu ne les retires pas.</Warn>
+
+<Note>Les prix des options et la rétention de la sauvegarde incluse viennent de la page VPS d'OVH en septembre 2026. Vérifie-les sur ovhcloud.com/fr/vps et dans le récapitulatif de commande.</Note>
+
+<Deep>La sauvegarde automatique et les snapshots sont stockés par OVH hors de ton VPS : ils survivent à un disque cassé ou à une mauvaise réinstallation. Ce n'est pas pour autant une copie externe sous ton contrôle : si le compte OVH est perdu ou le service résilié, ils partent avec. C'est pour ça que la page 7 copie aussi le site et la configuration sur ton portable.</Deep>
+
+<Guided>Sur une première commande, OVH peut demander une vérification supplémentaire de ton identité ou de ton paiement avant de lancer l'installation. Réponds vite : la livraison l'attend.</Guided>
+
+## Livraison : adresses IP et mot de passe
+
+La livraison prend en général quelques minutes, parfois quelques heures. Tu reçois un email avec l'adresse IPv4, le nom d'utilisateur `debian` et un lien sécurisé vers le mot de passe temporaire.
+
+<Warn>Le lien du mot de passe ne s'ouvre qu'une fois et il expire. Ouvre-le, copie le mot de passe directement dans ton gestionnaire de mots de passe, puis ferme la page. Jusqu'à la page 3, c'est lui qui t'ouvre la console KVM.</Warn>
+
+Ensuite, trouve les deux adresses dans l'espace client : **Bare Metal Cloud** → **Serveurs privés virtuels** → ton VPS → **Accueil**, section **IP**. Copie l'IPv4 et l'IPv6 (sans le `/préfixe`).
+
+**Renseigne <V name="SERVER_IP" /> et <V name="SERVER_IPV6" /> dans le panneau des valeurs maintenant.** Toutes les commandes qui suivent s'en servent.
+
+<Guided>L'IPv4, c'est l'adresse que la plupart des visiteurs atteignent. L'IPv6 est son équivalent dans le protocole plus récent ; une grosse part des connexions françaises, fixes comme mobiles, l'utilisent en priorité. La page 4 met les deux dans le DNS, en enregistrement A et AAAA.</Guided>
+
+<Deep>Le nom du VPS dans l'espace client, du genre `vps-a1b2c3d4.vps.ovh.net`, est aussi un nom DNS valide pour l'IPv4. Pratique tant que ton domaine ne pointe pas encore vers le serveur, mais ne l'utilise pas dans la configuration du site : il change si tu passes un jour sur un nouveau VPS.</Deep>
+
+<Note>OVH fait évoluer l'email de livraison. Si tu as donné une clé à la commande et que l'email ne contient pas de lien de mot de passe, il n'y a pas encore de mot de passe : définis-en un après ta première connexion avec `sudo passwd debian`, pour que la console KVM fonctionne.</Note>
+
+## Première connexion
+
+Connecte-toi avec ta clé, en `debian` :
+
+```bash
+ssh debian@${SERVER_IP}
+```
+
+La première fois, ssh affiche l'empreinte de la clé du serveur et demande s'il faut continuer. Réponds `yes`.
+
+<Guided>C'est la « confiance au premier usage ». Le serveur prouve son identité avec une clé d'hôte ; ssh ne l'a jamais vue, donc il te pose la question. Une fois que tu as dit oui, l'empreinte va dans `~/.ssh/known_hosts`, et tout changement ultérieur déclenche un avertissement bien visible. C'est cet avertissement qui te protège de quelqu'un qui se ferait passer pour le serveur plus tard.</Guided>
+
+<Deep>
+
+Pour que le premier contact soit vérifié plutôt que présumé, compare les empreintes. Ouvre la console KVM (étape suivante), connecte-toi en `debian` avec le mot de passe temporaire, et lance :
+
+```bash
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+```
+
+La valeur `SHA256:…` doit correspondre à celle que ssh a affichée sur ton Mac, après « ED25519 key fingerprint is ». Sinon, réponds `no` et comprends pourquoi avant d'aller plus loin.
+
+</Deep>
+
+Vérifie que c'est bien Debian 13 sur le modèle commandé, avec sudo fonctionnel :
+
+<Check cmd="ssh debian@${SERVER_IP} 'grep VERSION_CODENAME /etc/os-release'" expect="VERSION_CODENAME=trixie" />
+
+<Check cmd="ssh debian@${SERVER_IP} nproc" expect="2" />
+
+<Check cmd="ssh debian@${SERVER_IP} 'sudo -n true && echo OK'" expect="OK" />
+
+Sur Debian 12, le nom de code est `bookworm`. Sur un VPS-2, `nproc` affiche `4`.
+
+Vérifie ensuite que l'adresse IPv6 est bien configurée sur le serveur lui-même :
+
+<Check cmd="ssh debian@${SERVER_IP} 'ip -6 -brief addr show scope global'" expect="${SERVER_IPV6}" />
+
+<Details summary="Si aucune adresse IPv6 n'apparaît">
+
+Sur les images récentes, OVH configure l'IPv6 au premier démarrage. Si la commande n'affiche rien, suis le guide OVH « Configurer l'IPv6 sur un VPS » (docs.ovhcloud.com) : sur les images récentes, il ajoute un fichier netplan, `/etc/netplan/51-cloud-init-ipv6.yaml`. Règle ça avant la page 4 : un enregistrement AAAA qui pointe vers une adresse sur laquelle le serveur ne répond pas, c'est pire que pas d'AAAA du tout.
+
+</Details>
+
+<Details summary="Si ssh affiche REMOTE HOST IDENTIFICATION HAS CHANGED">
+
+Normal uniquement si tu as réinstallé le VPS : le nouveau système a une nouvelle clé d'hôte. Retire l'ancienne de ton Mac, puis reconnecte-toi et accepte la nouvelle.
+
+```bash
+ssh-keygen -R ${SERVER_IP}
+```
+
+Si tu n'as rien réinstallé, arrête-toi et regarde d'abord la console.
+
+</Details>
+
+## Savoir revenir à la main
+
+Trois outils de l'espace client te sauvent quand SSH ne répond plus. Repère-les maintenant, tant que rien n'est cassé. Les trois sont sur la page du VPS dans l'espace client :
+
+- **Console KVM** : le bouton `...` à côté du nom du VPS → **KVM**. Un écran et un clavier branchés sur le VPS, dans ton navigateur. Elle marche même avec SSH arrêté ou le pare-feu fermé. On s'y connecte avec un mot de passe, jamais avec une clé.
+- **Mode rescue** : démarre un petit système à part et monte ton disque, pour réparer un fichier cassé. Les identifiants du rescue arrivent par email.
+- **Réinstaller** : pose une image neuve sur le VPS.
+
+Ouvre la console KVM une fois maintenant et connecte-toi en `debian` avec le mot de passe temporaire. S'il est refusé, définis-en un nouveau par SSH avec `sudo passwd debian` et réessaie : cette porte doit être testée avant la page 3.
+
+<Warn>**Réinstaller efface le disque.** Tout ce qui est sur le VPS disparaît, et les adresses IP restent les mêmes. À n'utiliser que sur un serveur sans rien à perdre, ou après un snapshot.</Warn>
+
+<Guided>La page 3 déplace SSH sur un autre port, refuse les mots de passe et ferme le pare-feu. Une erreur à ce moment-là et SSH ne répond plus. La console KVM, c'est ce qui te permet de revenir pour corriger, d'où l'intérêt d'avoir un mot de passe qui y fonctionne avant d'attaquer la page 3.</Guided>
+
+<Deep>La console KVM est une session VNC sur l'écran de la machine virtuelle, relayée par OVH : elle contourne complètement la pile réseau de ton VPS, c'est pour ça qu'un pare-feu fermé ne la gêne pas. La disposition du clavier peut être fausse (la console suppose souvent un QWERTY), donc un mot de passe fait seulement de lettres et de chiffres fait gagner du temps. Le mode rescue redémarre le VPS : ne t'en sers que quand la console ne suffit pas.</Deep>
+
+## Terminé
+
+Tu as un VPS Debian 13 dans un datacenter français, joignable en `debian` avec ta clé, ses IPv4 et IPv6 dans le panneau des valeurs, la console testée, et un compte OVH sous double authentification.
+
+Le serveur est déjà sur internet avec SSH sur le port 22, et des robots l'essaient déjà. Passe à la page suivante, **Sécuriser le serveur dans la première heure**, maintenant : elle crée <V name="USERNAME" />, déplace SSH sur le port <V name="SSH_PORT" />, refuse les mots de passe et active le pare-feu.

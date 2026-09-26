@@ -1,0 +1,33 @@
+# Inherits from ../series.yaml: SERVER_IP, SERVER_IPV6, USERNAME, SSH_PORT, DEPLOY_USER, DOMAIN, WEB_ROOT, ADMIN_EMAIL, LOCAL_DIR.
+title:
+  en: Deploy atomic releases with rsync
+  fr: Déployer des versions atomiques avec rsync
+summary:
+  en: >-
+    One command on your laptop builds the site, uploads only what changed into a new release
+    directory, switches the live site to it in a single atomic step, keeps the last few releases and
+    checks the result. Rollback is one command too.
+  fr: >-
+    Une commande sur ton portable construit le site, envoie seulement ce qui a changé dans un nouveau
+    répertoire de version, bascule le site en ligne dessus en une seule étape atomique, garde les
+    dernières versions et vérifie le résultat. Le retour arrière tient aussi en une commande.
+difficulty: intermediate
+tags: [deploy, rsync, ssh, symlink, rollback]
+authors: [thudal]
+created: 2026-09-26
+minutes: 30
+validated: Debian 13 (trixie) · rsync 3.x · macOS 15
+status: draft             # not yet run end to end by its author
+
+vars:
+  - key: KEEP_RELEASES
+    kind: text
+    group: site
+    default: "5"
+    label: { en: Releases to keep, fr: Versions à garder }
+    hint:
+      en: How many releases stay on the server after each deploy, the live one included. Older ones are deleted.
+      fr: Combien de versions restent sur le serveur après chaque déploiement, celle en ligne comprise. Les plus anciennes sont supprimées.
+    impact:
+      en: "It is also how far back you can roll back. Each release shares unchanged files with the previous one, so 5 costs little disk; 1 leaves nothing to roll back to. Must be at least 1: the deploy script refuses 0, which would delete the live release."
+      fr: "C'est aussi jusqu'où tu peux revenir en arrière. Chaque version partage les fichiers inchangés avec la précédente, donc 5 coûte peu de disque ; 1 ne laisse rien vers quoi revenir. Au moins 1 : le script de déploiement refuse 0, qui supprimerait la version en ligne."

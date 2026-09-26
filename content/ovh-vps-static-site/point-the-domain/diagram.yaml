@@ -1,0 +1,175 @@
+# Quick: the lookup path, visitor → resolver → Infomaniak zone → VPS, and the CA reading CAA.
+# Guided: the www CNAME and the CAA record as their own boxes. Deep: the DNSSEC chain from the
+# registry, receiving mail servers checking SPF/DMARC, and the reverse (PTR) record at OVH.
+title: { en: "Who answers, and with what", fr: "Qui répond, et quoi" }
+caption:
+  en: "A visitor's resolver asks the Infomaniak zone where ${DOMAIN} lives and gets the VPS's addresses. The same zone tells certificate authorities who may issue for the domain, and mail servers whether a message in its name is genuine."
+  fr: "Le résolveur d'un visiteur demande à la zone Infomaniak où vit ${DOMAIN} et reçoit les adresses du VPS. La même zone dit aux autorités de certification qui peut émettre pour le domaine, et aux serveurs de mail si un message en son nom est authentique."
+
+groups:
+  - id: infomaniak
+    label: { en: "Infomaniak", fr: "Infomaniak" }
+    desc:
+      en: "Registrar and DNS host of ${DOMAIN}. Everything you edit on this page lives here, in the Manager's Zone DNS."
+      fr: "Bureau d'enregistrement et hébergeur DNS de ${DOMAIN}. Tout ce que tu modifies sur cette page vit ici, dans la Zone DNS du Manager."
+  - id: ovh
+    label: { en: "OVH", fr: "OVH" }
+    desc:
+      en: "Where the VPS runs, and the owner of its IP addresses (hence of their reverse DNS)."
+      fr: "Là où tourne le VPS, et le propriétaire de ses adresses IP (donc de leur reverse DNS)."
+
+nodes:
+  - id: visitor
+    kind: user
+    label: { en: "A visitor", fr: "Un visiteur" }
+    sub: "https://${DOMAIN}"
+    desc:
+      en: "Types the domain in a browser. Before any HTTPS, the browser needs an IP address for the name."
+      fr: "Tape le domaine dans un navigateur. Avant tout HTTPS, le navigateur a besoin d'une adresse IP pour ce nom."
+  - id: resolver
+    kind: net
+    label: { en: "Resolver", fr: "Résolveur" }
+    sub: "ISP · 1.1.1.1 · 9.9.9.9"
+    desc:
+      en: "The visitor's DNS resolver. It asks the authoritative servers and caches the answer for the TTL, which is why changes take minutes to an hour to spread."
+      fr: "Le résolveur DNS du visiteur. Il interroge les serveurs faisant autorité et garde la réponse en cache pendant le TTL : c'est pour ça qu'un changement met de quelques minutes à une heure à se propager."
+    deep:
+      sub: "recursive · caches for TTL · validates DNSSEC"
+  - id: zone
+    kind: store
+    label: { en: "DNS zone", fr: "Zone DNS" }
+    sub: "ns11 / ns12.infomaniak.ch"
+    in: infomaniak
+    focus: true
+    desc:
+      en: "The zone of ${DOMAIN}: A and AAAA to the VPS, CAA, and the mail records. Only used because the domain's nameservers are Infomaniak's."
+      fr: "La zone de ${DOMAIN} : A et AAAA vers le VPS, CAA, et les enregistrements email. Utilisée seulement parce que les serveurs de noms du domaine sont ceux d'Infomaniak."
+    guided:
+      sub: "A ${SERVER_IP} · AAAA ${SERVER_IPV6}"
+    deep:
+      sub: "@ A ${SERVER_IP} · @ AAAA ${SERVER_IPV6} · TTL 300 → 3600"
+  - id: vps
+    kind: server
+    label: { en: "Your VPS", fr: "Ton VPS" }
+    sub: "${SERVER_IP}"
+    in: ovh
+    desc:
+      en: "The server the addresses lead to. It serves nothing on 80/443 until the next page installs Caddy."
+      fr: "Le serveur vers lequel mènent les adresses. Il ne sert rien sur 80/443 avant que la page suivante installe Caddy."
+    deep:
+      sub: "${SERVER_IP} · ${SERVER_IPV6}"
+  - id: ca
+    kind: cloud
+    label: { en: "Let's Encrypt", fr: "Let's Encrypt" }
+    sub: "ACME CA"
+    desc:
+      en: "Issues the certificate on the next page. Before issuing, it must read the CAA record and refuse if it is not listed."
+      fr: "Émet le certificat à la page suivante. Avant d'émettre, il doit lire l'enregistrement CAA et refuser s'il n'y figure pas."
+    guided:
+      sub: "letsencrypt.org"
+  - id: www
+    kind: file
+    label: { en: "www record", fr: "Enregistrement www" }
+    sub: "CNAME → ${DOMAIN}."
+    in: infomaniak
+    level: guided
+    desc:
+      en: "www is an alias of the apex: one place to change the IP. Caddy redirects it to the apex but needs it to resolve to get its certificate."
+      fr: "www est un alias de l'apex : un seul endroit où changer l'IP. Caddy le redirige vers l'apex mais a besoin qu'il résolve pour obtenir son certificat."
+  - id: caa
+    kind: file
+    label: { en: "CAA record", fr: "Enregistrement CAA" }
+    sub: "0 issue letsencrypt.org"
+    in: infomaniak
+    level: guided
+    desc:
+      en: "Names the certificate authorities allowed to issue for ${DOMAIN}. Any other CA must refuse."
+      fr: "Nomme les autorités de certification autorisées à émettre pour ${DOMAIN}. Toute autre autorité doit refuser."
+    deep:
+      sub: "issue letsencrypt.org · iodef mailto:${ADMIN_EMAIL}"
+  - id: registry
+    kind: cloud
+    label: { en: "TLD registry", fr: "Registre de l'extension" }
+    sub: "DS record"
+    level: deep
+    when: { flag: DNSSEC }
+    desc:
+      en: "Publishes the NS delegation and, with DNSSEC, a DS hash of the zone's key. Resolvers chain trust from the root through it to your zone."
+      fr: "Publie la délégation NS et, avec DNSSEC, un condensat DS de la clé de la zone. Les résolveurs enchaînent la confiance depuis la racine, à travers lui, jusqu'à ta zone."
+  - id: mailservers
+    kind: cloud
+    label: { en: "Receiving mail servers", fr: "Serveurs de mail destinataires" }
+    sub: "Gmail, Outlook…"
+    level: deep
+    when: { is: MAIL, equals: none }
+    desc:
+      en: "When a message claims to be from ${DOMAIN}, they read SPF and DMARC in the zone: no server is allowed, so the forgery is rejected."
+      fr: "Quand un message prétend venir de ${DOMAIN}, ils lisent SPF et DMARC dans la zone : aucun serveur n'est autorisé, donc le faux est rejeté."
+  - id: ptr
+    kind: file
+    label: { en: "Reverse DNS", fr: "Reverse DNS" }
+    sub: "PTR ${SERVER_IP} → ${DOMAIN}"
+    in: ovh
+    level: deep
+    desc:
+      en: "Optional. Maps the IP back to the name. Set in the OVH panel because OVH owns the address block; needed if the server ever sends mail."
+      fr: "Facultatif. Fait correspondre l'IP au nom. Se règle dans l'espace OVH car OVH possède le bloc d'adresses ; nécessaire si le serveur envoie un jour du mail."
+
+edges:
+  - from: visitor
+    to: resolver
+    label: "${DOMAIN} ?"
+    desc: { en: "The browser asks its resolver for the name's addresses.", fr: "Le navigateur demande à son résolveur les adresses du nom." }
+  - from: resolver
+    to: zone
+    label: "A · AAAA ?"
+    deep: { label: "UDP/TCP 53 · A · AAAA · DO bit" }
+    desc: { en: "On a cache miss, the resolver asks Infomaniak's authoritative servers.", fr: "Faute de réponse en cache, le résolveur interroge les serveurs faisant autorité d'Infomaniak." }
+  - from: zone
+    to: vps
+    label: "${SERVER_IP}"
+    guided: { label: "A ${SERVER_IP} · AAAA" }
+    desc: { en: "The answer: the VPS's addresses. The browser then connects to the server directly.", fr: "La réponse : les adresses du VPS. Le navigateur se connecte ensuite directement au serveur." }
+  - from: visitor
+    to: vps
+    label: "HTTPS (next page)"
+    dashed: true
+    desc: { en: "Once the address is known, the browser talks to the VPS. Caddy answers there from the next page on.", fr: "Une fois l'adresse connue, le navigateur parle au VPS. Caddy y répond à partir de la page suivante." }
+  - from: ca
+    to: zone
+    label: "reads CAA"
+    dashed: true
+    max: quick
+    desc: { en: "At issuance, the CA checks that it is allowed for this domain.", fr: "Au moment d'émettre, l'autorité vérifie qu'elle a le droit pour ce domaine." }
+  - from: ca
+    to: caa
+    label: "reads CAA"
+    dashed: true
+    level: guided
+    desc: { en: "At issuance, the CA reads the CAA record and refuses if it is not named.", fr: "Au moment d'émettre, l'autorité lit l'enregistrement CAA et refuse si elle n'est pas nommée." }
+  - from: www
+    to: zone
+    label: "alias of @"
+    dashed: true
+    level: guided
+    desc: { en: "Resolving www follows the CNAME to the apex and returns the same addresses.", fr: "Résoudre www suit le CNAME jusqu'à l'apex et renvoie les mêmes adresses." }
+  - from: registry
+    to: zone
+    label: "DS · chain of trust"
+    dashed: true
+    level: deep
+    when: { flag: DNSSEC }
+    desc: { en: "The DS at the registry vouches for the zone's key; validating resolvers reject answers whose signature does not match.", fr: "Le DS au registre garantit la clé de la zone ; les résolveurs validants rejettent les réponses dont la signature ne correspond pas." }
+  - from: mailservers
+    to: zone
+    label: "SPF · DMARC → reject"
+    dashed: true
+    level: deep
+    when: { is: MAIL, equals: none }
+    desc: { en: "v=spf1 -all and p=reject: any mail in the domain's name fails and is refused.", fr: "v=spf1 -all et p=reject : tout mail au nom du domaine échoue et est refusé." }
+  - from: ptr
+    to: vps
+    label: "PTR"
+    dashed: true
+    level: deep
+    desc: { en: "The reverse lookup of the VPS's IP returns ${DOMAIN}, matching the forward A record.", fr: "La recherche inverse de l'IP du VPS renvoie ${DOMAIN}, en accord avec l'enregistrement A." }

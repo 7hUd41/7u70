@@ -1,0 +1,42 @@
+# Inherits from ../series.yaml: SERVER_IP, SERVER_IPV6, USERNAME, SSH_PORT, DEPLOY_USER, DOMAIN, WEB_ROOT, ADMIN_EMAIL, LOCAL_DIR.
+# No page variables. Two choices that change the Caddyfile: how long browsers remember HTTPS-only, and whether access logs keep full IPs.
+title:
+  en: Serve the site with Caddy and HTTPS
+  fr: Servir le site avec Caddy et HTTPS
+summary:
+  en: >-
+    Caddy installed from its official repository, serving a placeholder page from the web root
+    over HTTPS with a Let's Encrypt certificate it renews by itself. www and plain HTTP redirect to
+    the apex, HTTP/3 is on, security headers and caching are set, access logs are rotated.
+  fr: >-
+    Caddy installé depuis son dépôt officiel, qui sert une page d'attente depuis la racine web en
+    HTTPS, avec un certificat Let's Encrypt qu'il renouvelle tout seul. www et le HTTP simple
+    redirigent vers le domaine racine, HTTP/3 est actif, les en-têtes de sécurité et le cache sont
+    réglés, les logs d'accès tournent.
+difficulty: intermediate
+tags: [caddy, https, lets-encrypt, web-server, debian]
+authors: [thudal]
+created: 2026-09-26
+minutes: 20
+validated: Caddy 2.11 · Debian 13 (trixie)
+status: draft             # not yet run end to end by its author
+
+choices:
+  - key: HSTS
+    type: select
+    label: { en: HSTS (browsers remember HTTPS-only), fr: HSTS (les navigateurs retiennent le HTTPS obligatoire) }
+    hint:
+      en: How long a browser that visited once refuses plain HTTP for your domain. Start short while you test, move to a year once everything works.
+      fr: Combien de temps un navigateur déjà venu refuse le HTTP simple pour ton domaine. Commence court pendant les tests, passe à un an quand tout marche.
+    default: short
+    options:
+      - { value: "off", label: { en: Off (max-age=0), fr: Désactivé (max-age=0) } }
+      - { value: short, label: { en: 1 day while testing, fr: 1 jour pendant les tests } }
+      - { value: year, label: { en: 1 year, fr: 1 an } }
+  - key: ANON_LOGS
+    type: boolean
+    label: { en: Mask visitor IPs in access logs, fr: Masquer les IP des visiteurs dans les logs }
+    hint:
+      en: Keeps only the first half of each IPv4 address (/16) and the first 32 bits of IPv6. Enough to spot abuse by network, not to identify a person. Fits a site that says nothing is tracked.
+      fr: Ne garde que la première moitié de chaque IPv4 (/16) et les 32 premiers bits d'une IPv6. Assez pour repérer un abus par réseau, pas pour identifier une personne. Cohérent avec un site qui dit ne rien suivre.
+    default: true

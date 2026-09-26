@@ -1,0 +1,136 @@
+# Inherits from ../series.yaml: SERVER_IP, SERVER_IPV6, USERNAME, SSH_PORT, DEPLOY_USER, DOMAIN, WEB_ROOT, ADMIN_EMAIL, LOCAL_DIR.
+title:
+  en: Backups, monitoring and the monthly routine
+  fr: Sauvegardes, surveillance et la routine mensuelle
+summary:
+  en: >-
+    Know what is worth saving on the server and what is not. An encrypted off-site copy made every
+    night by restic, with a restore you have actually tested; an email when the site goes down or
+    the backup did not run; logs that cannot fill the disk; and a ten-minute check once a month.
+  fr: >-
+    Savoir ce qui mérite d'être sauvegardé sur le serveur, et ce qui ne le mérite pas. Une copie
+    chiffrée hors site faite chaque nuit par restic, avec une restauration réellement testée ; un
+    email quand le site tombe ou que la sauvegarde n'a pas tourné ; des logs qui ne peuvent plus
+    remplir le disque ; et dix minutes de vérification une fois par mois.
+difficulty: intermediate
+tags: [backup, restic, s3, monitoring, systemd, ovh, debian]
+authors: [thudal]
+created: 2026-09-26
+minutes: 40
+validated: Debian 13 (trixie) · restic 0.17+ · OVH Object Storage (S3)
+status: draft             # not yet run end to end by its author
+
+groups:
+  - id: backup
+    label: { en: Off-site backup, fr: Sauvegarde hors site }
+    desc: { en: Where the encrypted copy goes and when it is made., fr: Où part la copie chiffrée et quand elle est faite. }
+    when: { is: OFFSITE, equals: s3 }
+  - id: monitoring
+    label: { en: Monitoring, fr: Surveillance }
+    desc: { en: Who tells you when something stops., fr: Qui te prévient quand quelque chose s'arrête. }
+    when: { flag: HEALTHCHECK }
+
+vars:
+  - key: S3_ENDPOINT
+    kind: url
+    group: backup
+    default: https://s3.gra.io.cloud.ovh.net
+    label: { en: S3 endpoint, fr: Point d'accès S3 }
+    hint:
+      en: The S3 URL of your object storage region, without the bucket name. OVH Gravelines (GRA) standard storage by default.
+      fr: L'URL S3 de la région de ton stockage objet, sans le nom du bucket. Par défaut, le stockage standard OVH de Gravelines (GRA).
+    impact:
+      en: Part of the restic repository address. A wrong region gives "bucket not found" or a signature error at restic init.
+      fr: Fait partie de l'adresse du dépôt restic. Une mauvaise région donne « bucket not found » ou une erreur de signature au restic init.
+    when: { is: OFFSITE, equals: s3 }
+  - key: S3_BUCKET
+    kind: text
+    group: backup
+    default: thudal-backups
+    label: { en: Bucket name, fr: Nom du bucket }
+    hint:
+      en: The container you create for the backups. Lowercase letters, digits and hyphens.
+      fr: Le conteneur que tu crées pour les sauvegardes. Minuscules, chiffres et tirets.
+    impact:
+      en: Must match the container exactly. Keep one bucket for this server only, so a forget/prune never touches anything else.
+      fr: Doit correspondre exactement au conteneur. Garde un bucket pour ce seul serveur, pour qu'un forget/prune ne touche jamais rien d'autre.
+    when: { is: OFFSITE, equals: s3 }
+  - key: S3_ACCESS_KEY
+    kind: secret
+    group: backup
+    default: ""
+    label: { en: S3 access key, fr: Clé d'accès S3 }
+    hint:
+      en: The access key of the S3 user you create in the storage provider's panel.
+      fr: La clé d'accès de l'utilisateur S3 que tu crées dans le panneau du fournisseur de stockage.
+    impact:
+      en: Stored only in /etc/restic/env on the server (root-only). With the secret key, it can read and delete the bucket's objects, which are encrypted.
+      fr: Stockée seulement dans /etc/restic/env sur le serveur (root uniquement). Avec la clé secrète, elle peut lire et supprimer les objets du bucket, qui sont chiffrés.
+    when: { is: OFFSITE, equals: s3 }
+  - key: S3_SECRET_KEY
+    kind: secret
+    group: backup
+    default: ""
+    label: { en: S3 secret key, fr: Clé secrète S3 }
+    hint:
+      en: The secret half of the S3 credentials, shown once when the S3 user is created.
+      fr: La moitié secrète des identifiants S3, affichée une seule fois à la création de l'utilisateur S3.
+    impact:
+      en: If it leaks, regenerate it in the provider's panel and update /etc/restic/env. The backups stay unreadable without the restic password.
+      fr: Si elle fuite, régénère-la dans le panneau du fournisseur et mets à jour /etc/restic/env. Les sauvegardes restent illisibles sans le mot de passe restic.
+    when: { is: OFFSITE, equals: s3 }
+  - key: RESTIC_PASSWORD
+    kind: secret
+    group: backup
+    default: ""
+    label: { en: Restic repository password, fr: Mot de passe du dépôt restic }
+    hint:
+      en: Encrypts every backup. Generate it with openssl rand -base64 33 (letters, digits, + and / only, no quotes or spaces).
+      fr: Chiffre chaque sauvegarde. Génère-le avec openssl rand -base64 33 (lettres, chiffres, + et / seulement, ni guillemets ni espaces).
+    impact:
+      en: Lose it and every backup is unreadable forever; nobody can recover it. Store it in your password manager before the first backup.
+      fr: Perds-le et toutes les sauvegardes sont illisibles pour toujours ; personne ne peut le récupérer. Range-le dans ton gestionnaire de mots de passe avant la première sauvegarde.
+    when: { is: OFFSITE, equals: s3 }
+  - key: BACKUP_TIME
+    kind: text
+    group: backup
+    default: "03:15"
+    label: { en: Backup time (server clock), fr: Heure de sauvegarde (horloge du serveur) }
+    hint:
+      en: When the nightly backup starts, HH:MM, in the server's time zone, set on page 3. Up to 15 minutes of random delay is added.
+      fr: L'heure de départ de la sauvegarde nocturne, HH:MM, dans le fuseau horaire du serveur, réglé à la page 3. Jusqu'à 15 minutes de délai aléatoire s'y ajoutent.
+    impact:
+      en: Goes into the systemd timer. Pick a quiet hour; the healthchecks.io check expects one ping a day around it.
+      fr: Va dans le timer systemd. Choisis une heure calme ; le check healthchecks.io attend un ping par jour autour de cette heure.
+    when: { is: OFFSITE, equals: s3 }
+  - key: HC_PING_URL
+    kind: url
+    group: monitoring
+    default: https://hc-ping.com/your-uuid
+    label: { en: healthchecks.io ping URL, fr: URL de ping healthchecks.io }
+    hint:
+      en: The ping URL of the check you create on healthchecks.io, shown on the check's page.
+      fr: L'URL de ping du check que tu crées sur healthchecks.io, affichée sur la page du check.
+    impact:
+      en: Called after each successful backup. With the example value the ping goes nowhere, and your check reports the backup as down every day.
+      fr: Appelée après chaque sauvegarde réussie. Avec la valeur d'exemple le ping ne va nulle part, et ton check signale la sauvegarde en panne chaque jour.
+    when: { flag: HEALTHCHECK }
+
+choices:
+  - key: OFFSITE
+    type: select
+    label: { en: Off-site copy, fr: Copie hors site }
+    hint:
+      en: An off-site copy protects you against losing the VPS or the OVH account, which OVH's own backups do not.
+      fr: Une copie hors site te protège contre la perte du VPS ou du compte OVH, ce que les sauvegardes d'OVH ne font pas.
+    default: s3
+    options:
+      - { value: s3, label: { en: "restic to S3 object storage (OVH, Infomaniak Swiss Backup, …)", fr: "restic vers un stockage objet S3 (OVH, Infomaniak Swiss Backup, …)" } }
+      - { value: none, label: { en: No off-site copy (OVH backups only), fr: Pas de copie hors site (sauvegardes OVH seulement) } }
+  - key: HEALTHCHECK
+    type: boolean
+    label: { en: Ping healthchecks.io after each backup, fr: Pinguer healthchecks.io après chaque sauvegarde }
+    hint:
+      en: Emails you when the nightly backup did not report in. Needs the off-site copy, since the ping comes from the backup job.
+      fr: T'envoie un email quand la sauvegarde de la nuit ne s'est pas manifestée. Nécessite la copie hors site, puisque le ping vient du job de sauvegarde.
+    default: true

@@ -1,0 +1,399 @@
+{/* First pass — to be validated against https://caddyserver.com/docs/install, https://caddyserver.com/docs/caddyfile and https://caddyserver.com/docs/automatic-https before publishing. */}
+
+The server is locked down and the domain points at it. This page puts a web server in front: it opens the web ports, installs Caddy from its official repository, creates the web root with a placeholder page, writes one Caddyfile, and checks from your laptop that `https://`<V name="DOMAIN" /> answers with a valid certificate. The next page replaces the placeholder with the real site.
+
+<Run>
+
+The script does the whole page for **<V name="DOMAIN" />**. On the server (`ssh vps`), open a new file with `nano serve-with-caddy.sh`, paste every code block of this section into it in order, and run it there, logged in as <V name="USERNAME" />, with `sudo bash serve-with-caddy.sh`: sudo asks your password once, the script runs as root and never prompts again. Pages 3 and 4 must be done, and the DNS records must already answer with the server's addresses.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Serve with Caddy — https://${DOMAIN}
+[ "$(id -u)" -eq 0 ] || { echo 'Run me with: sudo bash serve-with-caddy.sh'; exit 1; }
+
+# 1. Web ports: 80 for ACME and the redirect, 443 TCP (HTTP/1.1, HTTP/2), 443 UDP (HTTP/3)
+for rule in 80/tcp 443/tcp 443/udp; do ufw allow $rule; done
+
+# 2. Caddy from the official repository
+export DEBIAN_FRONTEND=noninteractive
+apt-get -o DPkg::Lock::Timeout=300 update
+apt-get -o DPkg::Lock::Timeout=300 install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > /etc/apt/sources.list.d/caddy-stable.list
+chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list
+apt-get -o DPkg::Lock::Timeout=300 update
+apt-get -o DPkg::Lock::Timeout=300 install -y caddy
+
+# 3. Web root with a placeholder release (current is left alone if it already exists)
+install -d -m 755 ${WEB_ROOT}/releases/placeholder
+echo '<!doctype html><meta charset="utf-8"><title>${DOMAIN}</title><p>${DOMAIN} is being set up. Back soon.</p>' > ${WEB_ROOT}/releases/placeholder/index.html
+echo '<!doctype html><meta charset="utf-8"><title>Not found</title><p>404: nothing here.</p>' > ${WEB_ROOT}/releases/placeholder/404.html
+[ -e ${WEB_ROOT}/current ] || ln -s releases/placeholder ${WEB_ROOT}/current
+
+# 4. The Caddyfile
+cat > /etc/caddy/Caddyfile <<'EOF'
+{
+	email ${ADMIN_EMAIL}
+}
+
+www.${DOMAIN} {
+	redir https://${DOMAIN}{uri} permanent
+}
+
+${DOMAIN} {
+	root * ${WEB_ROOT}/current
+	encode zstd gzip
+	file_server
+
+	handle_errors 404 {
+		rewrite * /404.html
+		file_server
+	}
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	@static path /_next/static/*
+	header @static Cache-Control "public, max-age=31536000, immutable"
+
+	@media path *.jpg *.jpeg *.png *.webp *.avif *.svg *.mp3 *.opus *.wav *.mp4
+	header @media Cache-Control "public, max-age=604800"
+
+EOF
+```
+
+<When is="HSTS" equals="off">
+
+```bash
+echo '	header Strict-Transport-Security "max-age=0"' >> /etc/caddy/Caddyfile
+```
+
+</When>
+
+<When is="HSTS" equals="short">
+
+```bash
+echo '	header Strict-Transport-Security "max-age=86400"' >> /etc/caddy/Caddyfile
+```
+
+</When>
+
+<When is="HSTS" equals="year">
+
+```bash
+echo '	header Strict-Transport-Security "max-age=31536000"' >> /etc/caddy/Caddyfile
+```
+
+</When>
+
+<When flag="ANON_LOGS">
+
+```bash
+cat >> /etc/caddy/Caddyfile <<'EOF'
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 10MiB
+			roll_keep 10
+		}
+		format filter {
+			request>remote_ip ip_mask 16 32
+			request>client_ip ip_mask 16 32
+		}
+	}
+}
+EOF
+```
+
+</When>
+
+<When notFlag="ANON_LOGS">
+
+```bash
+cat >> /etc/caddy/Caddyfile <<'EOF'
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 10MiB
+			roll_keep 10
+		}
+	}
+}
+EOF
+```
+
+</When>
+
+```bash
+# 5. Validate as the caddy user, reload, wait for the certificate
+sudo -u caddy caddy validate --config /etc/caddy/Caddyfile
+systemctl reload-or-restart caddy
+for i in $(seq 1 45); do
+  curl -sf -o /dev/null --resolve ${DOMAIN}:443:127.0.0.1 https://${DOMAIN}/ && break || sleep 2
+done
+curl -sf -o /dev/null --resolve ${DOMAIN}:443:127.0.0.1 https://${DOMAIN}/ \
+  || { echo 'No valid HTTPS yet. Read: journalctl -u caddy -n 50 --no-pager'; exit 1; }
+echo "Done: https://${DOMAIN} answers with a valid certificate."
+```
+
+</Run>
+
+## Before you start
+
+<Guided>You need pages 3 and 4 done: you log in with `ssh vps`, sudo asks your password, and the DNS records for <V name="DOMAIN" /> and `www.`<V name="DOMAIN" /> point at the server. Commands run **on the server** unless a step says "from your laptop". Check DNS from your laptop first: Let's Encrypt will look the name up the same way.</Guided>
+
+<Check cmd="dig +short A ${DOMAIN}" expect="${SERVER_IP}" />
+
+## Open the web ports
+
+```bash
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw allow 443/udp
+```
+
+<Guided>Port 443 over TCP carries HTTPS (HTTP/1.1 and HTTP/2); 443 over UDP carries HTTP/3, which runs on QUIC. Port 80 stays open even though the site is HTTPS-only: Let's Encrypt's HTTP-01 challenge comes in on 80, and visitors who type the bare domain land there before being redirected. `sudo ufw status` should now list the three rules next to your SSH port.</Guided>
+
+<Deep>ufw applies each rule to IPv4 and IPv6 (`IPV6=yes` in `/etc/default/ufw` is the Debian default), so you see each port twice in `ufw status`. If you enabled OVH's optional Network Firewall in the control panel, it sits in front of the VPS and drops traffic before ufw ever sees it: allow TCP 80, TCP 443 and UDP 443 there as well.</Deep>
+
+## Install Caddy
+
+```bash
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+sudo chmod o+r /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update && sudo apt install -y caddy
+```
+
+<Guided>The first line installs what apt needs to trust a third-party repository (`gnupg` is added to the official list because minimal images sometimes lack it). The next lines fetch the Caddy signing key, add the repository, and make both readable by apt. The package starts Caddy right away with a default config that serves a welcome page on port 80; you replace that config two steps down.</Guided>
+
+<Deep>Debian ships its own `caddy` package, but it follows Debian's release cycle and lags upstream by months; the Cloudsmith repository is maintained by the Caddy project and follows every release, and `apt upgrade` keeps it current. The package creates a system user `caddy` (home `/var/lib/caddy`, no shell), a systemd unit `caddy.service` that runs `caddy run --config /etc/caddy/Caddyfile` as that user, with just the capabilities to bind ports below 1024 and to size network buffers for QUIC, and `/var/log/caddy` owned by `caddy`. Certificates and ACME account keys live under `/var/lib/caddy/.local/share/caddy`: back that directory up (page 7), or a rebuilt server has to request everything again.</Deep>
+
+<Check cmd="systemctl is-active caddy" expect="active" />
+
+## Create the web root and a placeholder
+
+<Warn>Run `ln -sfn` here only on a fresh server. Once page 6 has deployed, this line would put the placeholder back online in place of your site.</Warn>
+
+```bash
+sudo install -d -m 755 ${WEB_ROOT}/releases/placeholder
+echo '<!doctype html><meta charset="utf-8"><title>${DOMAIN}</title><p>${DOMAIN} is being set up. Back soon.</p>' | sudo tee ${WEB_ROOT}/releases/placeholder/index.html
+echo '<!doctype html><meta charset="utf-8"><title>Not found</title><p>404: nothing here.</p>' | sudo tee ${WEB_ROOT}/releases/placeholder/404.html
+sudo ln -sfn releases/placeholder ${WEB_ROOT}/current
+```
+
+<Guided>Every version of the site will be a directory under `releases/`, and `current` is a symbolic link to the one that is live. Caddy only ever serves `current`. Deploying means uploading a new release next to the old one, then moving the link in one operation; rolling back means pointing the link at the previous directory. The placeholder is release zero, so Caddy has something real to serve while you set up HTTPS. Page 6 hands the whole tree to <V name="DEPLOY_USER" /> and fills it.</Guided>
+
+<Deep>The link is relative (`releases/placeholder`, not an absolute path), so the tree can be moved or restored elsewhere without breaking. Caddy does not cache the link: `file_server` opens `current/...` on each request and the kernel resolves the symlink at that moment, so a swap takes effect on the next request with no reload. Requests already in flight finish on the old release, which is why old releases are kept for a while instead of deleted immediately.</Deep>
+
+## Write the Caddyfile
+
+Replace the whole content of `/etc/caddy/Caddyfile` with the file below (`sudo nano /etc/caddy/Caddyfile`, select all, paste). The next two sub-steps add your HSTS line and, if you chose it, the IP masking.
+
+<Annotated>
+
+```text title="/etc/caddy/Caddyfile"
+{
+	email ${ADMIN_EMAIL}                                  # (1)
+}
+
+www.${DOMAIN} {
+	redir https://${DOMAIN}{uri} permanent               # (2)
+}
+
+${DOMAIN} {
+	root * ${WEB_ROOT}/current                            # (3)
+	encode zstd gzip                                      # (4)
+	file_server                                           # (5)
+
+	handle_errors 404 {                                   # (6)
+		rewrite * /404.html
+		file_server
+	}
+
+	header {
+		X-Content-Type-Options "nosniff"                  # (7)
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server                                           # (8)
+	}
+
+	@static path /_next/static/*                          # (9)
+	header @static Cache-Control "public, max-age=31536000, immutable"
+
+	@media path *.jpg *.jpeg *.png *.webp *.avif *.svg *.mp3 *.opus *.wav *.mp4
+	header @media Cache-Control "public, max-age=604800"  # (10)
+
+	log {
+		output file /var/log/caddy/access.log {           # (11)
+			roll_size 10MiB
+			roll_keep 10
+		}
+	}
+}
+```
+
+1. Global options. The email goes to the ACME account: Let's Encrypt writes there if a certificate cannot be renewed. No other TLS setting is needed; naming a domain as a site address is what turns on automatic HTTPS.
+2. `www` gets its own certificate and a permanent redirect (`permanent` means 301) to the apex, keeping the path and query string. `{uri}` is a Caddy placeholder, filled per request. Plain HTTP needs no line: Caddy redirects it to HTTPS by itself, with a 308.
+3. Serve files from the `current` symlink. The `*` means "for every request".
+4. Compress text responses on the fly, zstd for browsers that accept it, gzip otherwise. Images and video are already compressed and are skipped.
+5. The static file server. It serves `dir/index.html` for `/dir/`, and redirects `/dir` to `/dir/`, which is exactly the URL shape of a Next.js export with `trailingSlash: true`.
+6. On a 404, serve the site's own `404.html` with the 404 status kept. The `404` argument limits this block to not-found errors.
+7. Stop browsers from guessing content types, send only the origin to other sites, refuse to be framed, and deny camera, microphone and location to the page.
+8. Remove the `Server: Caddy` header. It hides nothing serious, but it is one less line for scanners to match.
+9. Next.js puts a content hash in every file name under `/_next/static/`, so a file there never changes: browsers may keep it a year without asking again.
+10. Media files keep their names across deploys, so they get one week, not forever.
+11. One JSON line per request, rotated at 10 MiB, ten old files kept and gzipped. Errors and certificate events stay in the journal.
+
+</Annotated>
+
+<Deep>
+
+There is no `try_files` on purpose. A common copy-paste adds `try_files {path} {path}/ /index.html`, which is for single-page apps: here it would serve the home page with a 200 for every missing URL, and make `/about` and `/about/` both answer, which search engines see as duplicate pages. `file_server` alone already maps `/about/` to `about/index.html` and turns missing files into a 404, which `handle_errors` then dresses.
+
+One side effect to know: the `header { … }` block removes `Server`, which makes Caddy apply the whole block when the response is written, and the 404 page is written by the `handle_errors` route instead. So 404 responses carry HSTS and the cache rules but not the four security headers, and still say `Server: Caddy`. Harmless for a static page; copy the `header` block inside `handle_errors` if you want them identical. The cache rules apply to a 404 too: a missing file under `/_next/static/` is answered "immutable", which is fine because a hashed name never comes back with other content.
+
+</Deep>
+
+<Note>`handle_errors` with a status code argument needs Caddy 2.8 or later; the repository installs a newer one. On an older Caddy, drop the `404` and the block handles every error.</Note>
+
+### HSTS
+
+Add the line for your choice inside the <V name="DOMAIN" /> block, right before `log {`, indented like its neighbours.
+
+<When is="HSTS" equals="off">
+
+```text
+	header Strict-Transport-Security "max-age=0"
+```
+
+<Guided>`max-age=0` is "off" said explicitly: a browser that received a longer HSTS policy earlier forgets it on the next visit. Without the line, a browser that ever saw one would keep enforcing it.</Guided>
+
+</When>
+
+<When is="HSTS" equals="short">
+
+```text
+	header Strict-Transport-Security "max-age=86400"
+```
+
+<Guided>For one day after each visit, the browser rewrites any `http://` link to your domain into `https://` before sending anything, and refuses to let the visitor click through a certificate error. One day is short enough to undo a mistake. Move to a year once page 8 is done.</Guided>
+
+</When>
+
+<When is="HSTS" equals="year">
+
+```text
+	header Strict-Transport-Security "max-age=31536000"
+```
+
+<Warn>With a year, every browser that visits once will refuse plain HTTP and certificate errors on <V name="DOMAIN" /> for twelve months. If HTTPS breaks, those visitors cannot get in until it is fixed. Set it only once HTTPS has worked for a few days.</Warn>
+
+</When>
+
+<Warn>No `includeSubDomains` and no `preload` here. Preload (hstspreload.org) bakes your domain into browsers and requires both; it is a one-way door, since removal takes months and depends on browser releases. Add it only if every subdomain, forever, will serve valid HTTPS.</Warn>
+
+### Anonymised logs
+
+<When flag="ANON_LOGS">
+
+Add these lines inside the `log { … }` block, after the closing brace of `output file … { … }`:
+
+```text
+		format filter {
+			request>remote_ip ip_mask 16 32
+			request>client_ip ip_mask 16 32
+		}
+```
+
+<Guided>Each logged address is cut before it is written: `203.0.113.45` becomes `203.0.0.0`, and an IPv6 keeps its first 32 bits. You still see which networks hammer the site, never who a visitor is. Nothing unmasked touches the disk.</Guided>
+
+<Note>The `format filter` syntax changed across Caddy versions: older ones required `wrap json` and a `fields { }` block around the filters. If `caddy validate` complains, compare with caddyserver.com/docs/caddyfile/directives/log.</Note>
+
+</When>
+
+<When notFlag="ANON_LOGS">
+
+You chose full addresses: leave the `log` block as it is. Each line records the visitor's complete IP.
+
+<Note>A full IP is personal data under the GDPR. Keeping it for security is defensible; say so in your legal notice, and keep rotation short.</Note>
+
+</When>
+
+## Validate and reload
+
+```bash
+sudo caddy fmt --overwrite /etc/caddy/Caddyfile
+sudo -u caddy caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+sudo journalctl -u caddy -f
+```
+
+<Guided>`caddy fmt` fixes indentation and is optional. `validate` parses the file and sets up every module without serving, and ends with `Valid configuration`. `reload` hands the new file to the running Caddy with no dropped connections; if the file is broken, the reload fails and the old configuration keeps serving. In the journal, wait for `certificate obtained successfully` for <V name="DOMAIN" /> and for `www.`<V name="DOMAIN" />, usually within 30 seconds, then stop following with Ctrl+C.</Guided>
+
+<Deep>Validate as the `caddy` user, not as root and not as yourself. Validation opens the log file: as root it would create `/var/log/caddy/access.log` owned by root with mode 600, and the service, running as `caddy`, would then fail to open it on reload; as <V name="USERNAME" /> it fails with "permission denied". Running as `caddy` also checks what the service will actually be allowed to read.</Deep>
+
+<Details summary="If the certificate fails">
+
+Read the error line in the journal first; it names the cause. These lookups, from your laptop, cover the DNS side. By likelihood:
+
+```bash
+dig +short A ${DOMAIN}
+dig +short A www.${DOMAIN}
+dig +short AAAA ${DOMAIN}
+dig +short CAA ${DOMAIN}
+```
+
+- **DNS**: both A lookups must answer <V name="SERVER_IP" />. Right after a change, wait for the old TTL to expire.
+- **Wrong AAAA**: if the AAAA lookup answers anything, it must be <V name="SERVER_IPV6" />. Let's Encrypt tries IPv6 first, so a stale AAAA fails validation even when IPv4 is perfect. No AAAA at all is fine.
+- **Port 80 closed**: `sudo ufw status` must show `80/tcp ALLOW`; if OVH's Network Firewall is on, open 80 there too.
+- **CAA**: the CAA lookup must be empty or contain `letsencrypt.org`. When Let's Encrypt fails, Caddy falls back to ZeroSSL, whose CAA identifier is `sectigo.com`.
+- **Rate limits**: Let's Encrypt allows 5 failed validations per hostname per hour. While you debug, point Caddy at the staging CA by adding a line to the global options block at the top:
+
+```text
+	acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+```
+
+Staging certificates are not trusted by browsers, so curl will complain; that is expected. Once the journal shows success, remove the line and reload: Caddy stores certificates per CA and requests a real one.
+
+</Details>
+
+## Check it from your laptop
+
+<Check cmd="curl -sI https://${DOMAIN}/ | head -1" expect="HTTP/2 200" />
+
+<Check cmd="curl -sI https://www.${DOMAIN}/ | grep -i '^location'" expect="location: https://${DOMAIN}/" />
+
+<Check cmd="curl -s -o /dev/null -w '%{http_code}' https://${DOMAIN}/nope/" expect="404" />
+
+<Guided>The first answer proves the certificate is valid (curl would refuse it otherwise) and that HTTP/2 is negotiated. HTML pages get no `Cache-Control`, so browsers revalidate them and a deploy shows on the next load. The second proves the www redirect. The third proves missing pages get a real 404, not a 200. Open `http://`<V name="DOMAIN" /> in a browser too: it lands on `https://` without a warning.</Guided>
+
+<Deep>
+
+HTTP/3 is on by default: Caddy announces it in an `Alt-Svc` header, and browsers switch to QUIC on the next request.
+
+```bash
+curl -sI https://${DOMAIN}/ | grep -i '^alt-svc'
+curl --http3 -sI https://${DOMAIN}/ | head -1
+```
+
+The first should show `h3=":443"`. The second works only if your curl was built with HTTP/3 (`curl -V` lists `HTTP3` under Features); the macOS system curl was not, as far as we know.
+
+There is no Content-Security-Policy yet. A Next.js export includes inline scripts for hydration, so a strict CSP needs either per-build hashes or `'unsafe-inline'`, and a wrong CSP breaks the site silently. When you add one, start with `Content-Security-Policy-Report-Only` in the `header` block, watch the browser console for a while, then switch to enforcing.
+
+</Deep>
+
+## Done
+
+<V name="DOMAIN" /> now answers over HTTPS with a Let's Encrypt certificate that Caddy renews on its own, well before expiry. `www` and plain HTTP redirect to `https://`<V name="DOMAIN" />, HTTP/3 is available, static assets are cached hard, and the access log rotates itself<When flag="ANON_LOGS"> with masked addresses</When>. Visitors see the placeholder.
+
+The next page, **Deploy atomic releases with rsync**, builds the Next.js site on your laptop, uploads it as a new release under <V name="WEB_ROOT" />, and swaps the `current` link to put it live.

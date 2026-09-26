@@ -1,0 +1,48 @@
+# Inherits from ../series.yaml: SERVER_IP, SERVER_IPV6, USERNAME, SSH_PORT, DEPLOY_USER, DOMAIN, WEB_ROOT, ADMIN_EMAIL, LOCAL_DIR.
+
+title:
+  en: Point the domain at the server (Infomaniak DNS)
+  fr: Pointer le domaine vers le serveur (DNS Infomaniak)
+summary:
+  en: >-
+    Your domain and its www answer with the VPS in IPv4 and IPv6, only Let's Encrypt (and
+    optionally ZeroSSL) may issue certificates for it, and nobody can send mail in its name — or
+    your Infomaniak mailbox keeps working, with DMARC on top. Clicks in the Manager, checks with dig.
+  fr: >-
+    Ton domaine et son www répondent avec le VPS en IPv4 et IPv6, seul Let's Encrypt (et ZeroSSL
+    si tu veux) peut émettre des certificats pour lui, et personne ne peut envoyer d'email en son
+    nom — ou ta boîte Infomaniak continue de marcher, avec DMARC en plus. Des clics dans le Manager,
+    des vérifications avec dig.
+difficulty: beginner
+tags: [dns, infomaniak, caa, dmarc, spf, dnssec, ipv6]
+authors: [thudal]
+created: 2026-09-26
+minutes: 20
+validated: Infomaniak Manager, Sept 2026
+status: draft             # not yet run end to end by its author
+
+choices:
+  - key: MAIL
+    type: select
+    label: { en: Email on this domain, fr: Email sur ce domaine }
+    hint:
+      en: Whether addresses like you@your-domain exist. If they do, the mail records stay as Infomaniak created them.
+      fr: Si des adresses comme toi@ton-domaine existent. Si oui, les enregistrements email restent tels qu'Infomaniak les a créés.
+    default: none
+    options:
+      - { value: none, label: { en: No email on this domain, fr: Pas d'email sur ce domaine } }
+      - { value: infomaniak, label: { en: Email hosted at Infomaniak, fr: Email hébergé chez Infomaniak } }
+  - key: ZEROSSL
+    type: boolean
+    label: { en: "Also allow ZeroSSL (Caddy's fallback issuer)", fr: "Autoriser aussi ZeroSSL (l'émetteur de secours de Caddy)" }
+    hint:
+      en: Caddy tries Let's Encrypt first and falls back to ZeroSSL. Allowing both keeps the fallback working.
+      fr: Caddy essaie d'abord Let's Encrypt et se replie sur ZeroSSL. Autoriser les deux garde le repli fonctionnel.
+    default: true
+  - key: DNSSEC
+    type: boolean
+    label: { en: Sign the zone (DNSSEC), fr: Signer la zone (DNSSEC) }
+    hint:
+      en: Resolvers can then prove the answers really come from your zone. Infomaniak manages the keys.
+      fr: Les résolveurs peuvent alors prouver que les réponses viennent bien de ta zone. Infomaniak gère les clés.
+    default: true

@@ -1,0 +1,223 @@
+# Quick: what is saved, restic, the bucket, OVH's own backup, the site, the uptime monitor, you.
+# Guided: healthchecks.io watching the backup job. Deep: the systemd timer, the repository
+# password, the journald cap. No secret variable ever appears here.
+title: { en: "Saved three ways, watched from outside", fr: "Sauvegardé de trois façons, surveillé de l'extérieur" }
+caption:
+  en: "Every night restic reads the server's configuration and certificates, encrypts them and sends them to a bucket outside the VPS; OVH keeps its own copy of the whole disk. An external monitor checks the site every five minutes and emails you when it stops answering."
+  fr: "Chaque nuit, restic lit la configuration et les certificats du serveur, les chiffre et les envoie dans un bucket hors du VPS ; OVH garde sa propre copie du disque entier. Une sonde externe interroge le site toutes les cinq minutes et t'écrit quand il ne répond plus."
+
+groups:
+  - id: vps
+    label: { en: "Your VPS", fr: "Ton VPS" }
+    desc:
+      en: "The Debian server from pages 2 to 6. What lives only here is what needs saving."
+      fr: "Le serveur Debian des pages 2 à 6. Ce qui ne vit qu'ici, c'est ce qu'il faut sauvegarder."
+
+nodes:
+  - id: state
+    kind: file
+    label: { en: "Config, certs, web root", fr: "Config, certificats, racine web" }
+    sub: "/etc · /var/lib/caddy · /home · ${WEB_ROOT}"
+    in: vps
+    desc:
+      en: "The server's own state: SSH, Caddy, ufw and fail2ban configuration, users, TLS certificates, home folders. Plus the built site in ${WEB_ROOT}: a copy of the output, not the source, which lives only on the Mac."
+      fr: "L'état propre du serveur : configuration SSH, Caddy, ufw et fail2ban, utilisateurs, certificats TLS, dossiers personnels. Plus le site construit dans ${WEB_ROOT} : une copie du résultat, pas la source, qui ne vit que sur le Mac."
+    deep:
+      sub: "/etc · /var/lib/caddy (ACME account + certs) · /home · ${WEB_ROOT} (hard-linked releases, deduplicated) · minus /etc/restic/excludes"
+  - id: restic
+    kind: service
+    label: { en: "restic", fr: "restic" }
+    sub: "nightly · 7d / 4w / 6m"
+    in: vps
+    focus: true
+    when: { is: OFFSITE, equals: s3 }
+    desc:
+      en: "Takes an encrypted, deduplicated snapshot every night, then forgets the old ones: 7 daily, 4 weekly, 6 monthly."
+      fr: "Prend chaque nuit un snapshot chiffré et dédupliqué, puis oublie les anciens : 7 quotidiens, 4 hebdomadaires, 6 mensuels."
+    deep:
+      sub: "restic-backup.service · oneshot · backup + forget --prune"
+  - id: bucket
+    kind: store
+    label: { en: "S3 bucket", fr: "Bucket S3" }
+    sub: "${S3_BUCKET}"
+    when: { is: OFFSITE, equals: s3 }
+    desc:
+      en: "Object storage outside the VPS. It holds only encrypted blobs: without the repository password, they are noise."
+      fr: "Un stockage objet hors du VPS. Il ne contient que des blocs chiffrés : sans le mot de passe du dépôt, c'est du bruit."
+    deep:
+      sub: "${S3_ENDPOINT}/${S3_BUCKET}"
+  - id: laptop-copy
+    kind: file
+    label: { en: "/etc archive", fr: "Archive de /etc" }
+    sub: "on your Mac"
+    level: guided
+    when: { is: OFFSITE, equals: none }
+    desc:
+      en: "Without an off-site copy, a tarball of /etc on your laptop is the only copy that survives losing the OVH account. Keep it on an encrypted disk."
+      fr: "Sans copie hors site, une archive de /etc sur ton portable est la seule copie qui survit à la perte du compte OVH. Garde-la sur un disque chiffré."
+  - id: ovh-backup
+    kind: store
+    label: { en: "OVH backup", fr: "Sauvegarde OVH" }
+    sub: "daily · 1 day kept"
+    desc:
+      en: "Included with the VPS: an image of the whole disk every day. Restoring it rolls the entire VPS back and overwrites everything since."
+      fr: "Incluse avec le VPS : une image du disque entier chaque jour. La restaurer remet tout le VPS en arrière et écrase tout ce qui a suivi."
+    guided:
+      sub: "daily · 1 day kept · + snapshot before risky changes"
+  - id: site
+    kind: net
+    label: { en: "Your site", fr: "Ton site" }
+    sub: "https://${DOMAIN}"
+    in: vps
+    desc:
+      en: "Caddy serving the current release. What your visitors see, and what the monitor checks."
+      fr: "Caddy qui sert la release courante. Ce que voient tes visiteurs, et ce que la sonde vérifie."
+    deep:
+      sub: "Caddy · :443 · ${WEB_ROOT}/current"
+  - id: monitor
+    kind: cloud
+    label: { en: "Uptime monitor", fr: "Sonde de disponibilité" }
+    sub: "every 5 min · keyword"
+    desc:
+      en: "An external service (UptimeRobot or similar) that fetches the home page and looks for a word only the real page contains."
+      fr: "Un service externe (UptimeRobot ou équivalent) qui charge la page d'accueil et y cherche un mot que seule la vraie page contient."
+  - id: healthchecks
+    kind: cloud
+    label: { en: "healthchecks.io", fr: "healthchecks.io" }
+    sub: "period 1 day · grace 2 h"
+    level: guided
+    when: { flag: HEALTHCHECK }
+    desc:
+      en: "A dead man's switch: it expects a ping after each backup and emails you when one does not come."
+      fr: "Un interrupteur d'homme mort : il attend un ping après chaque sauvegarde et t'écrit quand il n'arrive pas."
+  - id: you
+    kind: user
+    label: { en: "You", fr: "Toi" }
+    sub: "${ADMIN_EMAIL}"
+    desc:
+      en: "The one who hears first. Alerts land in this inbox; the monthly routine is ten minutes of your time."
+      fr: "Celui qui est prévenu le premier. Les alertes arrivent dans cette boîte ; la routine mensuelle te prend dix minutes."
+  - id: mac
+    kind: client
+    label: { en: "Your Mac", fr: "Ton Mac" }
+    sub: "${LOCAL_DIR}"
+    level: guided
+    desc:
+      en: "The only home of the site's source: code, content and original photos. Builds and deploys start here (pages 1 and 6)."
+      fr: "Le seul foyer de la source du site : code, contenu et photos originales. Les builds et déploiements partent d'ici (pages 1 et 6)."
+  - id: timemachine
+    kind: store
+    label: { en: "Time Machine", fr: "Time Machine" }
+    sub: "project folder · page 1"
+    level: guided
+    desc:
+      en: "Backs up the project folder on the Mac. Not covered by this page; the monthly routine only checks its last backup date."
+      fr: "Sauvegarde le dossier du projet sur le Mac. Hors du champ de cette page ; la routine mensuelle vérifie seulement la date de sa dernière sauvegarde."
+  - id: timer
+    kind: service
+    label: { en: "systemd timer", fr: "Timer systemd" }
+    sub: "${BACKUP_TIME} + up to 15 min"
+    in: vps
+    level: deep
+    when: { is: OFFSITE, equals: s3 }
+    desc:
+      en: "restic-backup.timer starts the service every night; Persistent=true catches up a run missed while the VPS was off."
+      fr: "restic-backup.timer lance le service chaque nuit ; Persistent=true rattrape un passage manqué pendant que le VPS était éteint."
+  - id: password
+    kind: file
+    label: { en: "Repository password", fr: "Mot de passe du dépôt" }
+    sub: "/etc/restic/env + password manager"
+    level: deep
+    when: { is: OFFSITE, equals: s3 }
+    desc:
+      en: "Derives the key that encrypts every snapshot. Lose it and the bucket is unreadable forever; the copy in your password manager is the one that matters."
+      fr: "Dérive la clé qui chiffre chaque snapshot. Perds-le et le bucket est illisible pour toujours ; la copie de ton gestionnaire de mots de passe est celle qui compte."
+  - id: journald
+    kind: file
+    label: { en: "journald", fr: "journald" }
+    sub: "SystemMaxUse=500M"
+    in: vps
+    level: deep
+    desc:
+      en: "The system journal, capped by a drop-in so logs can never fill the 40 GB disk."
+      fr: "Le journal système, plafonné par un fichier complémentaire pour que les logs ne puissent jamais remplir le disque de 40 Go."
+
+edges:
+  - from: state
+    to: restic
+    label: "reads"
+    when: { is: OFFSITE, equals: s3 }
+    desc: { en: "restic reads the three trees as root, minus the excluded caches and locks.", fr: "restic lit les trois arborescences en root, moins les caches et verrous exclus." }
+  - from: restic
+    to: bucket
+    label: "encrypted, nightly"
+    when: { is: OFFSITE, equals: s3 }
+    deep: { label: "S3 API over HTTPS · only changed blocks" }
+    desc: { en: "Only new or changed blocks travel, encrypted before they leave the server.", fr: "Seuls les blocs nouveaux ou modifiés voyagent, chiffrés avant de quitter le serveur." }
+  - from: state
+    to: laptop-copy
+    label: "tar, by hand"
+    dashed: true
+    level: guided
+    when: { is: OFFSITE, equals: none }
+    desc: { en: "A tar of /etc copied to your Mac with scp, after each configuration change.", fr: "Une archive tar de /etc copiée sur ton Mac avec scp, après chaque changement de configuration." }
+  - from: state
+    to: ovh-backup
+    label: "whole disk, daily"
+    dashed: true
+    desc: { en: "OVH images the whole disk, site and logs included. It lives at OVH, so it goes if the account goes.", fr: "OVH copie le disque entier, site et logs compris. La copie vit chez OVH, donc elle part si le compte part." }
+  - from: monitor
+    to: site
+    label: "HTTPS every 5 min"
+    deep: { label: "GET / · TLS · keyword match" }
+    desc: { en: "A request from outside, like a visitor's. An expired certificate or a missing keyword counts as down.", fr: "Une requête de l'extérieur, comme celle d'un visiteur. Un certificat expiré ou un mot-clé absent compte comme une panne." }
+  - from: monitor
+    to: you
+    label: "email if down"
+    desc: { en: "One email when the site goes down, one when it is back.", fr: "Un email quand le site tombe, un autre quand il revient." }
+  - from: restic
+    to: healthchecks
+    label: "ping"
+    dashed: true
+    level: guided
+    when: { flag: HEALTHCHECK }
+    desc: { en: "curl to the ping URL, only after a successful backup and prune.", fr: "Un curl vers l'URL de ping, seulement après une sauvegarde et un élagage réussis." }
+  - from: healthchecks
+    to: you
+    label: "email if no ping"
+    dashed: true
+    level: guided
+    when: { flag: HEALTHCHECK }
+    desc: { en: "No ping within a day plus two hours of grace: you get an email, whatever the cause.", fr: "Pas de ping en un jour plus deux heures de grâce : tu reçois un email, quelle qu'en soit la cause." }
+  - from: mac
+    to: site
+    label: "deploy"
+    dashed: true
+    level: guided
+    desc: { en: "Page 6: build on the Mac, upload a new release. The server only ever receives the built site.", fr: "Page 6 : build sur le Mac, envoi d'une nouvelle release. Le serveur ne reçoit jamais que le site construit." }
+  - from: mac
+    to: timemachine
+    label: "hourly backup"
+    dashed: true
+    level: guided
+    desc: { en: "Time Machine keeps hourly, daily and weekly copies of the project folder while its disk is connected.", fr: "Time Machine garde des copies horaires, quotidiennes et hebdomadaires du dossier du projet tant que son disque est branché." }
+  - from: timer
+    to: restic
+    label: "starts"
+    dashed: true
+    level: deep
+    when: { is: OFFSITE, equals: s3 }
+    desc: { en: "OnCalendar at ${BACKUP_TIME} with a random delay, so thousands of servers do not hit the storage at the same second.", fr: "OnCalendar à ${BACKUP_TIME} avec un délai aléatoire, pour que des milliers de serveurs ne frappent pas le stockage à la même seconde." }
+  - from: password
+    to: restic
+    label: "encrypts"
+    dashed: true
+    level: deep
+    when: { is: OFFSITE, equals: s3 }
+    desc: { en: "The password unlocks the repository's master key; every blob is encrypted and authenticated with it.", fr: "Le mot de passe déverrouille la clé maîtresse du dépôt ; chaque bloc est chiffré et authentifié avec elle." }
+  - from: site
+    to: journald
+    label: "logs"
+    dashed: true
+    level: deep
+    desc: { en: "Services log to the journal; the cap keeps it at 500 MB. Caddy's access logs rotate on their own.", fr: "Les services écrivent dans le journal ; le plafond le tient à 500 Mo. Les logs d'accès de Caddy tournent tout seuls." }

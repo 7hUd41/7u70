@@ -1,0 +1,239 @@
+# Quick: laptop, bots, firewall, sshd, your account. Guided: the drop-in that drives sshd,
+# fail2ban and unattended-upgrades. Deep: the journal, cloud-init's overridden drop-in,
+# the locked debian account (when kept) and the KVM console as the rescue path.
+title: { en: "One way in, tested before the old one closes", fr: "Une seule entrée, testée avant de fermer l'ancienne" }
+caption:
+  en: "Only your key reaches sshd, on port ${SSH_PORT}, through the firewall, and it opens a session as ${USERNAME}. Bots on port 22 find a closed door; the KVM console stays as the way back in."
+  fr: "Seule ta clé atteint sshd, sur le port ${SSH_PORT}, à travers le pare-feu, et ouvre une session en ${USERNAME}. Les robots sur le port 22 trouvent porte close ; la console KVM reste le chemin du retour."
+
+groups:
+  - id: server
+    label: { en: "Your VPS", fr: "Ton VPS" }
+    desc:
+      en: "The OVH VPS, renamed ${SERVER_NAME}. Everything inside this box is what the page changes."
+      fr: "Le VPS OVH, renommé ${SERVER_NAME}. Tout ce qui est dans cette boîte est ce que la page modifie."
+
+nodes:
+  - id: laptop
+    kind: client
+    label: { en: "Your laptop", fr: "Ton portable" }
+    sub: "ssh vps"
+    desc:
+      en: "Holds the private key and the ~/.ssh/config entry 'vps' (${SERVER_IP}, port ${SSH_PORT}, user ${USERNAME})."
+      fr: "Détient la clé privée et l'entrée « vps » de ~/.ssh/config (${SERVER_IP}, port ${SSH_PORT}, utilisateur ${USERNAME})."
+    deep:
+      sub: "~/.ssh/config · Host vps → ${SERVER_IP}:${SSH_PORT}"
+  - id: bots
+    kind: cloud
+    label: { en: "The internet's bots", fr: "Les robots d'internet" }
+    sub: "root / passwords on 22"
+    desc:
+      en: "Scanners that try root and common passwords on port 22 within minutes of a server going online."
+      fr: "Des scanners qui essaient root et des mots de passe courants sur le port 22 quelques minutes après la mise en ligne d'un serveur."
+  - id: firewall
+    kind: net
+    label: { en: "Firewall", fr: "Pare-feu" }
+    sub: "${SSH_PORT}/tcp only"
+    in: server
+    desc:
+      en: "ufw: inbound traffic refused except ${SSH_PORT}/tcp. Port 22 stays open only until the new port is proven."
+      fr: "ufw : trafic entrant refusé sauf ${SSH_PORT}/tcp. Le port 22 reste ouvert seulement jusqu'à ce que le nouveau port ait fait ses preuves."
+    guided:
+      sub: "ufw · deny in · allow ${SSH_PORT}/tcp"
+    deep:
+      sub: "ufw → iptables-nft → nftables · IPv4 + IPv6 · allow ${SSH_PORT}/tcp"
+  - id: sshd
+    kind: server
+    label: { en: "sshd", fr: "sshd" }
+    sub: "keys only · no root"
+    in: server
+    focus: true
+    desc:
+      en: "The SSH daemon after hardening: port ${SSH_PORT}, keys only, root refused, only members of sshusers let in."
+      fr: "Le démon SSH après durcissement : port ${SSH_PORT}, clés uniquement, root refusé, seuls les membres de sshusers entrent."
+    guided:
+      sub: "port ${SSH_PORT} · keys only · AllowGroups sshusers"
+    deep:
+      sub: "ssh.service · Port ${SSH_PORT} · PermitRootLogin no · PasswordAuthentication no · AllowGroups sshusers"
+  - id: account
+    kind: user
+    label: { en: "Your account", fr: "Ton compte" }
+    sub: "${USERNAME} · sudo"
+    in: server
+    desc:
+      en: "${USERNAME}, in the groups sudo and sshusers. Logs in with the key; sudo asks for the password, which is also the KVM console login."
+      fr: "${USERNAME}, dans les groupes sudo et sshusers. Se connecte avec la clé ; sudo demande le mot de passe, qui sert aussi à la console KVM."
+    deep:
+      sub: "${USERNAME} · groups sudo, sshusers · ~/.ssh/authorized_keys (600)"
+  - id: hardening
+    kind: file
+    label: { en: "00-hardening.conf", fr: "00-hardening.conf" }
+    sub: "/etc/ssh/sshd_config.d/"
+    in: server
+    level: guided
+    desc:
+      en: "Your drop-in. sshd keeps the first value it reads for each setting, and 00- is read before any other drop-in."
+      fr: "Ton fichier complémentaire. sshd garde la première valeur lue pour chaque réglage, et 00- est lu avant tous les autres."
+  - id: upgrades
+    kind: service
+    label: { en: "unattended-upgrades", fr: "unattended-upgrades" }
+    sub: "daily security updates"
+    in: server
+    level: guided
+    desc:
+      en: "Installs Debian's security and point-release updates every day, sshd included."
+      fr: "Installe chaque jour les mises à jour de sécurité et de version intermédiaire de Debian, sshd compris."
+    deep:
+      sub: "apt-daily-upgrade.timer · 20auto-upgrades"
+  - id: fail2ban
+    kind: service
+    label: { en: "fail2ban", fr: "fail2ban" }
+    sub: "3 failures → 1h ban"
+    in: server
+    level: guided
+    when: { flag: FAIL2BAN }
+    desc:
+      en: "Counts failed logins per address and bans an address after three failures in ten minutes, longer each time it comes back."
+      fr: "Compte les connexions ratées par adresse et bannit une adresse après trois échecs en dix minutes, plus longtemps à chaque récidive."
+    deep:
+      sub: "jail sshd · backend systemd · port ${SSH_PORT} · bantime.increment"
+  - id: journal
+    kind: file
+    label: { en: "journald", fr: "journald" }
+    sub: "journalctl -u ssh"
+    in: server
+    level: deep
+    desc:
+      en: "The system journal. On Debian 12 and 13 it is the only SSH log: there is no /var/log/auth.log by default."
+      fr: "Le journal système. Sur Debian 12 et 13, c'est le seul journal de SSH : il n'y a pas de /var/log/auth.log par défaut."
+  - id: cloudinit
+    kind: file
+    label: { en: "50-cloud-init.conf", fr: "50-cloud-init.conf" }
+    sub: "overridden"
+    in: server
+    level: deep
+    desc:
+      en: "Left by cloud-init, may say PasswordAuthentication yes. Read after 00-hardening.conf, so its values lose."
+      fr: "Laissé par cloud-init, peut contenir PasswordAuthentication yes. Lu après 00-hardening.conf, donc ses valeurs perdent."
+  - id: debian
+    kind: user
+    label: { en: "debian account", fr: "Compte debian" }
+    sub: "locked"
+    in: server
+    level: deep
+    when: { notFlag: REMOVE_DEBIAN_USER }
+    desc:
+      en: "OVH's default account, kept but locked and expired, outside sshusers, and without its password-less sudo file."
+      fr: "Le compte par défaut d'OVH, conservé mais verrouillé et expiré, hors de sshusers, et sans son fichier de sudo sans mot de passe."
+  - id: kvm
+    kind: net
+    label: { en: "KVM console", fr: "Console KVM" }
+    sub: "OVH control panel"
+    level: deep
+    desc:
+      en: "A screen and keyboard on the VPS through the browser. It bypasses SSH and the firewall; it takes ${USERNAME} and the password."
+      fr: "Un écran et un clavier sur le VPS via le navigateur. Elle contourne SSH et le pare-feu ; elle prend ${USERNAME} et le mot de passe."
+
+edges:
+  - from: laptop
+    to: firewall
+    label: "ssh vps"
+    guided: { label: "SSH · TCP ${SSH_PORT}" }
+    deep: { label: "SSH-2 · TCP ${SSH_PORT} · IPv4/IPv6" }
+    desc:
+      en: "Your connection, on the new port, with the key. Tested from a second terminal before port 22 is closed."
+      fr: "Ta connexion, sur le nouveau port, avec la clé. Testée depuis un second terminal avant de fermer le port 22."
+  - from: bots
+    to: firewall
+    label: "22, refused"
+    dashed: true
+    deep: { label: "TCP 22 → drop" }
+    desc:
+      en: "Port 22 is closed once the new port works: the packets are dropped."
+      fr: "Le port 22 est fermé dès que le nouveau port marche : les paquets sont jetés."
+  - from: firewall
+    to: sshd
+    desc:
+      en: "Only traffic to ${SSH_PORT}/tcp reaches the daemon."
+      fr: "Seul le trafic vers ${SSH_PORT}/tcp atteint le démon."
+  - from: sshd
+    to: account
+    label: "key → session"
+    desc:
+      en: "The key matches and the account is in sshusers: a shell as ${USERNAME}, never as root."
+      fr: "La clé correspond et le compte est dans sshusers : un shell en ${USERNAME}, jamais en root."
+  - from: hardening
+    to: sshd
+    label: "read first"
+    dashed: true
+    level: guided
+    desc:
+      en: "Loaded at start. Check with sshd -t, then sshd -T for the effective values, before any restart."
+      fr: "Chargé au démarrage. Vérifie avec sshd -t, puis sshd -T pour les valeurs effectives, avant tout redémarrage."
+  - from: cloudinit
+    to: sshd
+    label: "overridden"
+    dashed: true
+    level: deep
+    desc:
+      en: "Read later; for every setting already set by 00-hardening.conf, its value is ignored."
+      fr: "Lu plus tard ; pour chaque réglage déjà fixé par 00-hardening.conf, sa valeur est ignorée."
+  - from: upgrades
+    to: sshd
+    label: "patches"
+    dashed: true
+    level: guided
+    desc:
+      en: "Security fixes for OpenSSH and everything else arrive without you."
+      fr: "Les correctifs de sécurité d'OpenSSH et du reste arrivent sans toi."
+  - from: sshd
+    to: journal
+    label: "logs"
+    dashed: true
+    level: deep
+    desc:
+      en: "Every login attempt, accepted or refused, with the source address."
+      fr: "Chaque tentative de connexion, acceptée ou refusée, avec l'adresse source."
+  - from: journal
+    to: fail2ban
+    label: "reads"
+    dashed: true
+    level: deep
+    when: { flag: FAIL2BAN }
+    desc:
+      en: "fail2ban follows the journal through python3-systemd and counts failures per address."
+      fr: "fail2ban suit le journal via python3-systemd et compte les échecs par adresse."
+  - from: fail2ban
+    to: firewall
+    label: "ban"
+    dashed: true
+    level: guided
+    when: { flag: FAIL2BAN }
+    desc:
+      en: "A ban is a firewall rule dropping the address for an hour, longer for repeat offenders."
+      fr: "Un bannissement est une règle de pare-feu qui jette l'adresse pendant une heure, plus pour les récidivistes."
+  - from: sshd
+    to: debian
+    label: "refused"
+    dashed: true
+    level: deep
+    when: { notFlag: REMOVE_DEBIAN_USER }
+    desc:
+      en: "Not in sshusers and expired: no key opens a session for it."
+      fr: "Hors de sshusers et expiré : aucune clé ne lui ouvre de session."
+  - from: laptop
+    to: kvm
+    label: "rescue"
+    dashed: true
+    level: deep
+    desc:
+      en: "When SSH does not answer: the control panel, then the KVM console."
+      fr: "Quand SSH ne répond plus : l'espace client, puis la console KVM."
+  - from: kvm
+    to: account
+    label: "password login"
+    dashed: true
+    level: deep
+    desc:
+      en: "A local login as ${USERNAME} with the password, which neither the firewall nor sshd can block."
+      fr: "Une connexion locale en ${USERNAME} avec le mot de passe, que ni le pare-feu ni sshd ne peuvent bloquer."

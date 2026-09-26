@@ -1,0 +1,148 @@
+# Quick: the project folder (focus), its build, the SSH key, the backup, and where the key goes next.
+# Guided: the Keychain/agent and the photo originals that must be backed up too.
+# Deep: the off-site copy (3-2-1) and the heavy media inside out/.
+title: { en: "Your Mac, the only original", fr: "Ton Mac, le seul original" }
+caption:
+  en: "The project folder is the single source of truth: it builds into out/, which is what the server will get, and a backup must cover it. The SSH key made here is what opens OVH and the server."
+  fr: "Le dossier du projet est la seule source de vérité : il se construit en out/, ce que recevra le serveur, et une sauvegarde doit le couvrir. La clé SSH créée ici est celle qui ouvre OVH et le serveur."
+
+groups:
+  - id: mac
+    label: { en: "Your Mac", fr: "Ton Mac" }
+    desc:
+      en: "Everything on this page happens here. Nothing is ordered or deployed yet."
+      fr: "Tout ce qui se passe sur cette page a lieu ici. Rien n'est encore commandé ni déployé."
+
+nodes:
+  - id: project
+    kind: file
+    label: { en: "Project folder", fr: "Dossier du projet" }
+    sub: "${LOCAL_DIR}"
+    in: mac
+    focus: true
+    desc:
+      en: "The only original of the site: source, lockfile and public/ media. Everything else (out/, the server) is a copy built from it."
+      fr: "Le seul original du site : sources, fichier de verrouillage et médias de public/. Tout le reste (out/, le serveur) est une copie construite à partir de lui."
+    deep:
+      sub: "${LOCAL_DIR} · package-lock.json · next.config.ts (output: export) · public/ ~217 MB"
+  - id: out
+    kind: file
+    label: { en: "Build output", fr: "Sortie du build" }
+    sub: "out/"
+    in: mac
+    desc:
+      en: "What npm run build produces: plain HTML, CSS, JS and media. Exactly what the server will hold."
+      fr: "Ce que produit npm run build : HTML, CSS, JS et médias bruts. Exactement ce que le serveur contiendra."
+    guided:
+      sub: "out/ · index.html · 404.html"
+    deep:
+      sub: "out/route/index.html · 404.html · _next/static/ (hashed) · WAV 44–55 MB"
+  - id: key
+    kind: file
+    label: { en: "SSH key", fr: "Clé SSH" }
+    sub: "~/.ssh/id_ed25519"
+    in: mac
+    desc:
+      en: "One Ed25519 key pair with a passphrase. The private half stays here; the public half goes to OVH and the server."
+      fr: "Une paire de clés Ed25519 avec phrase de passe. La moitié privée reste ici ; la moitié publique va chez OVH et sur le serveur."
+    deep:
+      sub: "ed25519 · ${USERNAME}@laptop · passphrase in Keychain"
+  - id: agent
+    kind: service
+    label: { en: "ssh-agent + Keychain", fr: "ssh-agent + trousseau" }
+    sub: "UseKeychain yes"
+    in: mac
+    level: guided
+    desc:
+      en: "Holds the unlocked key in memory, with the passphrase stored in the macOS Keychain, so ssh and rsync do not ask for it."
+      fr: "Garde la clé déverrouillée en mémoire, la phrase de passe étant dans le trousseau macOS : ssh et rsync ne la demandent pas."
+  - id: originals
+    kind: file
+    label: { en: "Photo originals", fr: "Photos originales" }
+    sub: "photos-26-og/ · 276 MB"
+    in: mac
+    level: guided
+    desc:
+      en: "HEIC and MOV sources for scripts/pictures.py. Not part of the site, and their only copy: the backup must cover them."
+      fr: "Les sources HEIC et MOV de scripts/pictures.py. Pas une partie du site, et leur seule copie : la sauvegarde doit les couvrir."
+  - id: backup
+    kind: store
+    label: { en: "Time Machine", fr: "Time Machine" }
+    sub: "tmutil latestbackup"
+    desc:
+      en: "The backup disk. Without it, losing the Mac means losing the site: the server only holds built copies."
+      fr: "Le disque de sauvegarde. Sans lui, perdre le Mac, c'est perdre le site : le serveur ne tient que des copies construites."
+    deep:
+      sub: "external disk or network share · [Included] ${LOCAL_DIR}"
+  - id: offsite
+    kind: store
+    label: { en: "Off-site copy", fr: "Copie hors site" }
+    sub: "3-2-1"
+    level: deep
+    desc:
+      en: "A second backup somewhere else: a disk kept at another address, or an encrypted cloud backup. Survives a fire or a burglary."
+      fr: "Une seconde sauvegarde ailleurs : un disque gardé à une autre adresse, ou une sauvegarde chiffrée dans le cloud. Survit à un incendie ou un cambriolage."
+  - id: later
+    kind: server
+    label: { en: "Later: OVH and the server", fr: "Plus tard : OVH et le serveur" }
+    sub: "authorized_keys"
+    desc:
+      en: "The public key goes into the OVH order form (next page), then into authorized_keys of ${USERNAME} on the VPS."
+      fr: "La clé publique va dans le formulaire de commande OVH (page suivante), puis dans l'authorized_keys de ${USERNAME} sur le VPS."
+    deep:
+      sub: "OVH order form → /home/${USERNAME}/.ssh/authorized_keys"
+
+edges:
+  - from: project
+    to: out
+    label: "npm run build"
+    deep: { label: "npm ci && next build (static export)" }
+    desc:
+      en: "A clean install from the lockfile, then a static export into out/."
+      fr: "Une installation propre depuis le fichier de verrouillage, puis un export statique dans out/."
+  - from: project
+    to: backup
+    label: "backed up"
+    guided: { label: "Time Machine · hourly" }
+    desc:
+      en: "Time Machine copies the folder to the backup disk. Check it is not excluded."
+      fr: "Time Machine copie le dossier sur le disque de sauvegarde. Vérifie qu'il n'est pas exclu."
+  - from: key
+    to: later
+    label: "public half"
+    dashed: true
+    desc:
+      en: "Only the public key leaves the Mac: pasted at OVH, then placed in authorized_keys on the server."
+      fr: "Seule la clé publique quitte le Mac : collée chez OVH, puis placée dans authorized_keys sur le serveur."
+  - from: out
+    to: later
+    label: "deploy (page 6)"
+    dashed: true
+    level: guided
+    desc:
+      en: "Later, rsync sends out/ to the server: everything once, then only what changed."
+      fr: "Plus tard, rsync envoie out/ au serveur : tout une fois, puis seulement ce qui a changé."
+  - from: key
+    to: agent
+    label: "unlocked"
+    dashed: true
+    level: guided
+    desc:
+      en: "The passphrase comes from the Keychain; the agent keeps the unlocked key in memory."
+      fr: "La phrase de passe vient du trousseau ; l'agent garde la clé déverrouillée en mémoire."
+  - from: originals
+    to: backup
+    label: "backed up"
+    dashed: true
+    level: guided
+    desc:
+      en: "The only originals of the photos: they must be in the backup too."
+      fr: "Les seuls originaux des photos : ils doivent être dans la sauvegarde aussi."
+  - from: backup
+    to: offsite
+    label: "second copy"
+    dashed: true
+    level: deep
+    desc:
+      en: "3-2-1: three copies, two media, one off-site."
+      fr: "3-2-1 : trois copies, deux supports, une hors site."

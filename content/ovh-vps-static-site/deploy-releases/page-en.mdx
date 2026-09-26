@@ -1,0 +1,284 @@
+{/* First pass — to be validated against man rsync (--link-dest, --checksum, --chmod), man sshd (AUTHORIZED_KEYS FILE FORMAT, restrict) and man mv (-T) before publishing. */}
+
+The site is served, but only a placeholder. This page gives you one command, `./scripts/deploy.sh`, that builds the site on your laptop, uploads only what changed into a new release directory on the server, switches the live site to it in one atomic step, deletes old releases beyond the last <V name="KEEP_RELEASES" />, and checks that https://<V name="DOMAIN" /> answers. A second command rolls back. The uploads go through a dedicated account, <V name="DEPLOY_USER" />, with its own key, no sudo, and the web root as the only thing it owns.
+
+<Run>
+
+Open a new file `deploy-setup.sh` in the project folder, paste every code block of this section into it in order, then run `bash deploy-setup.sh`. It runs **on your laptop**, from <V name="LOCAL_DIR" />, as you. It needs `ssh vps` working (page 3), Caddy serving <V name="WEB_ROOT" />/current (page 5), and rsync 3 from Homebrew. The one `ssh -t vps sudo …` call asks for your sudo password on the server, once.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Deploy releases — ${DOMAIN}
+cd ${LOCAL_DIR}
+rsync --version | grep 'version 3\.' >/dev/null || { echo "Install rsync 3 first: brew install rsync" >&2; exit 1; }
+
+# 1. On the laptop: a key used only for deploys
+[ -f ~/.ssh/id_ed25519_deploy ] || ssh-keygen -t ed25519 -N "" -C "deploy@laptop" -f ~/.ssh/id_ed25519_deploy
+
+# 2. On the server: deploy user, restricted key, web root ownership
+SETUP=$(mktemp)
+cat > "$SETUP" <<'EOF'
+set -eu
+apt-get -o DPkg::Lock::Timeout=300 install -y -q rsync >/dev/null
+id -u ${DEPLOY_USER} >/dev/null 2>&1 || adduser --disabled-password --gecos "" ${DEPLOY_USER}
+usermod -aG sshusers ${DEPLOY_USER}
+install -d -m 700 -o ${DEPLOY_USER} -g ${DEPLOY_USER} /home/${DEPLOY_USER}/.ssh
+sed 's/^/restrict /' /home/${USERNAME}/deploy.pub > /home/${DEPLOY_USER}/.ssh/authorized_keys
+chown ${DEPLOY_USER}:${DEPLOY_USER} /home/${DEPLOY_USER}/.ssh/authorized_keys
+chmod 600 /home/${DEPLOY_USER}/.ssh/authorized_keys
+chown -R ${DEPLOY_USER}:${DEPLOY_USER} ${WEB_ROOT}
+rm /home/${USERNAME}/deploy.pub
+EOF
+scp -q ~/.ssh/id_ed25519_deploy.pub vps:deploy.pub
+scp -q "$SETUP" vps:setup-deploy-user.sh
+rm "$SETUP"
+ssh -t vps 'sudo bash setup-deploy-user.sh && rm setup-deploy-user.sh'
+
+# 3. On the laptop: the vps-deploy alias
+grep -q '^Host vps-deploy$' ~/.ssh/config 2>/dev/null || printf '\nHost vps-deploy\n  HostName ${SERVER_IP}\n  Port ${SSH_PORT}\n  User ${DEPLOY_USER}\n  IdentityFile ~/.ssh/id_ed25519_deploy\n  IdentitiesOnly yes\n' >> ~/.ssh/config
+ssh vps-deploy 'ls ${WEB_ROOT}'
+
+# 4. The deploy and rollback scripts, in the project folder
+mkdir -p scripts
+cat > scripts/deploy.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+HOST=vps-deploy; ROOT=${WEB_ROOT}; KEEP=${KEEP_RELEASES}
+[ "$KEEP" -ge 1 ] || { echo "KEEP_RELEASES must be at least 1" >&2; exit 1; }
+npm ci
+npm run build
+test -f out/index.html
+REL=$(date -u +%Y%m%dT%H%M%SZ); echo "Release $REL"
+rsync -rlpz --checksum --delete --chmod=D755,F644 --link-dest="$ROOT/current/" out/ "$HOST:$ROOT/releases/$REL/"
+ssh "$HOST" "cd $ROOT && ln -sfn releases/$REL current.tmp && mv -T current.tmp current"
+ssh "$HOST" "cd $ROOT/releases && ls -1d 20* | sort | head -n -$KEEP | xargs -r rm -rf --"
+curl -fsS -o /dev/null -w '%{http_code}\n' https://${DOMAIN}/
+EOF
+cat > scripts/rollback.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+HOST=vps-deploy; ROOT=${WEB_ROOT}
+CUR=$(ssh "$HOST" "readlink $ROOT/current"); CUR=$(basename "$CUR")
+LIST=$(ssh "$HOST" "cd $ROOT/releases && ls -1d 20* | sort")
+if [ $# -gt 0 ]; then TARGET=$1; else TARGET=$(printf '%s\n' "$LIST" | awk -v c="$CUR" '$0 == c { print p; exit } { p = $0 }'); fi
+[ -n "$TARGET" ] || { echo "No release older than $CUR." >&2; exit 1; }
+printf '%s\n' "$LIST" | grep -qx "$TARGET" || { echo "Unknown release: $TARGET" >&2; exit 1; }
+ssh "$HOST" "cd $ROOT && ln -sfn releases/$TARGET current.tmp && mv -T current.tmp current"
+echo "current: $CUR -> $TARGET"
+curl -fsS -o /dev/null -w '%{http_code}\n' https://${DOMAIN}/
+EOF
+chmod +x scripts/deploy.sh scripts/rollback.sh
+
+# 5. First deploy
+./scripts/deploy.sh
+ssh vps-deploy 'readlink ${WEB_ROOT}/current'
+```
+
+<Warn>The deploy script deletes, on the server, every release directory beyond the newest <V name="KEEP_RELEASES" /> whose name starts with `20`. Nothing else in <V name="WEB_ROOT" /> is touched.</Warn>
+
+</Run>
+
+## Before you start
+
+You need pages 1 to 5 done: the project folder on your laptop (page 1), `ssh vps` logging you in as <V name="USERNAME" />, and Caddy serving the placeholder at https://<V name="DOMAIN" />.
+
+<Check cmd="curl -s -o /dev/null -w '%{http_code}' https://${DOMAIN}/" expect="200" />
+
+The Mac's own `rsync` is not the one you want. Install rsync 3 from Homebrew (install Homebrew from brew.sh first if `brew` is missing), then open a new terminal so it comes first in your `PATH`:
+
+```bash
+brew install rsync
+rsync --version | head -1
+```
+
+<Check cmd="rsync --version | head -1 | grep -o 'version 3'" expect="version 3" />
+
+<Deep>Depending on the macOS release, `/usr/bin/rsync` is either the ancient rsync 2.6.9 or `openrsync`, a separate implementation behind a wrapper. Both speak the rsync protocol, but their option coverage and edge cases differ from rsync 3, which is what Debian runs on the other end. With Homebrew's rsync 3.x on both sides, every flag used below behaves as documented in `man rsync`. Check which binary your shell picks with `which rsync`: it should be under `/opt/homebrew/bin`.</Deep>
+
+## Create the deploy user
+
+Your admin account has sudo; the account that uploads the site must not, and it gets a key of its own. On the laptop, create the deploy key if it does not exist yet, copy its public half to the server, then log in as usual:
+
+```bash
+[ -f ~/.ssh/id_ed25519_deploy ] || ssh-keygen -t ed25519 -N "" -C "deploy@laptop" -f ~/.ssh/id_ed25519_deploy
+scp ~/.ssh/id_ed25519_deploy.pub vps:deploy.pub
+ssh vps
+```
+
+<Deep>The deploy key has no passphrase because the scripts must run without a prompt. That is acceptable here: the key opens only <V name="DEPLOY_USER" />, which can write the web root and nothing else, and FileVault protects the disk it sits on when the Mac is off. If you prefer a passphrase, store it in the macOS keychain (`ssh-add --apple-use-keychain ~/.ssh/id_ed25519_deploy`, plus `UseKeychain yes` in the host block below) and the scripts still run unattended.</Deep>
+
+On the server, install rsync (the receiving end), create the user, let it through SSH, give it the web root, and install the deploy key for it, prefixed with `restrict`:
+
+```bash
+sudo apt install -y rsync
+sudo adduser --disabled-password --gecos "" ${DEPLOY_USER}
+sudo usermod -aG sshusers ${DEPLOY_USER}
+sudo chown -R ${DEPLOY_USER}:${DEPLOY_USER} ${WEB_ROOT}
+sudo install -d -m 700 -o ${DEPLOY_USER} -g ${DEPLOY_USER} /home/${DEPLOY_USER}/.ssh
+sed 's/^/restrict /' deploy.pub | sudo tee /home/${DEPLOY_USER}/.ssh/authorized_keys
+sudo chown ${DEPLOY_USER}:${DEPLOY_USER} /home/${DEPLOY_USER}/.ssh/authorized_keys
+sudo chmod 600 /home/${DEPLOY_USER}/.ssh/authorized_keys
+rm deploy.pub
+exit
+```
+
+<Guided>`--disabled-password` creates an account with no password at all: it can only log in with a key. The `sshusers` group is the one `AllowGroups` lets in since page 3; without it, sshd refuses the user before even looking at its key. `chown -R` hands `releases/`, the placeholder and the `current` link to the deploy user, so it can add releases and move the link without sudo. `tee` echoes the key line it wrote, starting with `restrict ssh-ed25519` and ending with `deploy@laptop`.</Guided>
+
+<Guided>`restrict` is an option in front of the key. It turns off everything a deploy never needs: no pseudo-terminal, no port forwarding, no agent or X11 forwarding. Commands still run, which is all rsync and the symlink swap need. `sshd` ignores an `authorized_keys` file that others can write, hence the `700` on the folder and `600` on the file.</Guided>
+
+<Warn>Never add <V name="DEPLOY_USER" /> to the `sudo` group, and never give it a sudoers rule. Its key sits on your laptop without a passphrase and is used by scripts. With sudo, a leaked copy would own the server instead of the site.</Warn>
+
+<Deep>Why a separate account and a separate key: blast radius. `id_ed25519_deploy` is authorised for <V name="DEPLOY_USER" /> only, and your admin key is not authorised for <V name="DEPLOY_USER" />. If the deploy key leaks (a copied file, a backup restored elsewhere), the attacker can rewrite <V name="WEB_ROOT" /> and nothing else: no sudo, no shell with a terminal, no tunnels into the server. The `from="…"` option would also pin the key to source addresses, which works for a fixed home IP but not for a laptop that deploys from cafés, trains and hotel networks. Two further steps if you want them: `command="rrsync …"` (Debian's rsync package ships `rrsync`) forces the key to rsync only, but then the `ssh` swap and prune in the script are refused, so you would move them server-side; and making `authorized_keys` owned by root (`root:root`, mode 644) stops a leaked key from adding keys of its own, since sshd accepts files owned by root.</Deep>
+
+<Note>Caddy runs as the `caddy` user and only needs to read: directories `755`, files `644`. The deploy script forces exactly those with `--chmod`, whatever the permissions are on your Mac.</Note>
+
+## Add the laptop alias
+
+Add a second host to `~/.ssh/config` on your laptop, next to `vps`:
+
+```bash
+cat >> ~/.ssh/config <<'EOF'
+
+Host vps-deploy
+  HostName ${SERVER_IP}
+  Port ${SSH_PORT}
+  User ${DEPLOY_USER}
+  IdentityFile ~/.ssh/id_ed25519_deploy
+  IdentitiesOnly yes
+EOF
+```
+
+<Guided>Same server, same port, different user and key. `IdentityFile` picks the deploy key; `IdentitiesOnly yes` limits ssh to the keys named in the config: your admin key (from the `Host *` block of page 1) may be offered first and is refused, since the deploy user does not trust it. Every script on this page talks to `vps-deploy`, so none of them repeats the IP, the port or the key. The host key is already in your `known_hosts` from page 3, so there is no fingerprint prompt.</Guided>
+
+<Check cmd="ssh vps-deploy 'ls ${WEB_ROOT}'" expect="current
+releases" />
+
+<Details summary="If it says Permission denied (publickey)">
+
+In order of likelihood: the user is not in the `sshusers` group, the permissions on /home/<V name="DEPLOY_USER" />/.ssh are too open, the key line lost its `ssh-ed25519` prefix, or the `IdentityFile` path does not match the key you created. On the server, `sudo journalctl -u ssh -n 20` names the reason.
+
+</Details>
+
+## Write the deploy script
+
+Create the `scripts` folder in the project:
+
+```bash
+cd ${LOCAL_DIR} && mkdir -p scripts
+```
+
+Then create `scripts/deploy.sh` in it, with this content:
+
+<Annotated>
+
+```bash title="scripts/deploy.sh"
+#!/usr/bin/env bash
+# Build the site and publish it as a new release. Usage: ./scripts/deploy.sh
+set -euo pipefail
+cd "$(dirname "$0")/.."                                         # (1)
+
+HOST=vps-deploy                                                 # (2)
+ROOT=${WEB_ROOT}
+KEEP=${KEEP_RELEASES}
+[ "$KEEP" -ge 1 ] || { echo "KEEP_RELEASES must be at least 1" >&2; exit 1; }   # (3)
+
+npm ci                                                          # (4)
+npm run build
+test -f out/index.html                                          # (5)
+
+REL=$(date -u +%Y%m%dT%H%M%SZ)                                  # (6)
+echo "Release $REL"
+
+rsync -rlpz --checksum --delete --chmod=D755,F644 \
+  --link-dest="$ROOT/current/" \
+  out/ "$HOST:$ROOT/releases/$REL/"                             # (7)
+
+ssh "$HOST" "cd $ROOT && ln -sfn releases/$REL current.tmp && mv -T current.tmp current"   # (8)
+ssh "$HOST" "cd $ROOT/releases && ls -1d 20* | sort | head -n -$KEEP | xargs -r rm -rf --" # (9)
+curl -fsS -o /dev/null -w '%{http_code}\n' https://${DOMAIN}/     # (10)
+```
+
+1. Runs from the project root wherever you call it from, and stops at the first failing command.
+2. The alias from the previous step. Your values are already written into `ROOT` and `KEEP`.
+3. With 0, `head -n -0` below would list every release, the live one included, and delete them all. The script refuses to start instead.
+4. `npm ci` installs exactly what `package-lock.json` says, so every build starts from the same dependencies.
+5. A failed or empty build stops here instead of replacing the live site with nothing.
+6. The release name is the UTC time of the deploy, for example `20260926T141500Z`. Sorting the names as text sorts them by date, and UTC never jumps back an hour in autumn.
+7. Uploads `out/` into a new directory. Files identical to the live release are hard-linked on the server instead of sent; only changed files cross the network.
+8. The atomic swap: a new link is prepared next to `current`, then renamed over it in one step.
+9. Deletes every release beyond the newest <V name="KEEP_RELEASES" />. Only names starting with `20` are considered, so the `placeholder` from page 5 is never touched.
+10. Prints `200` when the live site answers; `-f` makes the script fail on any HTTP error.
+
+</Annotated>
+
+<Deep>The rsync flags are not the usual `-a`, on purpose. `-a` includes `-t` (keep modification times) and `-g` (keep the group). Every `npm run build` rewrites every file in `out/`, even unchanged ones, so their times always differ, and rsync hard-links from `--link-dest` only when content, permissions, times and owner all match: with `-a`, nothing would ever be linked and each release would cost the full 200-odd MB. With `-rlp --checksum`, files are compared by content; an unchanged photo keeps the inode, and so the timestamp, of the release that first uploaded it. Caddy's `ETag` and `Last-Modified` are built from that timestamp, so browsers keep their cached copy of unchanged media across deploys. `--checksum` reads every file on both sides on each deploy: a second or two for this site. `--delete` does nothing in a fresh directory; it makes a re-run into an existing one exact.</Deep>
+
+<Deep>`ln -sfn` alone promises no atomicity: it may remove `current` and then create the new link, and a request landing between the two gets a 404. `mv -T current.tmp current` is a single `rename(2)` system call, which replaces the old link in one step: every request sees either the old release or the new one. `-T` stops `mv` from moving `current.tmp` into the directory `current` points to. Both `mv -T` and `head -n -N` are GNU options; they run on the Debian side, which is why the swap and the prune go through `ssh` rather than running on the Mac. A request already reading a file when the link moves finishes from the old release, which is still on disk. One visible edge: a visitor whose page was loaded before the swap may request an old `/_next/static/` chunk; it is gone from the new release, and Next.js falls back to a full page load.</Deep>
+
+## Deploy for the first time
+
+Make the script executable and run it. The last line of the output should be `200`; open https://<V name="DOMAIN" /> and your site replaces the placeholder. The first upload sends the whole site (about 220 MB with the media in `public/`); the next ones send only what changed.
+
+<Warn>From the deploy after the <V name="KEEP_RELEASES" />th on, each run permanently deletes the oldest releases on the server. Your project folder still has the source; the server keeps only what `KEEP` allows.</Warn>
+
+```bash
+cd ${LOCAL_DIR}
+chmod +x scripts/deploy.sh
+./scripts/deploy.sh
+```
+
+<Check cmd="ssh vps-deploy 'readlink ${WEB_ROOT}/current | cut -c1-11'" expect="releases/20" />
+
+<Note>`scripts/deploy.sh`, and `scripts/rollback.sh` below, live in the project folder next to `package.json`. The Mac backup from page 1 covers them like the rest of the site.</Note>
+
+<Guided>`current` now points to `releases/` followed by the timestamp, and the placeholder release is still next to it. Once you are happy with the real site, remove it; the script never does it for you.</Guided>
+
+```bash
+ssh vps-deploy 'rm -rf ${WEB_ROOT}/releases/placeholder'
+```
+
+<Deep>`du` counts a hard-linked file once, in the first directory where it meets it. After two deploys, `du -sh releases/*` in the web root shows the first release at full size and the next ones at the size of what changed. That is why keeping <V name="KEEP_RELEASES" /> releases costs little disk on a 40 GB VPS.</Deep>
+
+## Roll back
+
+Rolling back is the swap again, pointed at an older release. This script points `current` at the release immediately before the live one, or at the one you name:
+
+```bash title="scripts/rollback.sh"
+#!/usr/bin/env bash
+# Usage: ./scripts/rollback.sh [release-name]
+set -euo pipefail
+HOST=vps-deploy
+ROOT=${WEB_ROOT}
+CUR=$(ssh "$HOST" "readlink $ROOT/current")
+CUR=$(basename "$CUR")
+LIST=$(ssh "$HOST" "cd $ROOT/releases && ls -1d 20* | sort")
+if [ $# -gt 0 ]; then
+  TARGET=$1
+else
+  TARGET=$(printf '%s\n' "$LIST" | awk -v c="$CUR" '$0 == c { print p; exit } { p = $0 }')
+fi
+[ -n "$TARGET" ] || { echo "No release older than $CUR." >&2; exit 1; }
+printf '%s\n' "$LIST" | grep -qx "$TARGET" || { echo "Unknown release: $TARGET" >&2; exit 1; }
+ssh "$HOST" "cd $ROOT && ln -sfn releases/$TARGET current.tmp && mv -T current.tmp current"
+echo "current: $CUR -> $TARGET"
+curl -fsS -o /dev/null -w '%{http_code}\n' https://${DOMAIN}/
+```
+
+Make it executable, deploy once more so the server holds two releases, list them, and roll back to the first:
+
+```bash
+chmod +x scripts/rollback.sh
+./scripts/deploy.sh
+ssh vps-deploy 'ls -1 ${WEB_ROOT}/releases'
+./scripts/rollback.sh
+```
+
+<Guided>Run the script twice and it steps back twice: each run looks for the release before the one that is live. To go forward again, name the release: `./scripts/rollback.sh 20260926T141500Z`, or deploy again. The rollback does not touch your project folder: the next `./scripts/deploy.sh` publishes whatever is in it. To stay on the old version, undo the change in the folder before the next deploy.</Guided>
+
+## Done
+
+A deploy is now one command, `./scripts/deploy.sh`, and a rollback another, `./scripts/rollback.sh`. Each release is a directory named by its UTC deploy time, the live one is whatever `current` points to, and the switch between them is a single rename. The server keeps the last <V name="KEEP_RELEASES" />.
+
+The next page, **Backups, monitoring and the monthly routine**, makes sure you hear about it when the site goes down, and that the server can be rebuilt if the VPS is lost.

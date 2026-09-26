@@ -1,0 +1,405 @@
+{/* Premier jet — à valider contre https://nextjs.org/docs/app/api-reference/file-conventions/metadata/robots , https://nextjs.org/docs/app/api-reference/file-conventions/metadata/sitemap , https://nextjs.org/docs/app/guides/static-exports et https://hstspreload.org avant publication. */}
+
+Le site est en ligne. Avant d'en parler à qui que ce soit, cette page ajoute les deux fichiers qu'un export statique ne produit pas tout seul — `robots.txt` et `sitemap.xml` —, allège les fichiers qui ralentissent les pages, puis vérifie depuis l'extérieur, comme le voient un visiteur ou un robot d'indexation, tout ce que les pages 4 à 7 ont mis en place. Elle se termine par les moteurs de recherche et une courte liste pour le jour de l'annonce.
+
+<Run>
+
+Ouvre un nouveau fichier `launch-check.sh` dans le dossier du projet, colles-y tous les blocs de code de cette section dans l'ordre, puis lance `bash launch-check.sh`. Il tourne **sur ton Mac**, depuis <V name="LOCAL_DIR" />, sous ton compte, avec le site déjà en ligne et `dig`, `curl` et `openssl` disponibles (ils sont fournis avec macOS). Il écrit `app/sitemap.ts` s'il manque et `app/robots.ts` (écrasé, pour suivre le choix d'indexation), déploie avec `scripts/deploy.sh` de la page 6 (qui lance lui-même `npm ci` et le build), puis affiche PASS, FAIL ou NOTE pour chaque vérification externe et sort en erreur si l'une échoue. Passer HSTS à un an reste une étape manuelle : elle demande sudo sur le serveur.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Launch checklist — https://${DOMAIN}
+cd ${LOCAL_DIR}
+[ -d app ] || { echo "No app/ folder in $PWD: adjust the paths below (src/app?)." >&2; exit 1; }
+if [ ! -f app/sitemap.ts ]; then
+cat > app/sitemap.ts <<'EOF'
+import type { MetadataRoute } from "next";
+export const dynamic = "force-static";
+const SITE = "https://${DOMAIN}";
+const ROUTES = [
+  "/", "/bio/", "/bookmarks/", "/chess/", "/clippings/", "/contact/",
+  "/endeavor/", "/how-i-want-to-live/", "/journey/", "/lately/", "/library/",
+  "/own/", "/pearl/", "/picture/", "/support/", "/thought/", "/travel/", "/writing/",
+];
+export default function sitemap(): MetadataRoute.Sitemap {
+  const now = new Date();
+  return ROUTES.map((path) => ({ url: SITE + path, lastModified: now }));
+}
+EOF
+fi
+```
+
+<When flag="INDEXING">
+
+```bash
+RULE='allow: "/"'
+```
+
+</When>
+
+<When notFlag="INDEXING">
+
+```bash
+RULE='disallow: "/"'
+```
+
+</When>
+
+```bash
+cat > app/robots.ts <<EOF
+import type { MetadataRoute } from "next";
+export const dynamic = "force-static";
+const SITE = "https://${DOMAIN}";
+export default function robots(): MetadataRoute.Robots {
+  return { rules: { userAgent: "*", $RULE }, sitemap: SITE + "/sitemap.xml" };
+}
+EOF
+./scripts/deploy.sh
+ls out/robots.txt out/sitemap.xml >/dev/null
+FAILS=0
+check() {
+  if eval "$2" >/dev/null 2>&1; then echo "PASS  $1"; else echo "FAIL  $1"; FAILS=$((FAILS+1)); fi
+}
+code() { curl -s -o /dev/null -w '%{http_code}' "$1"; }
+loc() { curl -sI "$1" | tr -d '\r' | awk 'tolower($1)=="location:" {print $2}'; }
+
+check "https://${DOMAIN}/ answers 200" '[ "$(code https://${DOMAIN}/)" = 200 ]'
+check "http:// redirects to https:// (301/308)" 'code http://${DOMAIN}/ | grep -Eq "^30[18]$" && [ "$(loc http://${DOMAIN}/)" = "https://${DOMAIN}/" ]'
+check "www redirects to the apex (301/308)" 'code https://www.${DOMAIN}/ | grep -Eq "^30[18]$" && [ "$(loc https://www.${DOMAIN}/)" = "https://${DOMAIN}/" ]'
+check "Unknown page returns 404" '[ "$(code https://${DOMAIN}/launch-check-$RANDOM/)" = 404 ]'
+check "robots.txt answers 200" '[ "$(code https://${DOMAIN}/robots.txt)" = 200 ]'
+check "sitemap.xml answers 200" '[ "$(code https://${DOMAIN}/sitemap.xml)" = 200 ]'
+check "HSTS header present" 'curl -sI https://${DOMAIN}/ | grep -qi "^strict-transport-security:"'
+check "Certificate issued by Let's Encrypt" 'echo | openssl s_client -connect ${DOMAIN}:443 -servername ${DOMAIN} 2>/dev/null | openssl x509 -noout -issuer | grep -q "Let.s Encrypt"'
+check "A record is ${SERVER_IP}" 'dig +short A ${DOMAIN} | grep -qxF "${SERVER_IP}"'
+if [ -n "$(dig +short AAAA ${DOMAIN})" ]; then echo "PASS  AAAA record resolves"; else echo "NOTE  no AAAA record (fine if you skipped IPv6 on page 4)"; fi
+check "HTTP/3 advertised (alt-svc h3)" 'curl -sI https://${DOMAIN}/ | grep -qi "^alt-svc:.*h3"'
+```
+
+<When flag="HSTS_PRELOAD">
+
+```bash
+check "HSTS header is preload-ready" 'curl -sI https://${DOMAIN}/ | grep -i "^strict-transport-security:" | grep -q "includeSubDomains; preload"'
+```
+
+</When>
+
+```bash
+echo
+if [ "$FAILS" -gt 0 ]; then
+  echo "$FAILS check(s) failed. Fix them before announcing."
+  exit 1
+fi
+echo "All checks passed. Next: SSL Labs, securityheaders.com, Lighthouse, then raise HSTS to a year."
+```
+
+</Run>
+
+## Avant de commencer
+
+Le site est déployé avec le script de la page 6 et répond sur son domaine. Tout ce qui suit se fait sur ton Mac, depuis le dossier du projet, sauf les modifications HSTS sur le serveur. Prévois deux amis comme testeurs externes pour la fin : un en données mobiles, un sur le Wi-Fi d'un autre opérateur. D'abord, la page d'accueil répond :
+
+<Check cmd="curl -s -o /dev/null -w '%{http_code}' https://${DOMAIN}/" expect="200" />
+
+## Ajouter robots.txt et sitemap.xml
+
+`output: "export"` n'écrit que ce que l'application déclare. Next.js a deux fichiers de métadonnées pour ça : `app/robots.ts` et `app/sitemap.ts`. Au build, chacun devient un fichier ordinaire dans `out/`.
+
+<When flag="INDEXING">
+
+```ts title="app/robots.ts"
+import type { MetadataRoute } from "next";
+export const dynamic = "force-static";
+const SITE = "https://${DOMAIN}";
+export default function robots(): MetadataRoute.Robots {
+  return {
+    rules: { userAgent: "*", allow: "/" },
+    sitemap: SITE + "/sitemap.xml",
+  };
+}
+```
+
+</When>
+
+<When notFlag="INDEXING">
+
+```ts title="app/robots.ts"
+import type { MetadataRoute } from "next";
+export const dynamic = "force-static";
+const SITE = "https://${DOMAIN}";
+export default function robots(): MetadataRoute.Robots {
+  return {
+    rules: { userAgent: "*", disallow: "/" },
+    sitemap: SITE + "/sitemap.xml",
+  };
+}
+```
+
+</When>
+
+```ts title="app/sitemap.ts"
+import type { MetadataRoute } from "next";
+export const dynamic = "force-static";
+const SITE = "https://${DOMAIN}";
+const ROUTES = [
+  "/", "/bio/", "/bookmarks/", "/chess/", "/clippings/", "/contact/",
+  "/endeavor/", "/how-i-want-to-live/", "/journey/", "/lately/", "/library/",
+  "/own/", "/pearl/", "/picture/", "/support/", "/thought/", "/travel/", "/writing/",
+];
+export default function sitemap(): MetadataRoute.Sitemap {
+  const now = new Date();
+  return ROUTES.map((path) => ({ url: SITE + path, lastModified: now }));
+}
+```
+
+<Note>C'est `export const dynamic = "force-static"` qui permet à ces deux routes de se construire avec `output: "export"` dans les versions récentes de Next.js ; sans lui, le build s'arrête sur une erreur qui cite `/robots.txt`. À confirmer dans la doc Next.js, « Metadata files: robots.txt » et « sitemap.xml », et dans le guide « Static exports ».</Note>
+
+<Guided>
+
+Chaque URL garde sa barre finale, parce que `trailingSlash: true` fait de `/bio/` l'adresse canonique et de `/bio` une redirection. Un sitemap ne doit lister que des URL canoniques. La liste contient les pages de premier niveau. Les pages de détail — `/clippings/[slug]`, `/endeavor/[slug]`, `/picture/[slug]`, `/writing/[slug]`, `/writing/series/[name]` — s'ajoutent en appelant, dans `sitemap()`, la fonction qu'appelle le `generateStaticParams` de la page concernée, puis en transformant chaque slug en `SITE + "/writing/" + slug + "/"`. Si cette fonction est `async`, rends `sitemap()` `async` aussi.
+
+Laisse de côté les pages privées sous `/contact/` et `/chess/` qui portent un code dans l'URL. Ce sont des conversations privées, marquées `noindex` : les lister reviendrait à donner leurs adresses à tous les robots.
+
+</Guided>
+
+Déploie avec le script de la page 6, qui construit avant d'envoyer, puis vérifie que les deux fichiers ont bien été générés :
+
+```bash
+cd ${LOCAL_DIR}
+./scripts/deploy.sh
+ls out/robots.txt out/sitemap.xml
+```
+
+<Check cmd="curl -s https://${DOMAIN}/robots.txt | head -1" expect="User-Agent: *" />
+
+<Note>Next.js écrit la première ligne `User-Agent: *`, avec un A majuscule. Les robots ignorent la casse ; si ta version affiche `User-agent`, le fichier est bon.</Note>
+
+<Details summary="Si le build échoue ou si out/robots.txt manque">
+
+Un `public/robots.txt` ou `public/sitemap.xml` entre en conflit avec celui qui est généré : supprime celui de `public/`. Une erreur qui cite `dynamic` ou `revalidate` sur `/robots.txt` veut dire que la ligne `force-static` manque. Un projet organisé en `src/app/` prend les deux fichiers à cet endroit.
+
+</Details>
+
+<Deep>Ne mets pas les URL privées de `/contact/` et `/chess/` dans une ligne `Disallow` pour les cacher. `robots.txt` est public : la liste devient la carte de ce que tu veux cacher. Et une URL interdite peut quand même être indexée à partir d'un lien ailleurs, puisque le robot ne récupère jamais la page et ne voit donc jamais son `noindex`. La balise meta `noindex`, sur une page que les robots ont le droit de lire, est l'outil qui la garde hors des résultats.</Deep>
+
+## Alléger les fichiers les plus lourds
+
+Un WAV de 50 Mo sur une page, c'est 50 Mo à télécharger sur un téléphone. Liste tout ce que le site sert au-delà de 5 Mo :
+
+```bash
+cd ${LOCAL_DIR}
+find out -type f -size +5M -exec ls -lh {} \; | sort -k5 -h
+```
+
+<Guided>Si tu as déjà compressé les médias lourds, la liste est courte. Ce qui reste d'habitude : des WAV, des JPEG sortis du téléphone (4000 px de large et plus) et quelques MP4.</Guided>
+
+L'audio : convertis chaque WAV en Opus, ou en MP3 pour les navigateurs les plus anciens, puis change la référence dans le code.
+
+```bash
+brew install ffmpeg
+ffmpeg -i public/audio/track.wav -c:a libopus -b:a 128k public/audio/track.opus
+ffmpeg -i public/audio/track.wav -c:a libmp3lame -q:a 2 public/audio/track.mp3
+grep -rn '\.wav' app components lib 2>/dev/null
+```
+
+<Guided>`track.wav` représente le vrai nom et le vrai dossier de ton fichier. De l'Opus à 128 kbit/s est transparent pour de la musique et environ 25 fois plus léger qu'un WAV stéréo 16 bits. Propose les deux formats avec deux éléments `source` dans la balise `audio` : chaque navigateur prend celui qu'il sait lire.</Guided>
+
+Les images : rien sur une page web n'a besoin de plus de 2400 px sur le grand côté.
+
+<Warn>`sips -Z` écrase l'image sur place, sans retour possible. Travaille sur une copie : duplique `public/` d'abord, et ne le lance jamais sur les originaux de `photos-26-og/`. Time Machine, mis en place en page 1, reste le filet de sécurité si quelque chose t'échappe.</Warn>
+
+```bash
+cd ${LOCAL_DIR}
+cp -R public ../public-before-resize
+find public -iname '*.jp*g' -size +1M -exec sips -Z 2400 {} \;
+du -sh ../public-before-resize public
+```
+
+<Guided>`sips` est fourni avec macOS. `-Z 2400` redimensionne l'image pour que son plus grand côté fasse 2400 px, en gardant les proportions ; les images plus petites ne bougent pas. Regarde quelques résultats avant de supprimer la copie. Relance `./scripts/deploy.sh` quand ça te va ; il reconstruit le site.</Guided>
+
+<Deep>
+
+AVIF et WebP pèsent 30 à 50 % de moins que le JPEG à qualité égale. `brew install webp libavif` donne `cwebp -q 80 in.jpg -o out.webp` et `avifenc in.jpg out.avif` ; sers-les avec un élément `picture` et un JPEG en repli.
+
+Ne compte pas sur `next/image` pour ça. Avec `output: "export"`, il n'y a pas de serveur pour redimensionner les images à la demande, donc le loader par défaut ne peut pas tourner : le projet met soit `images: { unoptimized: true }`, soit un loader personnalisé qui pointe vers un CDN d'images. À confirmer dans le guide Next.js « Static exports », section « Image Optimization ». Redimensionner au build, comme ci-dessus, reste le plus simple pour un site de cette taille.
+
+</Deep>
+
+## Vérifier depuis l'extérieur
+
+### Redirections et codes de statut
+
+```bash
+curl -sI http://${DOMAIN}/ | grep -iE '^(HTTP|location)'
+curl -sI https://www.${DOMAIN}/ | grep -iE '^(HTTP|location)'
+curl -s -o /dev/null -w '%{http_code}\n' https://${DOMAIN}/no-such-page/
+```
+
+```text title="Sortie attendue"
+HTTP/1.1 308 Permanent Redirect
+Location: https://${DOMAIN}/
+HTTP/2 301
+location: https://${DOMAIN}/
+404
+```
+
+<Check cmd="curl -s -o /dev/null -w '%{http_code}' https://${DOMAIN}/no-such-page/" expect="404" />
+
+<Guided>Ouvre la même adresse inexistante dans un navigateur : tu dois voir ta page 404 mise en forme, pas un « Not Found » tout blanc. Le bloc `handle_errors` de Caddy (page 5) sert `404.html` avec le statut 404, pour que les moteurs de recherche n'indexent pas des pages manquantes comme de vraies pages.</Guided>
+
+### TLS
+
+Ouvre le test SSL Labs pour ton domaine. Il prend environ deux minutes. Vise A ; A+ demande un max-age HSTS d'au moins six mois, que l'étape qui suit ces vérifications met en place.
+
+```bash
+open "https://www.ssllabs.com/ssltest/analyze.html?d=${DOMAIN}"
+curl -sv -o /dev/null https://${DOMAIN}/ 2>&1 | grep -E 'issuer|expire date'
+```
+
+<Check cmd={"echo | openssl s_client -connect ${DOMAIN}:443 -servername ${DOMAIN} 2>/dev/null | openssl x509 -noout -issuer | grep -o 'Let.s Encrypt'"} expect="Let's Encrypt" />
+
+<Guided>La ligne de l'émetteur indique `O=Let's Encrypt` avec un intermédiaire comme `E7` ou `R12`. Si elle dit ZeroSSL, Caddy s'est rabattu sur sa seconde autorité : le site marche, mais vérifie que l'enregistrement CAA de la page 4 l'autorise, sinon le prochain renouvellement échouera.</Guided>
+
+### En-têtes de sécurité
+
+```bash
+open "https://securityheaders.com/?q=https://${DOMAIN}/&followRedirects=on"
+curl -sI https://${DOMAIN}/ | grep -iE '^(strict-transport|x-content-type|x-frame|referrer|permissions|content-security)'
+```
+
+Attends-toi à `strict-transport-security`, `x-content-type-options: nosniff`, `referrer-policy` et ce que la page 5 a ajouté d'autre. L'absence de `content-security-policy` est normale à ce stade : elle coûte une note, pas une sécurité que tu avais déjà.
+
+<Note>Si securityheaders.com a disparu ou demande un compte, l'HTTP Observatory de Mozilla (developer.mozilla.org/en-US/observatory) fait les mêmes vérifications gratuitement.</Note>
+
+### IPv6 et HTTP/3
+
+```bash
+dig +short AAAA ${DOMAIN}
+curl -6 -sI https://${DOMAIN}/ | head -1
+curl -sI https://${DOMAIN}/ | grep -i '^alt-svc'
+```
+
+<Note>`curl -6` échoue avec « Couldn't connect » si ton propre réseau n'a pas d'IPv6, ce qui est courant sur les box. Teste alors depuis l'extérieur : ipv6-test.com/validate.php, ou le téléphone d'un testeur en données mobiles.</Note>
+
+<Guided>`alt-svc: h3=":443"` veut dire que Caddy annonce aux navigateurs que HTTP/3 est disponible sur UDP 443, que la page 5 a ouvert dans ufw ; les navigateurs basculent à la requête suivante. `curl --http3` teste HTTP/3 lui-même, mais seulement si `curl -V` liste `HTTP3`. Le curl de macOS ne le fait pas : passe par http3check.net.</Guided>
+
+### Usurpation d'adresse mail
+
+Si tu as indiqué en page 4 que le domaine n'envoie pas de mail, vérifie que les enregistrements « pas de mail » sont publiés, pour que personne ne puisse envoyer du hameçonnage en ton nom :
+
+```bash
+dig +short TXT _dmarc.${DOMAIN}
+dig +short TXT ${DOMAIN} | grep spf1
+```
+
+<Guided>Cherche `p=reject` dans la ligne DMARC et `-all` à la fin de la ligne SPF. Si le domaine envoie du mail (une boîte Infomaniak, par exemple), ces enregistrements viennent de ton fournisseur de mail ; laisse-les tels quels.</Guided>
+
+### Performance
+
+Dans Chrome, ouvre le site en navigation privée, puis DevTools → Lighthouse → Mobile → Analyze page load. Ou passe par PageSpeed Insights, qui lance le même test depuis les serveurs de Google :
+
+```bash
+open "https://pagespeed.web.dev/report?url=https://${DOMAIN}/"
+```
+
+<Guided>Regarde d'abord le Largest Contentful Paint et la ligne « Avoid enormous network payloads » : sur ce site, ils pointent vers les images et l'audio de l'étape précédente. Teste aussi la page la plus lourde, pas seulement l'accueil — `/picture/` ou `/travel/` plutôt que `/`.</Guided>
+
+## Passer HSTS à un an
+
+La page 5 a démarré l'en-tête HSTS à un jour. Une fois toutes les vérifications ci-dessus au vert, passe-le à un an, sur le serveur :
+
+<Warn>Avec un an, chaque navigateur venu une fois refuse le HTTP en clair pour <V name="DOMAIN" /> pendant les douze mois suivants, même si le certificat casse ou si tu retires l'en-tête plus tard. Le rabaisser ne touche que les visiteurs qui reviennent. Ne le monte que quand HTTPS marche et que les vérifications ci-dessus sont vertes.</Warn>
+
+```bash
+ssh vps
+```
+
+```bash
+sudo sed -i 's/max-age=86400"/max-age=31536000"/' /etc/caddy/Caddyfile
+sudo -u caddy caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+```
+
+<Check cmd="curl -sI https://${DOMAIN}/ | grep -i '^strict-transport-security'" expect="strict-transport-security: max-age=31536000" />
+
+<Guided>Si tu as choisi une autre valeur en page 5, `sed` ne change rien : modifie la ligne `header Strict-Transport-Security` avec `sudo nano /etc/caddy/Caddyfile` à la place. Valide sous l'utilisateur `caddy`, comme en page 5 : lancé en root, `caddy validate` peut laisser des fichiers de log appartenant à root, que Caddy ne peut plus écrire.</Guided>
+
+## Moteurs de recherche
+
+<When flag="INDEXING">
+
+Dis à Google et à Bing que le site existe et où se trouve le sitemap.
+
+1. Dans Google Search Console, ajoute une propriété de type **Domaine** avec <V name="DOMAIN" />. Google affiche un enregistrement TXT qui commence par `google-site-verification=`.
+2. Dans le Manager Infomaniak, Zone DNS du domaine (comme en page 4), ajoute cet enregistrement TXT sur le domaine lui-même, puis clique sur Valider dans Search Console. Ça peut prendre quelques minutes.
+3. Dans Search Console → Sitemaps, saisis `sitemap.xml` et envoie.
+4. Dans Bing Webmaster Tools, connecte-toi et choisis l'import depuis Google Search Console : il reprend le site et le sitemap.
+
+```bash
+dig +short TXT ${DOMAIN} | grep google-site-verification
+```
+
+<Guided>Laisse l'enregistrement TXT dans la zone pour toujours : Google le revérifie, et le supprimer fait perdre la validation de la propriété. Une propriété Domaine couvre `https://`, `http://` et `www.` d'un coup, c'est pour ça qu'elle passe par le DNS plutôt que par un fichier sur le site.</Guided>
+
+</When>
+
+<When notFlag="INDEXING">
+
+Pour l'instant, les robots sont priés de rester à l'écart. Le jour du lancement : active le choix d'indexation, mets à jour `app/robots.ts` comme la page le montre alors (ou relance le script), et lance `./scripts/deploy.sh`. Inscris ensuite le site dans Google Search Console et Bing Webmaster Tools et envoie `sitemap.xml` ; la page affiche les étapes une fois le choix activé.
+
+</When>
+
+<Guided>`robots.txt` est une demande, pas un contrôle d'accès. Les robots polis la respectent ; n'importe qui d'autre peut quand même récupérer chaque URL. Ce qui doit rester privé a besoin d'une connexion, ou ne doit pas être publié du tout.</Guided>
+
+<When flag="HSTS_PRELOAD">
+
+## Préchargement HSTS
+
+Les navigateurs embarquent une liste de domaines accessibles en HTTPS seulement. Une fois <V name="DOMAIN" /> dessus, aucun navigateur ne fait plus jamais de requête HTTP en clair vers lui ni vers ses sous-domaines, même à la toute première visite.
+
+<Warn>C'est un aller sans retour. Chaque sous-domaine de <V name="DOMAIN" />, actuel et futur — `mail.`, une machine de test, un service tiers derrière un CNAME — devra servir un HTTPS valide pour toujours, sinon il devient injoignable. Le retrait est possible mais prend des mois, parce qu'il suit les versions des navigateurs et que les vieux navigateurs gardent l'entrée.</Warn>
+
+1. Liste tous les noms de la Zone DNS Infomaniak et vérifie que chacun répond en HTTPS avec un certificat valide.
+2. Sur le serveur, dans `/etc/caddy/Caddyfile` (page 5), remplace la ligne `header Strict-Transport-Security …` (juste au-dessus du bloc `log`) par la valeur de préchargement, puis valide et recharge :
+
+```text title="/etc/caddy/Caddyfile"
+	header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+```
+
+```bash
+ssh vps
+```
+
+```bash
+sudo -u caddy caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+```
+
+3. Sur hstspreload.org, saisis <V name="DOMAIN" />, corrige ce que le test d'éligibilité signale, coche les confirmations et envoie.
+
+<Check cmd="curl -sI https://${DOMAIN}/ | grep -i '^strict-transport-security'" expect="strict-transport-security: max-age=63072000; includeSubDomains; preload" />
+
+<Deep>Les exigences, telles que hstspreload.org les vérifie : un certificat valide, HTTP qui redirige vers HTTPS sur le même nom (Caddy le fait), et sur le domaine racine en HTTPS un en-tête avec un max-age d'au moins un an, `includeSubDomains` et `preload`. Le statut passe à « pending », puis le domaine entre dans la liste du code source de Chromium en quelques semaines ; Firefox, Safari et Edge en dérivent leurs propres listes. Le retrait passe par hstspreload.org/removal et suit le même chemin lent en sens inverse.</Deep>
+
+</When>
+
+## Annoncer
+
+Un dernier coup d'œil avant de publier le lien et de demander à tes testeurs externes d'ouvrir le site sur leur téléphone :
+
+- **Favicon** : `/favicon.ico` répond 200 (commande ci-dessous). Next.js sert `app/favicon.ico` ou `app/icon.png`.
+- **Image d'aperçu des liens** : un JPEG de 1200 × 630 en `app/opengraph-image.jpg` (Next.js ajoute les balises meta) et `metadataBase` réglé sur https://<V name="DOMAIN" /> dans le layout racine, pour que l'URL de l'image soit absolue. Exporte-la depuis les originaux de `photos-26-og/` ; eux restent hors du site. Colle le lien dans un message à toi-même pour voir l'aperçu.
+- **Page 404** : mise en forme, avec un chemin vers l'accueil.
+- **Fonctions en attente** : le formulaire de contact et la sauvegarde des parties d'échecs n'ont pas encore de backend ; cache-les ou marque-les « bientôt ».
+- **Surveillance** : la sonde de disponibilité de la page 7 est au vert et ses alertes arrivent à <V name="ADMIN_EMAIL" />.
+- **Après le lancement** : les flux RSS de `/lately` notés dans le TODO du projet peuvent attendre ; un flux ajouté la semaine prochaine marche pareil.
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://${DOMAIN}/favicon.ico
+curl -s https://${DOMAIN}/ | grep -o '<meta property="og:image"[^>]*>'
+```
+
+## Terminé
+
+La série est complète : un site Next.js construit sur ton Mac, servi en HTTPS par Caddy depuis ton propre VPS Debian chez OVH, sur un domaine géré chez Infomaniak, déployé de façon atomique, sauvegardé, surveillé et vérifié depuis l'extérieur<When flag="INDEXING">, avec Google et Bing qui savent où trouver le sitemap</When>. Le script Automatique de cette page sert aussi de test rapide après chaque gros changement.
+
+Une page à venir, pas encore écrite — la page 9 — donnera un backend au formulaire de contact et aux sauvegardes d'échecs sur le même VPS : un petit service Node derrière Caddy, avec SQLite.

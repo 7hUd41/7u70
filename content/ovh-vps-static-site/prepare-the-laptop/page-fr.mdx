@@ -1,0 +1,207 @@
+{/* Premier jet — à valider avant publication contre nextjs.org/docs/app/guides/static-exports, support.apple.com (Sauvegarder son Mac avec Time Machine ; Accès complet au disque), man tmutil, man ssh-add (Apple) et man ssh_config. */}
+
+Avant de commander un serveur, mets ton Mac en ordre. Cette page vérifie que le site se construit à partir de rien, te montre ce que tu t'apprêtes à envoyer, s'assure que le dossier du projet est sauvegardé (c'est le seul original du site), et crée la clé SSH que toutes les pages suivantes utilisent : dans le formulaire de commande OVH d'abord, puis sur le serveur.
+
+<Run>
+
+Le script tourne **sur ton Mac**, sous ton compte, dans le dossier du projet <V name="LOCAL_DIR" />. Il lui faut Node 22 et la clé SSH de l'étape 2 déjà créée : la clé a une phrase de passe, donc tu la crées à la main, et le script s'arrête si elle manque. Pour la sauvegarde, il se contente de faire un rapport ; il n'échoue jamais à cause d'elle.
+
+Ouvre un nouveau fichier `laptop-setup.sh` dans le dossier du projet, colles-y tous les blocs de code de cette section dans l'ordre, puis lance `bash laptop-setup.sh`.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Préparer ton portable — ${LOCAL_DIR}
+cd ${LOCAL_DIR}
+
+# Clé SSH : créée à la main (elle a une phrase de passe), seulement vérifiée ici
+test -f ~/.ssh/id_ed25519 || { echo "Pas de ~/.ssh/id_ed25519 : crée-la d'abord (étape 2)."; exit 1; }
+ssh-add -l 2>/dev/null | grep -q ED25519 || echo "Note : clé pas encore dans l'agent ; lance une fois ssh-add --apple-use-keychain ~/.ssh/id_ed25519."
+touch ~/.ssh/config && chmod 600 ~/.ssh/config
+grep -q 'UseKeychain yes' ~/.ssh/config || printf '\nHost *\n  AddKeysToAgent yes\n  UseKeychain yes\n  IdentityFile ~/.ssh/id_ed25519\n' >> ~/.ssh/config
+ssh-keygen -lf ~/.ssh/id_ed25519.pub
+
+# Build propre à partir du fichier de verrouillage
+node -v | grep -q '^v22\.' || echo "Attention : Node est en $(node -v), cette page est écrite pour la v22."
+rm -rf node_modules .next out
+npm ci
+npm run build
+{ test -f out/index.html && test -f out/404.html; } || { echo "Build incomplet : pas de out/index.html ou de out/404.html."; exit 1; }
+echo "build OK"
+
+# Ce que tu envoies
+echo "out/ pèse $(du -sh out | cut -f1), $(find out -type f | wc -l | tr -d ' ') fichiers"
+echo "Fichiers de plus de 20 Mo (ils se déploient sans problème ; leur poids pour les visiteurs relève de la checklist de lancement) :"
+find out -type f -size +20M -exec du -h {} +
+
+# État de la sauvegarde (rapport seulement, jamais bloquant)
+dest=$(tmutil destinationinfo 2>&1 || true)
+case "$dest" in
+  *Name*) echo "$dest" | grep -E '^(Name|Kind)' || true ;;
+  *) echo "ATTENTION : aucune destination Time Machine. Ce dossier est le seul original du site." ;;
+esac
+latest=$(tmutil latestbackup 2>/dev/null || true)
+if [ -n "$latest" ]; then echo "Dernière sauvegarde : $latest"
+else echo "ATTENTION : aucune sauvegarde trouvée (pas encore faite, ou le Terminal n'a pas l'accès complet au disque)."; fi
+for d in ${LOCAL_DIR} ${LOCAL_DIR}/photos-26-og; do
+  [ -e "$d" ] || continue
+  tmutil isexcluded "$d" | grep -q '\[Included\]' || echo "ATTENTION : $d est exclu de Time Machine."
+done
+echo "Terminé. Suite : commander le VPS, avec ~/.ssh/id_ed25519.pub sous la main."
+```
+
+</Run>
+
+## Avant de commencer
+
+Il te faut Node 22 avec npm. Tout ce qui suit se tape dans le Terminal de ton Mac, dans le dossier du projet <V name="LOCAL_DIR" />.
+
+```bash
+node -v
+npm -v
+```
+
+<Guided>Si `node` manque, l'installeur LTS de nodejs.org est le chemin le plus court ; il installe `npm` avec. Homebrew marche aussi, mais aucune commande de cette page n'en a besoin.</Guided>
+
+<Note>Next.js 16 demande Node 20.9 ou plus ; la série est testée avec Node 22 (le `node@22` de Homebrew est « keg-only » : suis la ligne PATH qu'affiche `brew`). Les versions LTS en cours sont listées sur nodejs.org/en/about/previous-releases.</Note>
+
+<Deep>Pourquoi fixer une version majeure : le build ne tourne que sur ce Mac, le serveur n'a jamais besoin de Node. Mais `npm ci` et `next build` se comportent un peu différemment d'une version majeure de Node à l'autre (modules natifs, version de npm embarquée), et « ça a construit le mois dernier » ne rassure que si c'est le même Node qui a construit. Si tu jongles entre plusieurs projets, un gestionnaire de versions (fnm, nvm ou Volta) et un fichier `.nvmrc` contenant `22` dans le projet gardent celui-ci sur la bonne version.</Deep>
+
+<Check cmd="node -v | cut -d. -f1" expect="v22" />
+
+## Une clé SSH pour toute la série
+
+Une seule paire de clés, faite une fois sur ce Mac, t'identifie sur chaque machine de la série : tu colles sa moitié publique dans le formulaire de commande OVH, et elle finit dans `authorized_keys` sur le serveur. Crée-la **avec une phrase de passe** :
+
+```bash
+ssh-keygen -t ed25519 -C "${USERNAME}@laptop"
+```
+
+<Guided>Accepte le fichier proposé (`~/.ssh/id_ed25519`) et tape une phrase de passe quand on te la demande. Elle chiffre la clé privée sur le disque : un portable volé ou une sauvegarde qui fuit ne donne alors qu'un fichier inutilisable. Tu ne la taperas pas toute la journée, parce que macOS la garde dans le trousseau et confie la clé à l'agent SSH.</Guided>
+
+<Warn>Si `~/.ssh/id_ed25519` existe déjà, `ssh-keygen` demande avant d'écraser. Réponds **n** et garde la clé existante : l'écraser te coupe de tous les serveurs et services qui lui font déjà confiance.</Warn>
+
+Range la phrase de passe dans le trousseau et charge la clé dans l'agent :
+
+```bash
+ssh-add --apple-use-keychain ~/.ssh/id_ed25519
+```
+
+Puis ajoute ce bloc à la fin de `~/.ssh/config` (crée le fichier s'il n'existe pas) :
+
+```ini title="~/.ssh/config"
+Host *
+  AddKeysToAgent yes
+  UseKeychain yes
+  IdentityFile ~/.ssh/id_ed25519
+```
+
+<Guided>`AddKeysToAgent` charge la clé dans l'agent au premier usage, `UseKeychain` va chercher la phrase de passe dans le trousseau au lieu de te la demander, et `IdentityFile` désigne la clé à présenter. Après un redémarrage, le premier `ssh` ou `rsync` passe sans question.</Guided>
+
+Garde la moitié publique sous la main ; la page suivante te la demande. Ceci la copie dans le presse-papiers :
+
+```bash
+pbcopy < ~/.ssh/id_ed25519.pub
+```
+
+<Deep>
+
+Les clés Ed25519 sont courtes (68 caractères pour la clé publique), rapides, et n'ont ni taille ni courbe à mal choisir : c'est pour ça qu'OpenSSH et OVH les recommandent plutôt que RSA. Phrase de passe plus agent, c'est avoir les deux propriétés voulues : la clé est chiffrée au repos, et déverrouillée seulement en mémoire tant que ta session est ouverte.
+
+La moitié publique, `~/.ssh/id_ed25519.pub`, est celle que tu distribues : à OVH au moment de la commande (page suivante), puis dans `~/.ssh/authorized_keys` de tes comptes sur le serveur (la page d'après). La moitié privée ne quitte jamais ce Mac. Si tu soupçonnes un jour une fuite, fais une nouvelle paire et remplace la ligne dans chaque `authorized_keys` : l'ancienne clé n'ouvre alors plus rien.
+
+`UseKeychain` n'existe que dans l'OpenSSH d'Apple. Si tu partages ce fichier de config avec une machine Linux, ajoute `IgnoreUnknown UseKeychain` au-dessus. Les pages suivantes ajoutent des blocs `Host vps` et `Host vps-deploy` au même fichier ; ils règlent d'autres options (`HostName`, `Port`, `User`), donc l'ordre des blocs n'a pas d'importance ici.
+
+</Deep>
+
+<Check cmd="ssh-keygen -lf ~/.ssh/id_ed25519.pub | awk '{print $1, $NF}'" expect="256 (ED25519)" />
+
+## Vérifier le build à partir de zéro
+
+Un build qui marche sur ta machine peut dépendre d'un `node_modules` périmé ou d'un cache `.next` oublié. Supprime-les, réinstalle depuis le fichier de verrouillage, et construis :
+
+```bash
+cd ${LOCAL_DIR} && rm -rf node_modules .next out
+npm ci
+npm run build
+```
+
+<Note>Les trois dossiers supprimés sont tous régénérés par les commandes qui suivent ; rien de toi n'y est. Le `&&` garantit que `rm` ne tourne que si le `cd` a réussi. Ne mets pas de guillemets autour du chemin : le `~` ne serait plus développé.</Note>
+
+<Guided>`npm ci` installe exactement ce que `package-lock.json` enregistre, et échoue si `package.json` et le verrou ne sont pas d'accord, là où `npm install` mettrait le verrou à jour en silence. Le build devient reproductible : le même verrou donne le même site le mois prochain. `npm run build` lance `next build`, qui écrit le site fini dans `out/`.</Guided>
+
+<Deep>
+
+`next.config.ts` règle `output: "export"` : `next build` pré-rend chaque page en HTML pur et l'écrit dans `out/`, avec le JavaScript et le CSS hachés sous `out/_next/static/`. Rien ne tourne côté serveur au moment de la requête ; n'importe quel serveur web capable d'envoyer des fichiers peut l'héberger. C'est pour ça que la suite de la série se contente de Caddy et rsync, sans Node sur le VPS.
+
+`trailingSlash: true` fait de chaque route un dossier : `/about` devient `out/about/index.html`, servi en `/about/`. `out/404.html` est la page qu'un serveur statique montre pour un chemin absent ; la page Caddy la branche. Les pages qui reposent sur des fonctions serveur (routes API, `cookies()`, revalidation à la demande) font échouer l'export au build, c'est-à-dire au moment où tu veux le découvrir. Le formulaire de contact et la sauvegarde d'échecs sont des ébauches pour l'instant ; leur backend fera l'objet d'une page ultérieure.
+
+</Deep>
+
+<Check cmd="cd ${LOCAL_DIR} && test -f out/index.html && test -f out/404.html && echo build OK" expect="build OK" />
+
+## Savoir ce que tu envoies
+
+`out/` est exactement ce que le serveur contiendra. Regarde sa taille et ses fichiers les plus lourds :
+
+```bash
+du -sh out
+find out -type f -size +20M -exec du -h {} +
+```
+
+<Guided>`next build` copie tout `public/` tel quel dans `out/`, donc la liste montre les gros médias du site : les WAV de 44 à 55 Mo, et quelques MP4. Attends-toi à ce que `out/` pèse à peu près le poids de `public/` (autour de 220 Mo) plus quelques mégaoctets de HTML et de JavaScript.</Guided>
+
+Ces fichiers se déploient très bien tels quels. Rien à compresser ni à déplacer aujourd'hui :
+
+- Le premier déploiement (page 6) envoie tout une fois ; quelques centaines de mégaoctets, c'est quelques minutes sur une connexion domestique.
+- Chaque déploiement suivant n'envoie que les fichiers qui ont changé : un WAV de 55 Mo inchangé ne coûte plus rien après la première fois.
+- Le disque du VPS (40 Go sur la plus petite offre OVH) tient des dizaines de versions d'un site de cette taille.
+
+Ce que ces fichiers coûtent à tes **visiteurs** (55 Mo à télécharger sur un téléphone) est une autre question, traitée dans la checklist de lancement (page 8).
+
+<Deep>rsync compare chaque fichier avec celui de la version en ligne et ne transfère que les différences ; avec `--link-dest`, les fichiers identiques à la version en ligne sont liés en dur sur le serveur au lieu d'être copiés, donc chaque version ne coûte de place disque que pour ce qui a changé. Un build neuf réécrit `out/` et peut donner de nouvelles dates de modification à des médias inchangés : c'est pour ça que la page de déploiement choisit comment rsync reconnaît un fichier inchangé. Les fichiers hachés de `out/_next/static/` changent de nom quand leur contenu change, ce qui explique aussi qu'on puisse les mettre en cache pour un an.</Deep>
+
+## Sauvegarder le dossier du projet
+
+Il n'existe pas d'autre copie de ce site. Le dossier <V name="LOCAL_DIR" /> contient le seul original des sources et des médias ; `photos-26-og/` contient les seuls originaux des photos (276 Mo de HEIC et de MOV). Le serveur ne tiendra jamais que des **copies construites**, qu'on ne peut pas retransformer en projet.
+
+<Warn>Si ce Mac meurt, se fait voler, ou si le dossier est supprimé, le site ne peut pas être reconstruit à partir du serveur. Ne commande rien tant qu'une sauvegarde ne couvre pas <V name="LOCAL_DIR" /> et `photos-26-og/`.</Warn>
+
+Time Machine est la sauvegarde la plus simple sur un Mac. Vérifie qu'une destination est configurée et quand elle a tourné pour la dernière fois :
+
+```bash
+tmutil destinationinfo
+tmutil latestbackup
+```
+
+<Guided>`destinationinfo` liste les disques de sauvegarde (nom, type, point de montage) ; « No destinations configured » veut dire que Time Machine est éteint : configure-le dans Réglages Système → Général → Time Machine avec un disque externe ou un partage réseau. `latestbackup` affiche le chemin de la dernière sauvegarde terminée ; son nom commence par la date. Si elle date de plusieurs semaines, le disque n'a pas été branché depuis plusieurs semaines.</Guided>
+
+<Note>Sur les macOS récents, `tmutil latestbackup` demande l'accès complet au disque pour le Terminal (Réglages Système → Confidentialité et sécurité → Accès complet au disque). Sans lui, la commande affiche une erreur ou rien du tout, même si les sauvegardes vont bien. Confirme le comportement actuel dans `man tmutil` et les pages d'assistance Apple sur Time Machine.</Note>
+
+Vérifie ensuite que le dossier du projet n'est pas exclu (exclure les gros dossiers est une façon courante de gagner de la place de sauvegarde) :
+
+```bash
+tmutil isexcluded ${LOCAL_DIR}
+```
+
+<Guided>La réponse commence par `[Included]` ou `[Excluded]`. Lance-la aussi sur le dossier `photos-26-og` du projet. Pour retirer une exclusion : Réglages Système → Général → Time Machine → Options, sélectionne le dossier, appuie sur −.</Guided>
+
+<Check cmd="tmutil isexcluded ${LOCAL_DIR}" expect="[Included]" />
+
+<Deep>
+
+Une sauvegarde vaut mieux que rien ; la cible habituelle est la règle **3-2-1** : trois copies des données, sur deux supports différents, dont une ailleurs. Ici, ça donne le Mac lui-même, le disque Time Machine sur ton bureau, et une seconde copie hors site : un disque externe gardé à une autre adresse et rafraîchi une fois par mois, ou une sauvegarde chiffrée dans le cloud (Backblaze, Arq vers un stockage objet, ou équivalent). Un incendie ou un cambriolage emporte le Mac et le disque posé à côté en même temps.
+
+iCloud Drive, si la synchronisation « Bureau et Documents » est active, n'est pas une sauvegarde : une suppression se propage partout en quelques secondes. Avec « Optimiser le stockage du Mac », certains fichiers peuvent même n'exister que dans iCloud, et Time Machine ne les sauvegarde pas. La sauvegarde automatique d'OVH (incluse, un jour de rétention) protège la copie construite du site sur le serveur, pas ce dossier.
+
+</Deep>
+
+<Deep>Le jour où tu publies la structure du code sur GitHub, écris le `.gitignore` qui exclut les médias de `public/` et `photos-26-og/` **avant** le premier commit : tout ce qui est commité une fois reste dans l'historique, même si tu le supprimes ensuite. Une page ultérieure pourra le traiter.</Deep>
+
+## Terminé
+
+Le site se construit à partir d'un dossier vide, tu sais ce que pèse `out/` et quels fichiers l'alourdissent, le dossier du projet est couvert par une sauvegarde, et ton Mac a la clé SSH sur laquelle repose le reste de la série, sa moitié publique prête à coller.
+
+<Guided>Ce que tu emportes à la page suivante : le contenu de `~/.ssh/id_ed25519.pub` (une ligne qui commence par `ssh-ed25519`), et la certitude que `npm run build` produit un `out/` complet.</Guided>
+
+Page suivante : **Commander le VPS chez OVH**, où la clé publique va dans le formulaire de commande.

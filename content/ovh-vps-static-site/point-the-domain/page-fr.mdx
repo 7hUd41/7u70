@@ -1,0 +1,327 @@
+{/* Premier jet — à valider contre https://www.infomaniak.com/fr/support/faq/2051, https://www.infomaniak.com/en/support/faq/2088, https://www.infomaniak.com/en/support/faq/1394, la RFC 7505 (MX nul) et la RFC 8659 (CAA) avant publication. */}
+
+Le VPS a une adresse ; il faut maintenant que le domaine y mène. Cette page modifie la zone DNS de **<V name="DOMAIN" />** dans le Manager Infomaniak : l'apex et `www` pointent vers le serveur en IPv4 et IPv6, un enregistrement CAA dit quelles autorités de certification ont le droit d'émettre pour le domaine, et les enregistrements email soit verrouillent le domaine contre l'usurpation, soit protègent la boîte que tu as déjà. Tout se vérifie depuis le portable avec `dig`. Le certificat lui-même arrive à la page suivante, et il ne peut être émis qu'une fois ce DNS en place.
+
+<Run>
+
+Les modifications DNS se font dans ton navigateur, dans le Manager ; ce script ne change rien. Lance-le **sur ton portable**, avec ton compte, une fois les enregistrements saisis. Ouvre un nouveau fichier `dns-check.sh` sur ton portable, colles-y tous les blocs de code de cette section dans l'ordre, puis lance `bash dns-check.sh`. Il interroge deux résolveurs publics (1.1.1.1 et 9.9.9.9) pour chaque enregistrement de la page, affiche OK, NOTE ou FAIL par ligne, et sort en erreur si quelque chose ne correspond pas. Il ne demande que `dig`, livré avec macOS.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Point the domain — verify ${DOMAIN} against public resolvers (read-only)
+export LC_ALL=C
+fail=0
+resolvers="1.1.1.1 9.9.9.9"
+
+# ask RESOLVER TYPE NAME -> answers, quotes stripped, sorted, on one line
+ask() { dig +short +time=3 +tries=2 "$2" "$3" "@$1" | tr -d '\042' | sort | paste -sd ' ' - || true; }
+
+# same RESOLVER TYPE NAME EXPECTED -> the whole answer must equal EXPECTED
+same() {
+  got=$(ask "$1" "$2" "$3")
+  if [ "$got" = "$4" ]; then printf 'OK    %-8s %-5s %s\n' "$1" "$2" "$3"
+  else printf 'FAIL  %-8s %-5s %s\n      want: %s\n      got:  %s\n' "$1" "$2" "$3" "$4" "$got"; fail=1; fi
+}
+
+# has RESOLVER TYPE NAME REGEX -> at least one answer line must match REGEX
+has() {
+  out=$(dig +short +time=3 +tries=2 "$2" "$3" "@$1" | tr -d '\042' || true)
+  if printf '%s\n' "$out" | grep -Eq "$4"; then printf 'OK    %-8s %-5s %s\n' "$1" "$2" "$3"
+  else printf 'FAIL  %-8s %-5s %s\n      want a line matching: %s\n' "$1" "$2" "$3" "$4"; fail=1; fi
+}
+
+for r in $resolvers; do
+  same $r NS    ${DOMAIN}     'ns11.infomaniak.ch. ns12.infomaniak.ch.'
+  same $r A     ${DOMAIN}     '${SERVER_IP}'
+  same $r CNAME www.${DOMAIN} '${DOMAIN}.'
+  v6=$(ask $r AAAA ${DOMAIN})
+  case "$v6" in
+    '${SERVER_IPV6}') printf 'OK    %-8s %-5s %s\n' $r AAAA ${DOMAIN} ;;
+    '') printf 'NOTE  %-8s %-5s %s (no AAAA: fine if the server has no working IPv6)\n' $r AAAA ${DOMAIN} ;;
+    *)  printf 'FAIL  %-8s %-5s %s\n      want: %s (or none)\n      got:  %s\n' $r AAAA ${DOMAIN} '${SERVER_IPV6}' "$v6"; fail=1 ;;
+  esac
+done
+```
+
+<When flag="ZEROSSL">
+
+```bash
+for r in $resolvers; do
+  same $r CAA ${DOMAIN} '0 iodef mailto:${ADMIN_EMAIL} 0 issue letsencrypt.org 0 issue sectigo.com'
+done
+```
+
+</When>
+
+<When notFlag="ZEROSSL">
+
+```bash
+for r in $resolvers; do
+  same $r CAA ${DOMAIN} '0 iodef mailto:${ADMIN_EMAIL} 0 issue letsencrypt.org'
+done
+```
+
+</When>
+
+<When is="MAIL" equals="none">
+
+```bash
+for r in $resolvers; do
+  has $r TXT ${DOMAIN}                  '^v=spf1 -all$'
+  has $r TXT _dmarc.${DOMAIN}           '^v=DMARC1; p=reject'
+  has $r TXT probe._domainkey.${DOMAIN} '^v=DKIM1; p=$'
+  mx=$(ask $r MX ${DOMAIN})
+  case "$mx" in
+    '0 .') printf 'OK    %-8s %-5s %s\n' $r MX ${DOMAIN} ;;
+    '')    printf 'NOTE  %-8s %-5s %s (no MX at all: fine if the Manager refused the null MX)\n' $r MX ${DOMAIN} ;;
+    *)     printf 'FAIL  %-8s %-5s %s\n      got: %s (mail servers still announced)\n' $r MX ${DOMAIN} "$mx"; fail=1 ;;
+  esac
+done
+```
+
+</When>
+
+<When is="MAIL" equals="infomaniak">
+
+```bash
+for r in $resolvers; do
+  has $r MX  ${DOMAIN}        'infomaniak\.ch\.$'
+  has $r TXT ${DOMAIN}        '^v=spf1 .*include:spf\.infomaniak\.ch'
+  has $r TXT _dmarc.${DOMAIN} '^v=DMARC1; p=(none|quarantine|reject)'
+done
+```
+
+</When>
+
+<When flag="DNSSEC">
+
+```bash
+for r in $resolvers; do
+  hdr=$(dig +dnssec +noall +comments A ${DOMAIN} "@$r" || true)
+  if printf '%s\n' "$hdr" | grep -Eq '^;; flags:[a-z ]* ad[ ;]'; then printf 'OK    %-8s %-5s %s\n' $r DNSSEC ${DOMAIN}
+  else printf 'NOTE  %-8s %-5s %s (not validated yet: the DS can take up to 48 h to reach the registry)\n' $r DNSSEC ${DOMAIN}; fi
+done
+```
+
+</When>
+
+```bash
+if [ "$fail" -eq 0 ]; then echo "All records match. Next page: Serve the site with Caddy and HTTPS."
+else echo "Some records do not match. Changed recently? Wait for the TTL to expire and run again."; exit 1; fi
+```
+
+</Run>
+
+## Avant de commencer
+
+Il te faut un accès au Manager Infomaniak (manager.infomaniak.com), l'IPv4 et l'IPv6 du serveur (page « Commander le VPS chez OVH ») saisies dans le panneau des valeurs, et un terminal sur le portable. `dig` est déjà installé sur macOS.
+
+<Guided>Une zone DNS ne sert que si les serveurs de noms du domaine sont ceux qui l'hébergent. Infomaniak t'affiche une zone même quand le domaine est délégué ailleurs, et la modifier ne change alors rien sur internet. Première chose à confirmer, donc : c'est bien à Infomaniak que le monde pose la question pour <V name="DOMAIN" />.</Guided>
+
+<Check cmd="dig +short NS ${DOMAIN} | sort" expect="ns11.infomaniak.ch.
+ns12.infomaniak.ch." />
+
+<Note>Ce sont les serveurs de noms habituels d'Infomaniak ; si les tiens diffèrent, vérifie les noms actuels dans le Manager, rubrique « Serveurs DNS » du domaine. Si la sortie montre un autre fournisseur (Cloudflare, OVH…), modifie la zone chez lui, ou remets d'abord les serveurs de noms d'Infomaniak.</Note>
+
+<Deep>`+short` ne garde que les réponses. Sans `@serveur`, dig interroge le résolveur configuré sur ton Mac (souvent la box ou ton FAI), exactement comme le navigateur d'un visiteur. Le jeu de NS est aussi publié par le registre de l'extension ; un désaccord entre le registre et les NS de la zone elle-même est une source classique de « ça marche chez moi mais pas chez eux ».</Deep>
+
+## Faire l'état des lieux de la zone
+
+Ouvre manager.infomaniak.com → **Domaines** → clique sur <V name="DOMAIN" /> → **Zone DNS** dans le menu de gauche. Note chaque enregistrement dont le nom est l'apex (vide ou `@`) ou `www`, et chaque enregistrement MX et TXT.
+
+Tu peux lister la même chose depuis le portable, en interrogeant directement le serveur d'Infomaniak :
+
+```bash
+for t in A AAAA MX TXT CAA; do dig +noall +answer $t ${DOMAIN} @ns11.infomaniak.ch; done
+dig +noall +answer www.${DOMAIN} @ns11.infomaniak.ch
+```
+
+<Guided>Un domaine qui n'a jamais servi pour un site porte souvent des enregistrements créés d'office par Infomaniak : un A (parfois un AAAA) vers une page de parking ou « site en construction », un `www` vers le même endroit, et des MX et SPF pour son service de mail. Copie la vue avancée de la zone dans un fichier texte sur le portable avant de toucher à quoi que ce soit. La zone garde aussi un historique des versions : c'est ton bouton « annuler » si une modification tourne mal.</Guided>
+
+<Guided>La règle pour la suite de la page : **remplacer, pas ajouter**. Deux enregistrements A sur le même nom, ce n'est pas une erreur que le DNS refuse ; c'est du round robin. Les résolveurs distribuent les deux, et à peu près la moitié de tes visiteurs tomberaient sur l'ancienne page de parking.</Guided>
+
+## Baisser le TTL
+
+Pour chaque enregistrement de l'apex et de `www` que tu vas changer, modifie-le et mets son TTL à **300 secondes** (5 minutes). Attends ensuite que l'ancien TTL s'écoule (souvent une heure) avant le vrai changement.
+
+<Guided>Le TTL (time to live, durée de vie) est le temps pendant lequel un résolveur peut garder une réponse avant de redemander. Avec l'heure par défaut, une erreur reste dans les caches une heure après sa correction. À 5 minutes, tu corriges et tu réessaies vite. Une fois tout stable, tu le remontes (dernière étape).</Guided>
+
+<Note>Si la liste des TTL du formulaire ne propose pas 300 secondes, prends la plus petite valeur proposée. Si tu n'as rien à préserver et pas de patience, tu peux sauter l'attente : le seul coût, c'est que l'ancienne réponse peut traîner jusqu'à la fin de l'ancien TTL.</Note>
+
+<Deep>Les résolveurs mettent aussi en cache l'absence d'un enregistrement. Si toi (ou un outil) as demandé `www.`<V name="DOMAIN" /> avant qu'il existe, la réponse « ce nom n'existe pas » reste en cache pendant le plus petit du TTL de l'enregistrement SOA et de son champ « minimum » (RFC 2308), souvent une heure ou plus. Tu le vois avec `dig +short SOA` suivi du domaine : le dernier nombre est ce minimum. Interroger le serveur faisant autorité (`@ns11.infomaniak.ch`) montre toujours la vérité du moment.</Deep>
+
+## Pointer l'apex vers le serveur
+
+Dans **Zone DNS**, modifie (sans le dupliquer) l'enregistrement A de l'apex pour qu'il pointe vers <V name="SERVER_IP" />, et l'enregistrement AAAA de l'apex pour qu'il pointe vers <V name="SERVER_IPV6" />. S'il n'existe pas encore d'enregistrement de ce type, ajoutes-en un : choisis le type avec le bouton radio → **Suivant** → laisse le nom vide pour l'apex → colle l'adresse → **Enregistrer**.
+
+```text title="Zone DNS — vue avancée"
+@    300  IN  A     ${SERVER_IP}
+@    300  IN  AAAA  ${SERVER_IPV6}
+```
+
+<Warn>Un AAAA faux est pire que pas d'AAAA : les visiteurs IPv6 peuvent tomber en délai d'attente, et Let's Encrypt, qui essaie d'abord l'IPv6, peut échouer à valider le certificat. N'ajoute l'AAAA que si la vérification IPv6 de la page « Sécuriser le serveur dans la première heure » est passée (`ping -6` depuis le serveur). Sinon, supprime tout AAAA existant sur l'apex et laisse-le absent.</Warn>
+
+<Warn>Si un site est en ligne sur ce domaine aujourd'hui, il cesse de répondre dès que les résolveurs prennent la nouvelle adresse : le VPS ne sert rien avant la page suivante. Enchaîne cette page et « Servir le site avec Caddy et HTTPS » sans pause.</Warn>
+
+Les serveurs d'Infomaniak répondent avec les nouvelles valeurs en quelques minutes :
+
+```bash
+dig +short A ${DOMAIN} @ns11.infomaniak.ch
+dig +short AAAA ${DOMAIN} @ns11.infomaniak.ch
+```
+
+<Deep>L'apex ne peut pas être un CNAME (il porte les enregistrements SOA et NS, et un CNAME ne cohabite avec rien), d'où les A et AAAA directs. Certains fournisseurs proposent des enregistrements ALIAS ou « CNAME aplati » pour contourner ça ; avec une IP de serveur fixe, inutile.</Deep>
+
+## Ajouter www
+
+Supprime tout enregistrement A ou AAAA sur `www`, puis ajoute un **CNAME** nommé `www` dont la cible est <V name="DOMAIN" />.
+
+```text title="Zone DNS — vue avancée"
+www  300  IN  CNAME ${DOMAIN}.
+```
+
+<Guided>Le CNAME dit « www est un autre nom de l'apex » : si l'IP du serveur change un jour, tu ne modifies que l'apex. Caddy redirigera `www` vers l'apex, mais il lui faut quand même un certificat pour `www` pour le faire en HTTPS, donc les deux noms doivent mener au VPS. Un CNAME ne peut partager son nom avec aucun autre enregistrement : c'est pour ça que les anciens `www` partent d'abord ; sinon le formulaire refuse le CNAME.</Guided>
+
+<Deep>Le point final dans la vue avancée marque un nom complet. Sans lui, une zone au format BIND ajoute l'origine et la cible devient le domaine écrit deux fois (`example.com.example.com.`), une faute classique. Le formulaire simple du Manager ajoute le point pour toi.</Deep>
+
+## Restreindre les certificats avec CAA
+
+Ajoute un enregistrement **CAA** sur l'apex : drapeau (flag) `0`, balise (tag) `issue`, valeur `letsencrypt.org`.
+
+<When flag="ZEROSSL">
+
+Ajoutes-en un second avec flag `0`, tag `issue`, valeur `sectigo.com` : c'est le nom sous lequel les certificats ZeroSSL sont émis.
+
+</When>
+
+Puis un enregistrement `iodef` : flag `0`, tag `iodef`, valeur `mailto:` suivi de <V name="ADMIN_EMAIL" />.
+
+```text title="Zone DNS — vue avancée"
+@    300  IN  CAA   0 issue "letsencrypt.org"
+@    300  IN  CAA   0 iodef "mailto:${ADMIN_EMAIL}"
+```
+
+<When flag="ZEROSSL">
+
+```text title="Zone DNS — vue avancée"
+@    300  IN  CAA   0 issue "sectigo.com"
+```
+
+</When>
+
+<Guided>N'importe quelle autorité de certification publique peut émettre un certificat pour ton domaine si quelqu'un passe sa vérification de domaine. Un enregistrement CAA réduit ça à celles que tu nommes : chaque autorité doit le consulter au moment d'émettre, et refuser si elle n'y figure pas. Caddy demande d'abord à Let's Encrypt et se replie sur ZeroSSL si Let's Encrypt est indisponible<When notFlag="ZEROSSL"> ; sans `sectigo.com` dans le CAA, ce repli est refusé, c'est le compromis que tu as choisi</When>.</Guided>
+
+<Deep>Le CAA est vérifié par l'autorité au moment de l'émission (RFC 8659), pas par les navigateurs : il ne fait rien aux certificats déjà émis. La recherche remonte l'arbre : pour `www.`<V name="DOMAIN" />, l'autorité suit le CNAME, puis les noms parents, et c'est l'enregistrement de l'apex qui s'applique. `iodef` demande aux autorités de signaler les demandes refusées à cette adresse ; peu le font, et ça ne coûte rien. Il existe des formes plus strictes : `issuewild ";"` interdit les certificats wildcard, et le paramètre `accounturi` lie l'émission à un seul compte ACME.</Deep>
+
+## Protéger l'email du domaine
+
+<When is="MAIL" equals="none">
+
+Rien n'envoie ni ne reçoit de mail pour ce domaine : publie-le. Les serveurs de réception rejettent alors tout ce qui prétend venir de <V name="DOMAIN" />.
+
+<Warn>Si une boîte mail existe chez Infomaniak pour ce domaine (regarde **Service Mail** dans le Manager), supprimer ses MX coupe son courrier immédiatement. Dans ce cas, choisis plutôt « Email hébergé chez Infomaniak ».</Warn>
+
+Sinon, supprime les MX et SPF d'Infomaniak restés en place, puis ajoute ces quatre enregistrements :
+
+```text title="Zone DNS — vue avancée"
+@                300  IN  MX    0 .
+@                300  IN  TXT   "v=spf1 -all"
+_dmarc           300  IN  TXT   "v=DMARC1; p=reject; adkim=s; aspf=s; rua=mailto:${ADMIN_EMAIL}"
+*._domainkey     300  IN  TXT   "v=DKIM1; p="
+```
+
+<Guided>Chaque ligne ferme une porte. Le MX nul (un point seul comme cible, RFC 7505) dit « ce domaine n'accepte aucun mail ». `v=spf1 -all` dit « aucun serveur n'a le droit d'envoyer au nom de ce domaine ». La clé DKIM vide révoque toute signature qu'un spammeur prétendrait avoir. Le DMARC demande aux destinataires de rejeter ce qui échoue à ces contrôles, et de t'envoyer des rapports agrégés quotidiens.</Guided>
+
+<Note>Si le Manager refuse `.` comme cible de MX, passe le MX nul : SPF et DMARC font l'essentiel du travail. Si <V name="ADMIN_EMAIL" /> est sur un autre domaine, les destinataires n'y envoient les rapports que si cet autre domaine publie un enregistrement d'autorisation (`<V name="DOMAIN" />._report._dmarc` sur l'autre domaine, RFC 7489) ; retire la partie `rua=` ou accepte que les rapports n'arrivent pas.</Note>
+
+</When>
+
+<When is="MAIL" equals="infomaniak">
+
+Ta boîte repose sur les MX, SPF et DKIM que le Manager a créés : **garde-les exactement tels quels**. Ajoute seulement un enregistrement DMARC, d'abord en mode observation.
+
+```text title="Zone DNS — vue avancée"
+_dmarc           300  IN  TXT   "v=DMARC1; p=none; rua=mailto:${ADMIN_EMAIL}"
+```
+
+<Guided>Avec `p=none`, les destinataires ne changent rien mais t'envoient chaque jour des rapports qui listent chaque serveur ayant envoyé du mail au nom de <V name="DOMAIN" />, et s'il a passé SPF et DKIM. Après deux semaines de rapports propres (Infomaniak seul, tout au vert), passe l'enregistrement à `p=quarantine`, puis quelques semaines plus tard à `p=reject`. Passer directement à `reject`, c'est risquer de perdre le mail d'un expéditeur oublié, comme un formulaire de contact ou un outil de newsletter.</Guided>
+
+<Note>L'enregistrement SPF doit contenir `include:spf.infomaniak.ch`. Vérifie la valeur actuelle dans la FAQ mail d'Infomaniak avant de modifier quoi que ce soit ; le Manager sait aussi régénérer les enregistrements mail pour toi.</Note>
+
+</When>
+
+<Deep>SPF compare l'expéditeur d'enveloppe à l'IP qui a livré le message ; DKIM vérifie une signature sur les en-têtes ; DMARC relie les deux au domaine visible du `From:` et dit quoi faire en cas d'échec. `adkim=s; aspf=s` exigent une correspondance exacte du domaine plutôt qu'un sous-domaine. Le wildcard `*._domainkey` répond pour n'importe quel sélecteur qu'un faussaire mettrait dans une signature, si bien que chaque contrôle DKIM échoue proprement au lieu de finir en « introuvable ».</Deep>
+
+## Vérifier depuis le portable
+
+Demande à deux résolveurs publics ce que le monde voit maintenant. Le premier essai peut montrer les anciennes réponses tant que l'ancien TTL n'est pas écoulé.
+
+<Check cmd="dig +short A ${DOMAIN} @1.1.1.1 && dig +short AAAA ${DOMAIN} @1.1.1.1" expect="${SERVER_IP}
+${SERVER_IPV6}" />
+
+<Check cmd="dig +short CNAME www.${DOMAIN} @1.1.1.1" expect="${DOMAIN}." />
+
+<Check cmd="dig +short CAA ${DOMAIN} @1.1.1.1 | grep letsencrypt | tr -d '\042'" expect="0 issue letsencrypt.org" />
+
+<Check cmd="dig +short TXT _dmarc.${DOMAIN} @1.1.1.1 | tr -d '\042' | cut -d';' -f1" expect="v=DMARC1" />
+
+Refais-les avec `@9.9.9.9` à la place de `@1.1.1.1` : deux résolveurs d'opérateurs différents qui sont d'accord, c'est bon signe pour la propagation.
+
+<Guided>`@1.1.1.1` (Cloudflare) et `@9.9.9.9` (Quad9) contournent le résolveur de ton Mac : ce que tu vois, c'est ce que voit un visiteur sur un autre réseau. `tr -d '\042'` retire les guillemets autour des valeurs texte (042 est le code octal de `"`). Le script en haut de la page (niveau Automatique) vérifie ainsi chaque enregistrement de la page auprès des deux résolveurs.</Guided>
+
+<Note>dig affiche les adresses IPv6 sous leur forme courte (`2001:db8::10`, pas `2001:0db8:0000:…`). Si la vérification AAAA ne diffère que par l'écriture, elle est bonne ; mets la forme courte dans le panneau des valeurs.</Note>
+
+<Details summary="Si dig montre encore l'ancienne adresse">
+
+Par ordre de probabilité :
+
+- L'ancien TTL n'est pas encore écoulé. Interroge Infomaniak directement avec `@ns11.infomaniak.ch` : si la nouvelle valeur y apparaît, la zone est correcte et l'attente règle le reste.
+- Ton Mac a gardé l'ancienne réponse en cache (sans `@serveur`). Vide-le avec `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`.
+- Deux enregistrements existent sur le même nom : l'ancien a été complété au lieu d'être remplacé. Relis la zone.
+- `@ns11.infomaniak.ch` montre l'ancienne valeur : la modification n'a pas été enregistrée (**Enregistrer**), ou tu as modifié la zone d'un autre domaine.
+- dig affiche des lignes qui commencent par `\#` pour le CAA : le dig de macOS est trop ancien pour décoder ce type. `brew install bind` en installe un récent.
+
+</Details>
+
+<When flag="DNSSEC">
+
+## Activer DNSSEC
+
+Dans le Manager, ouvre <V name="DOMAIN" /> → **DNSSEC** → active. Infomaniak génère les clés, signe la zone et transmet l'enregistrement DS au registre de l'extension.
+
+<Note>Le nom et l'emplacement du menu peuvent bouger d'une version du Manager à l'autre ; la FAQ DNSSEC d'Infomaniak donne le chemin actuel. L'activation demande que le domaine utilise les serveurs de noms d'Infomaniak, ce que la première vérification a confirmé.</Note>
+
+<Warn>Si un jour tu déplaces l'hébergement DNS hors d'Infomaniak, désactive d'abord DNSSEC ici et attends une journée. Sinon le registre continue de pointer vers des clés que le nouveau fournisseur n'a pas, et chaque résolveur validant répond SERVFAIL : le domaine disparaît, site et mail compris.</Warn>
+
+L'enregistrement DS peut mettre quelques heures, parfois jusqu'à 48, pour atteindre le registre. Ensuite, un résolveur validant marque ses réponses comme authentifiées (le drapeau `ad`) :
+
+<Check cmd="dig +dnssec +noall +comments A ${DOMAIN} @1.1.1.1 | grep -o 'flags: qr rd ra ad'" expect="flags: qr rd ra ad" />
+
+<Guided>Sans DNSSEC, un résolveur croit la première réponse qui arrive ; un attaquant sur le chemin peut en fabriquer une. Avec, chaque réponse porte une signature qui remonte au registre puis à la racine, en laquelle tout résolveur validant a déjà confiance. Pour voir cette chaîne, et avoir un diagnostic clair quand quelque chose casse, colle le domaine dans dnsviz.net.</Guided>
+
+<Deep>La zone est signée par une clé de signature de zone (ZSK), elle-même signée par une clé de signature de clé (KSK) ; le registre publie un condensat de la KSK sous forme d'enregistrement DS dans la zone parente. Infomaniak fait tourner la ZSK pour toi. Le drapeau `ad` signifie seulement que le résolveur a validé ; `delv`, fourni avec BIND, fait la validation en local, mais il n'est pas sur macOS par défaut (`brew install bind` l'ajoute).</Deep>
+
+</When>
+
+## Reverse DNS chez OVH (facultatif)
+
+Fais en sorte que l'IP du serveur réponde <V name="DOMAIN" /> quand on la cherche à l'envers. Dans l'espace client OVH : **Network** → **IP publiques** → `...` à côté de <V name="SERVER_IP" /> → **Modifier le reverse** → <V name="DOMAIN" />. Fais de même pour <V name="SERVER_IPV6" /> si elle est listée.
+
+<Guided>Un enregistrement inverse (PTR) fait correspondre une IP à un nom. Les serveurs de mail destinataires en exigent un qui corresponde avant d'accepter du courrier d'un serveur : il te le faut si le VPS envoie un jour du mail (alertes, un formulaire de contact plus tard). Sinon, il rend seulement les logs et la sortie de `traceroute` plus lisibles. OVH vérifie que <V name="DOMAIN" /> mène déjà à cette IP avant d'accepter le reverse : fais-le après que les vérifications ci-dessus passent.</Guided>
+
+<Note>OVH renomme de temps en temps les rubriques de son espace client ; la liste des IP peut se trouver sous « Bare Metal Cloud » → « Network » → « IP ». Le guide OVH « Configurer un reverse DNS » donne le chemin actuel.</Note>
+
+<Deep>Le reverse vit dans un arbre séparé (`in-addr.arpa` pour l'IPv4, `ip6.arpa` pour l'IPv6), délégué au propriétaire du bloc d'adresses : OVH, pas Infomaniak. C'est pour ça qu'il se règle là-bas. Un reverse « confirmé », où l'enregistrement A du nom renvoie vers la même IP, est ce que vérifient les serveurs de mail.</Deep>
+
+## Remonter le TTL
+
+Une fois les vérifications passées et le site fonctionnel à la page suivante, remets le TTL des enregistrements modifiés à **3600 secondes** (une heure).
+
+<Guided>Un TTL court, c'est plus de requêtes et des premières visites un peu plus lentes, et ça t'expose si les serveurs d'Infomaniak tombent : avec un TTL d'une heure, les résolveurs continuent de servir ton adresse depuis leur cache pendant cette heure. Rebaisse-le la veille de tout changement prévu, comme un nouveau serveur.</Guided>
+
+## Terminé
+
+<V name="DOMAIN" /> et `www` mènent au VPS en IPv4 et IPv6, et seules les autorités que tu as listées peuvent émettre des certificats pour eux.<When is="MAIL" equals="none"> Le mail qui prétend venir du domaine est rejeté.</When><When is="MAIL" equals="infomaniak"> Ton mail Infomaniak continue de circuler, sous une politique DMARC que tu resserres au fil des semaines.</When><When flag="DNSSEC"> La zone est signée.</When>
+
+Page suivante : **Servir le site avec Caddy et HTTPS**. Caddy demande le certificat pour les deux noms à son premier démarrage, ce qui ne marche que parce que ce DNS est en place.

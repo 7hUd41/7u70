@@ -1,0 +1,21 @@
+# Inherits from ../series.yaml: SERVER_IP, SERVER_IPV6, USERNAME, SSH_PORT, DEPLOY_USER, DOMAIN, WEB_ROOT, ADMIN_EMAIL, LOCAL_DIR.
+# No page variables and no choices: this page only fills SERVER_IP and SERVER_IPV6 in the values panel.
+title:
+  en: Order the VPS at OVH
+  fr: Commander le VPS chez OVH
+summary:
+  en: >-
+    A Debian 13 VPS ordered in the OVH control panel, delivered, and reachable with your SSH key
+    as the user debian. Its IPv4 and IPv6 are noted, and the OVH account that controls it is
+    protected by two-factor authentication.
+  fr: >-
+    Un VPS Debian 13 commandé dans l'espace client OVH, livré, et joignable avec ta clé SSH sous
+    l'utilisateur debian. Ses IPv4 et IPv6 sont notées, et le compte OVH qui le contrôle est protégé
+    par une double authentification.
+difficulty: beginner
+tags: [ovh, vps, debian, ssh, hosting]
+authors: [thudal]
+created: 2026-09-26
+minutes: 15
+validated: OVHcloud VPS range Sept 2026 · Debian 13 (trixie)
+status: draft             # not yet run end to end by its author

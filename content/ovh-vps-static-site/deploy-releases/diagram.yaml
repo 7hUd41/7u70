@@ -1,0 +1,164 @@
+# Quick: the build goes from the laptop into a new release, current is swapped onto it, Caddy
+# serves current. Guided: the deploy user that receives the upload, the previous releases that
+# share unchanged files, and the rollback. Deep: the restricted key, and the mechanisms on the
+# arrows (rsync flags, rename(2), hard links).
+title: { en: "Build, upload, swap one link", fr: "Construire, envoyer, basculer un lien" }
+caption:
+  en: "Each deploy lands in its own directory under releases/. The live site is whatever current points to, and moving that link is a single atomic rename, so visitors never see a half-uploaded site."
+  fr: "Chaque déploiement arrive dans son propre répertoire sous releases/. Le site en ligne est ce vers quoi pointe current, et déplacer ce lien est un seul renommage atomique : les visiteurs ne voient jamais un site à moitié envoyé."
+
+groups:
+  - id: server
+    label: { en: "Your VPS", fr: "Ton VPS" }
+    desc:
+      en: "The OVH server. Everything under ${WEB_ROOT} belongs to ${DEPLOY_USER}; Caddy only reads it."
+      fr: "Le serveur OVH. Tout ce qui est sous ${WEB_ROOT} appartient à ${DEPLOY_USER} ; Caddy ne fait que le lire."
+
+nodes:
+  - id: laptop
+    kind: client
+    label: { en: "Your laptop", fr: "Ton portable" }
+    sub: "./scripts/deploy.sh"
+    desc:
+      en: "Where you run one command. It builds, uploads, swaps, prunes and checks."
+      fr: "Là où tu lances une commande. Elle construit, envoie, bascule, nettoie et vérifie."
+    deep:
+      sub: "deploy.sh · rsync 3 (Homebrew) · ~/.ssh/id_ed25519_deploy"
+  - id: out
+    kind: file
+    label: { en: "out/", fr: "out/" }
+    sub: "npm run build"
+    desc:
+      en: "The static export of the Next.js site: one index.html per route, 404.html, hashed assets under _next/static, and the media from public/."
+      fr: "L'export statique du site Next.js : un index.html par route, 404.html, les ressources hachées sous _next/static, et les médias de public/."
+    deep:
+      sub: "output: export · trailingSlash · ~220 MB"
+  - id: deploy-user
+    kind: user
+    label: { en: "Deploy user", fr: "Utilisateur de déploiement" }
+    sub: "${DEPLOY_USER} · no sudo"
+    in: server
+    level: guided
+    desc:
+      en: "The account every upload goes through. It has its own key and no sudo, and owns ${WEB_ROOT}: a leaked deploy key can change the site, not the server."
+      fr: "Le compte par lequel passe chaque envoi. Il a sa propre clé, pas de sudo, et possède ${WEB_ROOT} : une clé de déploiement volée peut changer le site, pas le serveur."
+    deep:
+      sub: "sshd :${SSH_PORT} · group sshusers · no pty, no forwarding"
+  - id: keys
+    kind: file
+    label: { en: "authorized_keys", fr: "authorized_keys" }
+    sub: "restrict ssh-ed25519 … deploy@laptop"
+    in: server
+    level: deep
+    desc:
+      en: "One line per key allowed in as ${DEPLOY_USER}: only the deploy key from your laptop, never your admin key. The restrict prefix removes terminals and forwarding; commands still run."
+      fr: "Une ligne par clé autorisée à entrer en ${DEPLOY_USER} : seulement la clé de déploiement de ton portable, jamais ta clé admin. Le préfixe restrict retire terminal et redirections ; les commandes s'exécutent toujours."
+    deep:
+      sub: "/home/${DEPLOY_USER}/.ssh/authorized_keys · 600"
+  - id: release
+    kind: file
+    label: { en: "New release", fr: "Nouvelle version" }
+    sub: "releases/<UTC timestamp>"
+    in: server
+    desc:
+      en: "A complete copy of the site in its own directory, named by its UTC deploy time. It is fully uploaded before anyone can see it."
+      fr: "Une copie complète du site dans son propre répertoire, nommée par l'heure UTC de son déploiement. Elle est entièrement envoyée avant que quiconque puisse la voir."
+    deep:
+      sub: "${WEB_ROOT}/releases/20…Z · D755 F644"
+  - id: previous
+    kind: file
+    label: { en: "Previous releases", fr: "Versions précédentes" }
+    sub: "last ${KEEP_RELEASES} kept"
+    in: server
+    level: guided
+    desc:
+      en: "The releases before this one, pruned to the newest ${KEEP_RELEASES}. They are what rollback points back to."
+      fr: "Les versions d'avant, réduites aux ${KEEP_RELEASES} plus récentes. C'est vers elles que pointe un retour arrière."
+    deep:
+      sub: "ls -1d 20* | sort | head -n -${KEEP_RELEASES} → rm -rf"
+  - id: current
+    kind: file
+    label: { en: "current", fr: "current" }
+    sub: "symlink"
+    in: server
+    focus: true
+    desc:
+      en: "A symbolic link to the live release. Deploying and rolling back both come down to moving this one link, atomically."
+      fr: "Un lien symbolique vers la version en ligne. Déployer comme revenir en arrière se résument à déplacer ce seul lien, de façon atomique."
+    guided:
+      sub: "symlink → releases/<new>"
+    deep:
+      sub: "ln -sfn current.tmp · mv -T → rename(2)"
+  - id: caddy
+    kind: service
+    label: { en: "Caddy", fr: "Caddy" }
+    sub: "${WEB_ROOT}/current"
+    in: server
+    desc:
+      en: "Serves whatever current points to, resolving the link on every request. It needs no reload after a deploy."
+      fr: "Sert ce vers quoi pointe current, en résolvant le lien à chaque requête. Aucun rechargement n'est nécessaire après un déploiement."
+    deep:
+      sub: "file_server · user caddy (read only) · ETag from mtime + size"
+  - id: visitors
+    kind: user
+    label: { en: "Visitors", fr: "Visiteurs" }
+    sub: "https://${DOMAIN}"
+    desc:
+      en: "They see either the old release or the new one, never a mix. The deploy script ends by checking that they get a 200."
+      fr: "Ils voient soit l'ancienne version, soit la nouvelle, jamais un mélange. Le script de déploiement finit en vérifiant qu'ils obtiennent un 200."
+
+edges:
+  - from: laptop
+    to: out
+    label: "npm run build"
+    deep: { label: "npm ci · npm run build · test -f out/index.html" }
+    desc: { en: "A clean install and a static build, stopped here if out/index.html is missing.", fr: "Une installation propre et un build statique, arrêtés ici si out/index.html manque." }
+  - from: out
+    to: release
+    label: "rsync over SSH"
+    max: quick
+    desc: { en: "Only changed files cross the network; unchanged ones are linked on the server.", fr: "Seuls les fichiers modifiés traversent le réseau ; les autres sont liés sur le serveur." }
+  - from: out
+    to: deploy-user
+    label: "rsync · SSH :${SSH_PORT}"
+    level: guided
+    deep: { label: "rsync -rlpz --checksum · SSH TCP ${SSH_PORT} · vps-deploy" }
+    desc: { en: "rsync runs over SSH as ${DEPLOY_USER}, through the vps-deploy alias and its dedicated key.", fr: "rsync passe par SSH en tant que ${DEPLOY_USER}, via l'alias vps-deploy et sa clé dédiée." }
+  - from: deploy-user
+    to: release
+    label: "writes"
+    level: guided
+    desc: { en: "The remote rsync, running as ${DEPLOY_USER}, creates the new release directory.", fr: "Le rsync distant, qui tourne en ${DEPLOY_USER}, crée le nouveau répertoire de version." }
+  - from: deploy-user
+    to: keys
+    label: "checks key"
+    dashed: true
+    level: deep
+    desc: { en: "sshd accepts the connection only if the key is listed here; restrict then limits what the session can do.", fr: "sshd n'accepte la connexion que si la clé est listée ici ; restrict limite ensuite ce que la session peut faire." }
+  - from: previous
+    to: release
+    label: "hard links"
+    dashed: true
+    level: guided
+    deep: { label: "--link-dest=current/ · same content → same inode" }
+    desc: { en: "Files identical to the live release are hard-linked instead of copied, so each release costs only what changed.", fr: "Les fichiers identiques à la version en ligne sont liés en dur au lieu d'être copiés : chaque version ne coûte que ce qui a changé." }
+  - from: release
+    to: current
+    label: "atomic swap"
+    deep: { label: "mv -T current.tmp current · rename(2)" }
+    desc: { en: "The link moves in one system call. A request sees the old release or the new one, never nothing.", fr: "Le lien bouge en un seul appel système. Une requête voit l'ancienne version ou la nouvelle, jamais rien." }
+  - from: current
+    to: previous
+    label: "rollback"
+    dashed: true
+    level: guided
+    desc: { en: "rollback.sh moves the same link back to the release before, with the same atomic rename.", fr: "rollback.sh remet le même lien sur la version d'avant, avec le même renommage atomique." }
+  - from: current
+    to: caddy
+    label: "serves"
+    desc: { en: "Caddy follows the link on each request, so the swap takes effect immediately, without a reload.", fr: "Caddy suit le lien à chaque requête : la bascule prend effet aussitôt, sans rechargement." }
+  - from: caddy
+    to: visitors
+    label: "HTTPS"
+    deep: { label: "HTTPS · HTTP/2 + HTTP/3 · TCP/UDP 443" }
+    desc: { en: "The same site as before the page, now with your real content.", fr: "Le même site qu'avant cette page, maintenant avec ton vrai contenu." }

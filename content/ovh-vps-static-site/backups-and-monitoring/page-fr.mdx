@@ -1,0 +1,407 @@
+{/* Premier jet — à valider avant publication contre https://restic.readthedocs.io , https://docs.ovhcloud.com (Object Storage S3, premiers pas ; sauvegardes automatiques et snapshots du VPS) et https://healthchecks.io/docs/ . */}
+
+Le site est en ligne. Cette page fait en sorte que, le jour où quelque chose casse, tu sois le premier au courant et que tu puisses tout remettre en place. Tu décides de ce qui mérite d'être sauvegardé, tu trouves les sauvegardes d'OVH, tu envoies chaque nuit une copie chiffrée hors site avec restic, tu restaures une fois pour prouver que ça marche, tu mets une surveillance externe sur le site, tu plafonnes les logs, et tu termines par une routine de dix minutes à faire une fois par mois.
+
+<Run>
+
+Sur le serveur (`ssh vps`), ouvre un nouveau fichier avec `nano backup-setup.sh`, colle-y dans l'ordre tous les blocs de code de cette section, puis lance `sudo bash backup-setup.sh` (sudo te demande ton mot de passe une fois). Les pages 3 à 6 doivent être faites<When is="OFFSITE" equals="s3">, le bucket et ses clés S3 créés, et toutes les valeurs du groupe « Sauvegarde hors site » remplies dans le panneau</When><When flag="HEALTHCHECK">, ainsi que `HC_PING_URL` dans le groupe « Surveillance »</When>.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Sauvegardes et surveillance — ${DOMAIN}
+install -d /etc/systemd/journald.conf.d
+printf '[Journal]\nSystemMaxUse=500M\n' > /etc/systemd/journald.conf.d/size.conf
+systemctl restart systemd-journald
+```
+
+<When is="OFFSITE" equals="s3">
+
+<When flag="HEALTHCHECK">
+
+```bash
+case "${HC_PING_URL}" in *your-uuid*) echo "Fill HC_PING_URL first"; exit 1;; esac
+```
+
+</When>
+
+```bash
+for i in $(seq 30); do apt-get -o DPkg::Lock::Timeout=300 update && break; sleep 10; done
+apt-get -o DPkg::Lock::Timeout=300 install -y restic curl
+install -d -m 700 /etc/restic
+umask 077
+cat > /etc/restic/env <<'EOF'
+RESTIC_REPOSITORY=s3:${S3_ENDPOINT}/${S3_BUCKET}
+AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY}
+AWS_SECRET_ACCESS_KEY=${S3_SECRET_KEY}
+RESTIC_PASSWORD=${RESTIC_PASSWORD}
+EOF
+umask 022
+printf '/home/*/.cache\n/var/lib/caddy/.local/share/caddy/locks\n' > /etc/restic/excludes
+set -a; . /etc/restic/env; set +a
+restic cat config >/dev/null 2>&1 || restic init
+```
+
+```bash
+cat > /etc/systemd/system/restic-backup.service <<'EOF'
+[Unit]
+Description=Nightly restic backup to off-site S3
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/restic/env
+Environment=RESTIC_CACHE_DIR=/var/cache/restic
+CacheDirectory=restic
+Nice=10
+ExecStart=/usr/bin/restic backup /etc /var/lib/caddy /home ${WEB_ROOT} --exclude-file=/etc/restic/excludes --tag nightly
+ExecStartPost=/usr/bin/restic forget --prune --keep-daily 7 --keep-weekly 4 --keep-monthly 6
+EOF
+```
+
+<When flag="HEALTHCHECK">
+
+```bash
+echo 'ExecStartPost=-/usr/bin/curl -fsS -m 10 --retry 3 -o /dev/null ${HC_PING_URL}' >> /etc/systemd/system/restic-backup.service
+```
+
+</When>
+
+```bash
+cat > /etc/systemd/system/restic-backup.timer <<'EOF'
+[Unit]
+Description=Run restic-backup every night
+
+[Timer]
+OnCalendar=*-*-* ${BACKUP_TIME}:00
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+systemctl daemon-reload
+systemctl enable --now restic-backup.timer
+systemctl start restic-backup.service
+restic restore latest --target /tmp/restore-test --include /etc/caddy
+diff -r /etc/caddy /tmp/restore-test/etc/caddy
+echo "restore OK"
+rm -rf /tmp/restore-test
+systemctl list-timers restic-backup.timer
+echo "Terminé. Range RESTIC_PASSWORD dans ton gestionnaire de mots de passe si ce n'est pas déjà fait."
+```
+
+<Warn>Si tu perds <V name="RESTIC_PASSWORD" />, toutes les sauvegardes sont illisibles pour toujours. Range-le dans ton gestionnaire de mots de passe, avec les clés S3, avant de lancer le script.</Warn>
+
+</When>
+
+<When is="OFFSITE" equals="none">
+
+Sans copie hors site, le script ne fait que plafonner le journal. Copie `/etc` sur ton portable à la main, comme expliqué dans « Garder toi-même une copie de /etc ».
+
+</When>
+
+</Run>
+
+## Avant de commencer
+
+Les pages 3 à 6 sont faites : tu te connectes avec `ssh vps`, Caddy sert le site en HTTPS, et les déploiements passent par `vps-deploy`. Tout ce qui suit se lance sur le serveur après `ssh vps`, en <V name="USERNAME" />, sauf les tableaux de bord web.
+
+<Check cmd="systemctl is-active caddy" expect="active" />
+
+<Guided>Il te faut aussi un gestionnaire de mots de passe. Cette page crée des secrets qui n'existent nulle part ailleurs : le mot de passe restic et les clés S3. Un serveur qui brûle emporte sa copie avec lui ; celle de ton gestionnaire de mots de passe est la seule qui compte.</Guided>
+
+## Quoi sauvegarder
+
+La source du site ne vit que dans le dossier du projet sur ton Mac, <V name="LOCAL_DIR" /> : c'est de là que le site se reconstruit et se redéploie en quelques minutes (pages 1 et 6). Ce que le Mac ne sait pas reconstruire, c'est l'état du serveur lui-même.
+
+| Chemin | Ce qu'il contient | Si tu le perds |
+|---|---|---|
+| `/etc` | Le fichier SSH complémentaire, le Caddyfile, les règles ufw, les jails fail2ban, les sources apt, sudoers, utilisateurs et groupes | Refaire les pages 3 à 5 à la main : une heure ou deux, avec de la place pour les erreurs |
+| `/var/lib/caddy` | Les certificats TLS et le compte ACME | Caddy en obtient de nouveaux tout seul, dans les limites de Let's Encrypt |
+| `/home` | Tes fichiers de config perso, les `authorized_keys` des deux utilisateurs, tes scripts | Remettre les clés par la console KVM |
+| <V name="WEB_ROOT" /> | Les releases construites, pas la source : ni code, ni originaux | Redéploie depuis le Mac ; cette copie ne sert que si le Mac et sa sauvegarde ont disparu tous les deux |
+| `/var/lib/<app>` (plus tard) | Les données d'un backend, quand tu en ajouteras un | Irremplaçable : la vraie raison d'être des sauvegardes |
+
+<Guided>Cette page s'occupe du serveur. Le dossier du projet sur le Mac est sauvegardé par Time Machine, mis en place à la page 1 ; c'est là que vivent le code et les photos originales. La racine web est quand même sauvegardée ici : ça ne coûte presque rien, puisque les releases sont liées en dur et que restic ne stocke qu'une fois les fichiers identiques, et c'est la seule autre copie du site construit si le Mac et son disque Time Machine disparaissaient ensemble. C'est une copie du résultat, jamais un substitut de la source.</Guided>
+
+<Deep>Let's Encrypt accepte cinq certificats par semaine pour un même ensemble de noms. Reconstruire un serveur plusieurs fois dans une journée d'essais, sans `/var/lib/caddy`, c'est comme ça qu'on atteint la limite et qu'on attend une semaine. Caddy se rabattrait alors sur ZeroSSL, que l'enregistrement CAA de la page 4 n'autorise peut-être pas. Un bonus utile : avant chaque sauvegarde, écris la liste des paquets installés à la main avec `apt-mark showmanual > /etc/apt/manual-packages.txt`, pour qu'une reconstruction commence par un seul `apt install`.</Deep>
+
+## Sauvegardes et snapshots OVH
+
+Dans l'espace client OVH, ouvre ton VPS (**Bare Metal Cloud** → **Serveurs privés virtuels** → le VPS). L'onglet **Accueil** liste les options : **Sauvegarde automatique** et **Snapshot**.
+
+- **Sauvegarde automatique** : incluse avec le VPS, une par jour, un jour de rétention. Le `...` à côté → **Restaurer**.
+- **Snapshot** : une option payante. Tu le prends à la main, avant un changement risqué : une montée de version majeure de Debian, une config Caddy dont tu n'es pas sûr, un changement de pare-feu.
+
+<Warn>Restaurer une sauvegarde ou un snapshot écrase tout le disque du VPS. Tout ce qui a été écrit depuis, logs et fichiers envoyés par le déploiement compris, disparaît. L'option snapshot coûte chaque mois : vérifie le prix actuel sur ovhcloud.com/fr/vps.</Warn>
+
+<Guided>
+
+Trois couches, chacune contre un accident différent :
+
+1. **La sauvegarde automatique OVH** : « j'ai tout cassé hier ». Le VPS entier revient un jour en arrière, en un clic.
+2. **Le snapshot OVH** : « je vais faire un truc risqué ». Pris quelques minutes avant, restauré quelques minutes après.
+3. **Une copie hors site que tu contrôles** : « le VPS, le datacenter ou le compte OVH a disparu ». Un compte bloqué, une facture impayée, un incendie de datacenter : les deux premières couches vivent chez OVH et partent avec.
+
+</Guided>
+
+<Deep>Les deux couches OVH travaillent au niveau du disque : elles ne savent pas te rendre un seul fichier sans remettre tout le reste en arrière. L'espace client peut aussi monter une sauvegarde automatique pour y piocher des fichiers ; vérifie la procédure actuelle dans le guide OVHcloud « Utiliser les sauvegardes automatiques sur un VPS ». Un seul snapshot existe à la fois : en prendre un nouveau remplace l'ancien.</Deep>
+
+<Note>OVH déplace ses menus de temps en temps. Si le chemin ci-dessus a changé, cherche « snapshot VPS » et « sauvegarde automatique VPS » sur docs.ovhcloud.com.</Note>
+
+<When is="OFFSITE" equals="s3">
+
+## Créer le bucket et les clés
+
+La copie hors site part vers un stockage objet S3 : un bucket, plus un utilisateur S3 dont restic utilise les clés. Chez OVH, dans l'espace client :
+
+1. **Public Cloud** → crée un projet si tu n'en as pas (il faut un moyen de paiement).
+2. **Object Storage** → **Créer un conteneur d'objets** : API S3, classe standard, région **GRA** (Gravelines), nom <V name="S3_BUCKET" />.
+3. **Object Storage** → **Utilisateurs S3** → crée un utilisateur, donne-lui lecture/écriture sur le conteneur, et copie sa **clé d'accès** et sa **clé secrète** dans le panneau des valeurs et dans ton gestionnaire de mots de passe.
+
+<Warn>Public Cloud est facturé à l'usage. Pour quelques dizaines de mégaoctets de configuration, compte quelques centimes par mois (le stockage coûte de l'ordre de 0,01 € par Go et par mois), mais vérifie le prix actuel sur la page Object Storage d'OVHcloud avant de créer le projet.</Warn>
+
+<Note>Les noms de menus bougent, et le point d'accès S3 dépend de la région choisie. Vérifie celui de ta région dans le guide OVHcloud « Object Storage — Premiers pas avec S3 » et copie-le dans <V name="S3_ENDPOINT" />.</Note>
+
+<Guided>Pourquoi un second fournisseur serait encore mieux : un bucket chez OVH survit à la perte du VPS, pas à celle du compte OVH. **Infomaniak Swiss Backup** (là où vit déjà ton domaine) ou **Backblaze B2** parlent aussi S3 ; restic s'en moque. Change le point d'accès et les clés, et rien d'autre ne bouge sur cette page.</Guided>
+
+<Deep>L'utilisateur S3 n'a besoin d'accéder qu'à ce bucket. Ne réutilise pas un utilisateur qui voit d'autres conteneurs : les clés sont sur le serveur, donc quiconque prend le serveur pourrait effacer les sauvegardes avec. Le chiffrement de restic protège le contenu, pas l'existence des objets. Si ce risque compte pour toi, active le verrouillage d'objets ou le versioning sur le bucket, là où le fournisseur le propose, pour qu'une suppression puisse être annulée.</Deep>
+
+## Mettre en place restic
+
+restic fait des snapshots chiffrés et dédupliqués de répertoires dans un « dépôt », ici le bucket. Installe-le, puis écris ses identifiants dans un fichier que seul root peut lire.
+
+```bash
+sudo apt install -y restic
+sudo install -d -m 700 /etc/restic
+sudo install -m 600 /dev/null /etc/restic/env
+sudo nano /etc/restic/env
+```
+
+```ini title="/etc/restic/env"
+RESTIC_REPOSITORY=s3:${S3_ENDPOINT}/${S3_BUCKET}
+AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY}
+AWS_SECRET_ACCESS_KEY=${S3_SECRET_KEY}
+RESTIC_PASSWORD=${RESTIC_PASSWORD}
+```
+
+<Warn>Si tu perds <V name="RESTIC_PASSWORD" />, toutes les sauvegardes sont illisibles pour toujours : personne, même pas OVH, ne peut les déchiffrer. Range-le dans ton gestionnaire de mots de passe maintenant, avant la première sauvegarde.</Warn>
+
+Ensuite la liste de ce qu'on ignore, dans `/etc/restic/excludes`, et le dépôt lui-même :
+
+```bash
+printf '/home/*/.cache\n/var/lib/caddy/.local/share/caddy/locks\n' | sudo tee /etc/restic/excludes
+sudo bash -c 'set -a; . /etc/restic/env; restic init'
+```
+
+<Guided>`set -a` exporte toutes les variables lues ensuite, donc `. /etc/restic/env` passe les quatre valeurs à restic sans qu'elles apparaissent jamais sur la ligne de commande ni dans ton historique. `restic init` crée la structure du dépôt et sa clé de chiffrement, dérivée du mot de passe. Il affiche `created restic repository … at s3:…`.</Guided>
+
+<Details summary="Si restic init échoue">
+
+- `The specified bucket does not exist` : le nom du bucket ou la région du point d'accès ne correspond pas. Compare avec l'espace client.
+- `Access Denied` ou `SignatureDoesNotMatch` : mauvaises clés, ou l'utilisateur S3 n'a pas de droits sur le conteneur.
+- Une erreur de région : ajoute `AWS_DEFAULT_REGION=gra` (ta région, en minuscules) dans `/etc/restic/env`.
+- `config file already exists` : le dépôt est déjà initialisé, rien à faire.
+
+</Details>
+
+Maintenant le travail de nuit : un service systemd qui fait la sauvegarde et élague les vieux snapshots, et un timer qui le lance.
+
+<Tabs group="restic-units">
+
+<Tab label="restic-backup.service">
+
+```ini title="/etc/systemd/system/restic-backup.service" {12-13}
+[Unit]
+Description=Nightly restic backup to off-site S3
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/restic/env
+Environment=RESTIC_CACHE_DIR=/var/cache/restic
+CacheDirectory=restic
+Nice=10
+ExecStart=/usr/bin/restic backup /etc /var/lib/caddy /home ${WEB_ROOT} --exclude-file=/etc/restic/excludes --tag nightly
+ExecStartPost=/usr/bin/restic forget --prune --keep-daily 7 --keep-weekly 4 --keep-monthly 6
+```
+
+<When flag="HEALTHCHECK">
+
+Avec healthchecks.io, ajoute une dernière ligne qui le pingue après une sauvegarde réussie :
+
+```ini
+ExecStartPost=-/usr/bin/curl -fsS -m 10 --retry 3 -o /dev/null ${HC_PING_URL}
+```
+
+</When>
+
+</Tab>
+
+<Tab label="restic-backup.timer">
+
+```ini title="/etc/systemd/system/restic-backup.timer"
+[Unit]
+Description=Run restic-backup every night
+
+[Timer]
+OnCalendar=*-*-* ${BACKUP_TIME}:00
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+</Tab>
+
+</Tabs>
+
+Crée les deux fichiers avec `sudo nano`, puis active le timer et lance une sauvegarde tout de suite :
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now restic-backup.timer
+sudo systemctl start restic-backup.service
+```
+
+<Check cmd="systemctl is-active restic-backup.timer" expect="active" />
+
+<Check cmd="sudo systemctl show -p Result restic-backup.service" expect="Result=success" />
+
+<Guided>Le service garde 7 snapshots quotidiens, 4 hebdomadaires et 6 mensuels : six mois d'historique pour quelques mégaoctets, puisque restic ne stocke chaque bloc modifié qu'une fois. `Persistent=true` rattrape au démarrage suivant une sauvegarde manquée pendant que le VPS était éteint. `systemctl start` attend la fin de la sauvegarde, donc la seconde vérification lit le résultat de celle que tu viens de lancer.</Guided>
+
+<Deep>Les lignes `ExecStartPost` ne tournent que si `ExecStart` a réussi : une sauvegarde ratée n'élague jamais rien. restic sort avec le code 3 quand certains fichiers n'ont pas pu être lus : le snapshot existe mais il est incomplet, et le service est marqué en échec exprès. Le `-` devant la ligne curl dit à systemd d'ignorer son échec : une panne chez healthchecks.io ne doit pas faire passer une bonne sauvegarde pour ratée. `CacheDirectory` donne à restic un cache local dans `/var/cache/restic`, ce qui évite de retélécharger l'index depuis S3 à chaque fois. Marre du préfixe `bash -c` ? Un wrapper `/usr/local/sbin/rst` contenant `set -a; . /etc/restic/env; set +a; exec restic "$@"` (mode 700) te permet de taper `sudo rst snapshots`.</Deep>
+
+## Tester une restauration
+
+Une sauvegarde jamais restaurée est un espoir, pas une sauvegarde. Restaure la configuration de Caddy dans un dossier de test et compare-la avec celle en service :
+
+```bash
+sudo bash -c 'set -a; . /etc/restic/env; restic restore latest --target /tmp/restore-test --include /etc/caddy'
+sudo diff -r /etc/caddy /tmp/restore-test/etc/caddy && echo "restore OK"
+```
+
+<Check cmd="sudo diff -r /etc/caddy /tmp/restore-test/etc/caddy && echo 'restore OK'" expect="restore OK" />
+
+Ensuite, supprime la copie de test avec `sudo rm -rf /tmp/restore-test`.
+
+<Guided>Ça prouve toute la chaîne : les clés atteignent le bucket, le mot de passe déchiffre, les fichiers reviennent identiques. Refais-le une fois par an, et après chaque modification de `/etc/restic/env`. Sur un serveur neuf, la même commande avec `--target /` et sans `--include` remet tout en place ; installe d'abord restic et recrée `/etc/restic/env` depuis ton gestionnaire de mots de passe.</Guided>
+
+<Deep>`restic snapshots` liste ce qui existe ; `restic ls latest /etc/caddy` parcourt un snapshot sans rien restaurer ; `restic mount /mnt/restic` expose tous les snapshots comme un dossier en lecture seule (il faut FUSE, `sudo apt install fuse3`). `restic check` vérifie la structure du dépôt ; `restic check --read-data-subset=5%` télécharge et vérifie en plus un échantillon des données, ce que certains fournisseurs facturent en trafic sortant.</Deep>
+
+</When>
+
+<When is="OFFSITE" equals="none">
+
+## Garder toi-même une copie de /etc
+
+Tu comptes sur les seules sauvegardes d'OVH. Elles couvrent un mauvais changement, pas la perte du compte OVH, une facture impayée ou un incident chez l'hébergeur. Garde au moins une copie de `/etc` sur ton portable, rafraîchie après chaque changement de configuration. Depuis le portable :
+
+```bash
+ssh -t vps 'sudo sh -c "umask 077; tar czf /tmp/etc.tgz /etc" && sudo chown ${USERNAME} /tmp/etc.tgz'
+scp vps:/tmp/etc.tgz ./vps-etc-$(date +%F).tgz
+ssh vps rm /tmp/etc.tgz
+```
+
+<Check cmd="tar tzf vps-etc-$(date +%F).tgz | head -1" expect="etc/" />
+
+<Warn>L'archive contient les empreintes des mots de passe, les clés d'hôte SSH et tous les secrets du serveur. Garde-la sur un disque chiffré (FileVault sur le Mac), jamais dans un dossier synchronisé comme iCloud Drive ou Dropbox.</Warn>
+
+<Guided>`ssh -t` donne un terminal à sudo pour qu'il demande ton mot de passe. L'archive est créée avec `umask 077`, donc aucun autre utilisateur du serveur ne peut la lire pendant les quelques secondes où elle reste dans `/tmp`.</Guided>
+
+</When>
+
+## Être prévenu quand ça casse
+
+Un service externe interroge le site depuis internet et t'envoie un email quand il ne répond plus. UptimeRobot en est un exemple ; Better Stack et d'autres marchent pareil. Crée un compte gratuit et ajoute une sonde :
+
+- Type **Keyword** (mot-clé), URL https://<V name="DOMAIN" />/, toutes les 5 minutes.
+- Mot-clé : un mot que seule ta vraie page d'accueil contient, par exemple ton nom dans le titre.
+- Contact d'alerte : <V name="ADMIN_EMAIL" />.
+
+<Guided>Un mot-clé vaut mieux qu'un simple contrôle de statut : la page provisoire de la page 5, ou une release vide qui répond quand même 200, passerait un contrôle de statut. La sonde échoue aussi quand le certificat a expiré, puisque la connexion HTTPS échoue ; si ton offre propose des alertes d'expiration de certificat, active-les pour l'apprendre quelques jours plus tôt.</Guided>
+
+<Note>Les offres gratuites changent souvent (intervalle, nombre de sondes, usage commercial) : vérifie l'offre actuelle sur la page de tarifs du service.</Note>
+
+<When is="OFFSITE" equals="s3">
+
+<When flag="HEALTHCHECK">
+
+La sonde surveille le site ; healthchecks.io surveille la sauvegarde. Il marche dans l'autre sens : ton serveur le pingue après chaque sauvegarde, et il t'écrit quand le ping n'arrive **pas**. Sur healthchecks.io, crée un compte puis **Add Check** :
+
+- Période **1 day**, délai de grâce **2 hours**.
+- Intégrations : email vers <V name="ADMIN_EMAIL" /> (actif par défaut pour l'adresse du compte).
+- Copie l'URL de ping (`https://hc-ping.com/…`) dans <V name="HC_PING_URL" />, mets-la dans la ligne curl de `restic-backup.service`, puis `sudo systemctl daemon-reload` et `sudo systemctl start restic-backup.service`.
+
+<Guided>Le check passe au vert après ce lancement. Dès lors, une nuit sans sauvegarde réussie, quelle qu'en soit la cause (disque plein, bucket supprimé, clés révoquées, VPS éteint), t'envoie un email le lendemain matin.</Guided>
+
+</When>
+
+</When>
+
+## Garder les logs sous contrôle
+
+Par défaut, journald garde jusqu'à 10 % du disque, plafonné à 4 Go. Sur un VPS de 40 Go, plafonne-le à 500 Mo avec un fichier complémentaire, `/etc/systemd/journald.conf.d/size.conf` :
+
+```bash
+sudo mkdir -p /etc/systemd/journald.conf.d
+printf '[Journal]\nSystemMaxUse=500M\n' | sudo tee /etc/systemd/journald.conf.d/size.conf
+sudo systemctl restart systemd-journald
+journalctl --disk-usage
+```
+
+<Check cmd="systemd-analyze cat-config systemd/journald.conf | grep '^SystemMaxUse'" expect="SystemMaxUse=500M" />
+
+<Guided>Les logs d'accès de Caddy tournent déjà tout seuls (page 5). Avec le journal plafonné aussi, la seule chose qui peut encore remplir le disque, c'est ce que tu y mets toi-même.</Guided>
+
+<Deep>Quand le plafond est atteint, journald supprime d'abord les plus vieux fichiers archivés. 500 Mo, c'est des semaines de logs sur un serveur calme ; `journalctl --disk-usage` te dit où tu en es. `SystemMaxUse` ne compte que le journal persistant dans `/var/log/journal` ; `RuntimeMaxUse` plafonne celui en mémoire.</Deep>
+
+## La routine mensuelle
+
+Dix minutes, une fois par mois, le même jour chaque mois. Depuis ton portable, `ssh vps`, puis :
+
+```bash
+# 1. Paquets à mettre à jour : installe-les avec sudo apt upgrade
+sudo apt update && apt list --upgradable
+# 2. Après une mise à jour du noyau : sudo reboot, puis vérifie le site
+[ -f /var/run/reboot-required ] && echo "reboot needed"
+# 3. L'occupation du disque doit rester sous 80 %
+df -h /
+# 4. Adresses bannies (si fail2ban a été choisi page 3) : rien à faire, sauf si l'une est la tienne
+sudo fail2ban-client status sshd 2>/dev/null || echo "fail2ban not installed"
+# 5. Attendu : "0 loaded units listed"
+systemctl --failed
+# 6. Les erreurs du mois : lis-les une fois, cherche les nouvelles
+sudo journalctl -p err --since '30 days ago' | tail -n 30
+```
+
+<When is="OFFSITE" equals="s3">
+
+Ensuite les sauvegardes : le timer montre le prochain passage, et le dernier snapshot doit dater de la nuit dernière.
+
+```bash
+systemctl list-timers restic-backup.timer
+sudo bash -c 'set -a; . /etc/restic/env; restic snapshots --latest 3'
+```
+
+</When>
+
+Pour finir, ouvre le tableau de bord de la sonde et regarde la disponibilité et les incidents du mois. Puis, sur le Mac, vérifie que Time Machine a sauvegardé le dossier du projet récemment :
+
+```bash
+tmutil latestbackup
+```
+
+<Guided>Une fois par an, ajoute : retester une restauration<When is="OFFSITE" equals="none"> (ouvre ta dernière archive de `/etc`)</When>, et restaurer un fichier de <V name="LOCAL_DIR" /> depuis Time Machine sur le Mac, pour prouver que ce côté-là marche aussi.</Guided>
+
+<Deep>Tous les deux ans environ sort une nouvelle Debian stable ; celle qui suivra trixie est attendue vers mi-2027, et trixie garde son support de sécurité environ un an après. Prépare la montée de version : prends d'abord un snapshot OVH, lis les notes de version, puis suis-les (`sources.list` vers le nouveau nom de code, `apt full-upgrade`, redémarrage). Vérifie avant de commencer que le dépôt apt de Caddy prend en charge la nouvelle version. Si ça tourne mal, restaure le snapshot et réessaie un autre jour.</Deep>
+
+## Terminé
+
+L'état de ton serveur est sauvegardé de trois façons<When is="OFFSITE" equals="s3">, et une restauration a fait ses preuves</When><When is="OFFSITE" equals="none"> (deux chez OVH, une sur ton portable)</When>. Tu reçois un email quand le site ne répond plus, les logs ne peuvent plus remplir le disque, et une routine mensuelle vérifie que tout ça tient.
+
+La page suivante, **Checklist de lancement**, repasse sur tout une dernière fois avant que tu annonces le site.

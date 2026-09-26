@@ -1,0 +1,398 @@
+{/* Premier jet — à valider avant publication contre https://docs.ovhcloud.com/en/guides/bare-metal-cloud/virtual-private-servers/secure-your-vps, man sshd_config (OpenSSH, Debian 13) et https://wiki.debian.org/UnattendedUpgrades. */}
+
+Le VPS répond sur le port 22 à tout internet, en `debian`, avec un sudo sans mot de passe. Cette page te fait passer sur ton propre compte, met SSH sur son propre port avec des clés uniquement, allume un pare-feu<When flag="FAIL2BAN">, bannit le brute force</When> et fait s'installer seules les mises à jour de sécurité. L'ordre compte : chaque nouvelle porte est testée depuis un second terminal avant de fermer l'ancienne.
+
+<Run>
+
+Trois parties. La **partie 1** tourne sur le serveur en `debian`, juste après la livraison (connexion par clé qui marche, sudo sans mot de passe tel qu'OVH le livre, ton mot de passe sudo rempli dans le panneau des valeurs) : colle tous les blocs qui précèdent la partie 2 dans un seul fichier avec `nano secure.sh`, lance `sudo bash secure.sh`, puis `shred -u secure.sh`, parce qu'il contient ton mot de passe. La **partie 2** tourne sur ton portable. La **partie 3** tourne sur le serveur en <V name="USERNAME" /> depuis `ssh vps`, enregistrée dans `finish.sh` et lancée avec `sudo bash finish.sh` (sudo demande ton mot de passe une fois).
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Sécuriser le serveur, partie 1 — ${SERVER_NAME} (${SERVER_IP}). En debian : sudo bash secure.sh
+[ "$(id -u)" -eq 0 ] || { echo "Lance-le avec : sudo bash secure.sh"; exit 1; }
+export DEBIAN_FRONTEND=noninteractive
+cloud-init status --wait >/dev/null 2>&1 || true
+IFS= read -r PASSWORD_LINE <<'EOF'
+${USERNAME}:${USER_PASSWORD}
+EOF
+case "$PASSWORD_LINE" in "${USERNAME}:"|*USER_PASSWORD*) echo "Remplis d'abord le mot de passe sudo dans le panneau des valeurs."; exit 1;; esac
+for i in $(seq 30); do apt-get -o DPkg::Lock::Timeout=300 update && break; sleep 10; done
+apt-get -o DPkg::Lock::Timeout=300 -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold full-upgrade
+hostnamectl set-hostname ${SERVER_NAME}
+[ ! -d /etc/cloud/cloud.cfg.d ] || printf 'preserve_hostname: true\nmanage_etc_hosts: false\n' > /etc/cloud/cloud.cfg.d/99-hostname.cfg
+sed -i '/^127\.0\.1\.1[[:space:]]/d' /etc/hosts
+echo "127.0.1.1 ${SERVER_NAME}" >> /etc/hosts
+timedatectl set-timezone ${TIMEZONE}
+id ${USERNAME} >/dev/null 2>&1 || adduser --disabled-password --gecos "" ${USERNAME}
+printf '%s\n' "$PASSWORD_LINE" | chpasswd
+groupadd -f sshusers && usermod -aG sudo,sshusers ${USERNAME}
+install -d -m 700 -o ${USERNAME} -g ${USERNAME} /home/${USERNAME}/.ssh
+install -m 600 -o ${USERNAME} -g ${USERNAME} /home/debian/.ssh/authorized_keys /home/${USERNAME}/.ssh/authorized_keys
+cat > /etc/ssh/sshd_config.d/00-hardening.conf <<'EOF'
+Port ${SSH_PORT}
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+AllowGroups sshusers
+EOF
+sshd -t
+[ "$(sshd -T | grep -c '^port ')" -eq 1 ] || { echo "Un autre fichier définit un Port : grep -rn ^Port /etc/ssh"; exit 1; }
+# Pare-feu : le nouveau port ET le 22 restent ouverts jusqu'à la partie 3
+apt-get -o DPkg::Lock::Timeout=300 install -y ufw unattended-upgrades apt-listchanges
+ufw default deny incoming && ufw default allow outgoing
+ufw allow ${SSH_PORT}/tcp && ufw allow 22/tcp
+ufw --force enable
+printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' > /etc/apt/apt.conf.d/20auto-upgrades
+# Bascule SSH sur le nouveau port. Cette session reste ouverte.
+if systemctl is-active --quiet ssh.socket; then systemctl daemon-reload; systemctl restart ssh.socket; else systemctl restart ssh; fi
+ss -Htln "sport = :${SSH_PORT}" | grep . >/dev/null || { echo "sshd n'écoute pas sur ${SSH_PORT}. Garde cette session ouverte."; exit 1; }
+ip -6 addr show scope global | grep -F '${SERVER_IPV6}' >/dev/null || echo "Attention : ${SERVER_IPV6} n'est pas configurée, vois l'étape IPv6."
+```
+
+<When flag="AUTO_REBOOT">
+
+```bash
+printf 'Unattended-Upgrade::Automatic-Reboot "true";\nUnattended-Upgrade::Automatic-Reboot-Time "${REBOOT_TIME}";\n' > /etc/apt/apt.conf.d/52unattended-upgrades-local
+```
+
+</When>
+
+<When flag="FAIL2BAN">
+
+```bash
+apt-get -o DPkg::Lock::Timeout=300 install -y fail2ban python3-systemd
+printf '[DEFAULT]\nbantime.increment = true\n\n[sshd]\nenabled = true\nport = ${SSH_PORT}\nbackend = systemd\nmaxretry = 3\nfindtime = 10m\nbantime = 1h\n' > /etc/fail2ban/jail.d/sshd.local
+systemctl enable fail2ban && systemctl restart fail2ban
+```
+
+</When>
+
+Partie 2, sur ton portable : colle-la dans un **nouveau** terminal. Réponds `yes` à la question sur la clé d'hôte : même clé, nouveau port.
+
+```bash
+touch ~/.ssh/config && chmod 600 ~/.ssh/config
+grep -q '^Host vps$' ~/.ssh/config || printf '\nHost vps\n  HostName ${SERVER_IP}\n  Port ${SSH_PORT}\n  User ${USERNAME}\n' >> ~/.ssh/config
+ssh vps echo connected
+```
+
+Partie 3, seulement une fois `connected` revenu : quitte la session `debian` (`exit`), fais `ssh vps`, et mets tous les blocs à partir d'ici dans `finish.sh`.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Sécuriser le serveur, partie 3 — en ${USERNAME} via ssh vps : sudo bash finish.sh
+[ "$(printenv SUDO_USER || true)" = "${USERNAME}" ] || { echo "Lance-le en ${USERNAME} (ssh vps) avec : sudo bash finish.sh"; exit 1; }
+ufw delete allow 22/tcp || true
+rm -f /etc/sudoers.d/90-cloud-init-users
+```
+
+<When flag="REMOVE_DEBIAN_USER">
+
+```bash
+if id debian >/dev/null 2>&1; then loginctl terminate-user debian || true; sleep 2; pkill -KILL -u debian || true; userdel -r debian || true; fi
+! id debian >/dev/null 2>&1 || { echo "debian existe encore : supprime-le à la main avec userdel -r debian"; exit 1; }
+rm -rf /home/debian
+```
+
+</When>
+
+<When notFlag="REMOVE_DEBIAN_USER">
+
+```bash
+! id debian >/dev/null 2>&1 || usermod -L -e 1 debian
+```
+
+</When>
+
+```bash
+[ ! -f /var/run/reboot-required ] || { echo "Redémarrage pour charger les mises à jour. Reconnecte-toi avec : ssh vps"; systemctl reboot; }
+```
+
+<Warn>Ne ferme pas la session de la partie 1 tant que `ssh vps echo connected` ne marche pas. Si ça échoue, c'est cette session encore ouverte qui te permet de réparer : vois « Si la nouvelle connexion échoue » à l'étape pare-feu. Le snapshot de la fin se fait à la main dans l'espace client.</Warn>
+
+</Run>
+
+## Avant de commencer
+
+Vérifie que la connexion livrée marche et que `debian` a sudo sans mot de passe, puis connecte-toi en `debian` dans un premier terminal et restes-y : un second terminal sur ton portable teste chaque changement depuis l'extérieur.
+
+<Check cmd="ssh debian@${SERVER_IP} sudo -n true && echo OK" expect="OK" />
+
+<Warn>Cette page change la façon dont tu entres sur le serveur. Si une étape rate et que ta session ouverte est perdue, le chemin du retour est la **console KVM** de l'espace client OVH : le bouton `...` à côté de ton VPS → **KVM**. Elle se connecte avec un mot de passe, jamais avec une clé. Trouve-la maintenant, avant de commencer. Un snapshot pris maintenant (option payante, vois la dernière étape) ajoute un retour en un clic à l'état de livraison.</Warn>
+
+## Tout mettre à jour
+
+Mets à jour, puis redémarre si Debian a laissé le fichier témoin qui dit qu'une mise à jour l'exige (un nouveau noyau, en général), et reconnecte-toi en `debian` :
+
+```bash
+sudo apt update && sudo apt full-upgrade -y
+[ -f /var/run/reboot-required ] && sudo reboot
+```
+
+<Note>Si apt dit que le verrou dpkg est pris, attends une minute et relance : le serveur termine ses mises à jour de premier démarrage.</Note>
+
+<Guided>Une image est construite des semaines ou des mois avant que tu l'installes. Mettre à jour d'abord, c'est faire tourner le reste de la page sur des logiciels corrigés, et donner aux mises à jour automatiques installées plus loin une base propre.</Guided>
+
+<Deep>`apt upgrade` ne supprime jamais de paquet ; `apt full-upgrade` peut en supprimer un quand c'est le seul moyen d'aller au bout (un conflit, une dépendance renommée). Au sein d'une version stable, les deux font en général la même chose, et `full-upgrade` est ce qu'utilisent les notes de version de Debian. Si un écran de texte bleu t'interroge sur un fichier de configuration modifié, garde la version installée (la réponse par défaut) : les fichiers complémentaires de cette page vivent à part justement pour ça.</Deep>
+
+## Nom et horloge
+
+Donne son nom au serveur, empêche cloud-init de remettre celui d'OVH, et règle le fuseau horaire. `timedatectl` doit ensuite afficher ton fuseau et `System clock synchronized: yes`.
+
+```bash
+sudo hostnamectl set-hostname ${SERVER_NAME}
+printf 'preserve_hostname: true\nmanage_etc_hosts: false\n' | sudo tee /etc/cloud/cloud.cfg.d/99-hostname.cfg
+sudo sed -i '/^127\.0\.1\.1[[:space:]]/d' /etc/hosts
+echo "127.0.1.1 ${SERVER_NAME}" | sudo tee -a /etc/hosts
+sudo timedatectl set-timezone ${TIMEZONE}
+timedatectl
+```
+
+<Guided>Le nom s'affiche dans ton invite et sur chaque ligne de journal, ce qui aide le jour où tu as deux serveurs. Le fuseau fait coller l'heure des journaux à ta montre<When flag="AUTO_REBOOT"> et donne son sens à l'heure de redémarrage automatique</When>. L'horloge elle-même est tenue à l'heure par un client NTP (`systemd-timesyncd`) ; les certificats TLS et le recoupement des journaux en dépendent.</Guided>
+
+<Deep>`/etc/hosts` associe le nom à `127.0.1.1`, la convention Debian pour une machine sans nom fixe dans le DNS ; sans cette ligne, `sudo` affiche « unable to resolve host » à chaque appel, et un tel avertissement pendant ces commandes est normal. cloud-init, l'outil de premier démarrage de l'image OVH, peut réécrire le nom d'hôte et `/etc/hosts` au démarrage à partir des métadonnées d'OVH. Le fichier dans `/etc/cloud/cloud.cfg.d/` lui dit de ne pas y toucher ; ces fichiers sont lus dans l'ordre lexical et les dernières valeurs gagnent, d'où `99-`. Si `timedatectl` affiche `NTP service: inactive` et une horloge non synchronisée, installe `systemd-timesyncd`.</Deep>
+
+<Note>Selon la version de l'image, OVH active ou non `manage_etc_hosts: true`. Regarde ce qu'il en est avec `grep -rn 'hostname\|etc_hosts' /etc/cloud/cloud.cfg /etc/cloud/cloud.cfg.d/`, et vérifie après le prochain redémarrage que `hostname` affiche toujours <V name="SERVER_NAME" />.</Note>
+
+## Ton propre utilisateur
+
+Crée <V name="USERNAME" /> (`adduser` demande le mot de passe deux fois : tape celui rangé dans ton gestionnaire de mots de passe), mets-le dans `sudo` et `sshusers`, et donne-lui la clé avec laquelle `debian` se connecte :
+
+```bash
+sudo adduser --gecos "" ${USERNAME}
+sudo groupadd -f sshusers
+sudo usermod -aG sudo,sshusers ${USERNAME}
+sudo install -d -m 700 -o ${USERNAME} -g ${USERNAME} /home/${USERNAME}/.ssh
+sudo install -m 600 -o ${USERNAME} -g ${USERNAME} /home/debian/.ssh/authorized_keys /home/${USERNAME}/.ssh/authorized_keys
+```
+
+<Guided>`debian` est un compte dont tout le monde sait qu'il existe sur les serveurs OVH, avec un sudo qui ne demande jamais rien. Ton compte a sudo **avec mot de passe** : une clé volée seule donne un shell, pas root. Le groupe `sshusers` devient, à l'étape suivante, la liste de qui a le droit d'entrer en SSH.</Guided>
+
+<Deep>`install` crée le répertoire et copie le fichier avec propriétaire et droits réglés d'un coup ; SSH ignore en silence un `authorized_keys` modifiable par d'autres, et de mauvais droits sont le classique « ma clé ne marche pas ». `AllowGroups sshusers` est une liste blanche : les comptes créés plus tard par des paquets, ou par toi, ne peuvent pas entrer en SSH tant que tu ne les ajoutes pas au groupe (la page de déploiement y ajoute <V name="DEPLOY_USER" />). Sur Debian 13, `adduser` peut signaler que `--gecos` est déprécié au profit de `--comment` ; les deux marchent, et `--gecos` marche aussi sur Debian 12.</Deep>
+
+Depuis ton portable, dans un second terminal, connecte-toi avec le nouvel utilisateur (encore sur le port 22) et lis ses groupes :
+
+<Check cmd="ssh ${USERNAME}@${SERVER_IP} 'id -nG | grep -qw sudo && id -nG | grep -qw sshusers && echo groups OK'" expect="groups OK" />
+
+## Durcir SSH
+
+Crée le fichier complémentaire avec `sudo nano /etc/ssh/sshd_config.d/00-hardening.conf` :
+
+<Annotated>
+
+```ini title="/etc/ssh/sshd_config.d/00-hardening.conf"
+Port ${SSH_PORT}                       # (1)
+PermitRootLogin no                     # (2)
+PasswordAuthentication no              # (3)
+KbdInteractiveAuthentication no        # (4)
+AllowGroups sshusers                   # (5)
+```
+
+1. Quitter le 22 ne rend pas SSH plus solide, mais ça supprime presque toutes les tentatives automatisées, ce qui garde les journaux lisibles.
+2. Root ne peut pas se connecter, même avec une clé. On atteint root par `sudo`, qui demande ton mot de passe et journalise la commande.
+3. Clés uniquement. Un mot de passe se devine ; une clé Ed25519, non.
+4. Ferme l'autre porte des mots de passe : keyboard-interactive, c'est ce que PAM utilise pour demander un mot de passe même avec `PasswordAuthentication no`.
+5. Seuls les membres de `sshusers` entrent. `debian` n'en fait pas partie : à partir du redémarrage, il ne peut plus ouvrir de session.
+
+</Annotated>
+
+<Guided>Le nom commence par `00-` exprès. Pour chaque réglage, sshd garde **la première valeur qu'il lit**, et il lit les fichiers complémentaires dans l'ordre alphabétique, avant le fichier principal. Le cloud-init d'OVH peut laisser un `50-cloud-init.conf` avec `PasswordAuthentication yes` : un fichier nommé `99-…` perdrait face à lui, `00-…` gagne.</Guided>
+
+<Deep>`Include /etc/ssh/sshd_config.d/*.conf` est en tête du `/etc/ssh/sshd_config` de Debian, avant tout réglage, et le motif se développe dans l'ordre lexical : tout l'ordre tient donc aux noms de fichiers. L'exception, c'est `Port` : chaque ligne `Port` ajoute un port d'écoute au lieu d'être ignorée, donc un `Port 22` égaré ailleurs garderait le 22 ouvert. Ne modifie pas `50-cloud-init.conf` lui-même ; cloud-init peut le réécrire, et un fichier à toi qui gagne est plus solide. C'est aussi pour ça que `sshd -T` est la seule source de vérité : il affiche la configuration avec laquelle sshd tournerait vraiment, une fois tous les fichiers inclus.</Deep>
+
+Teste la syntaxe, puis lis les valeurs effectives. `sshd -t` n'affiche rien quand la syntaxe est bonne ; la seconde commande doit afficher une seule ligne `port`, avec <V name="SSH_PORT" />, `no` pour les trois réglages suivants, et `allowgroups sshusers`.
+
+```bash
+sudo sshd -t
+sudo sshd -T | grep -Ei '^(port|permitrootlogin|passwordauthentication|kbdinteractiveauthentication|allowgroups) '
+```
+
+<Warn>Ne redémarre pas SSH tout de suite. Sans pare-feu configuré et sans test depuis l'extérieur, un redémarrage maintenant peut te couper. L'étape suivante ouvre d'abord le port, puis redémarre.</Warn>
+
+## Pare-feu et bascule
+
+Installe `ufw`, refuse tout en entrée, et ouvre le nouveau port **et** le 22 pour l'instant. `ufw enable` prévient qu'il peut perturber les connexions SSH ; réponds `y`. Le 22 reste ouvert pour que la session dans laquelle tu tapes survive, et pour qu'un retour arrière (supprimer le fichier complémentaire, redémarrer) te ramène sur un port que le pare-feu accepte.
+
+```bash
+sudo apt install -y ufw
+sudo ufw default deny incoming && sudo ufw default allow outgoing
+sudo ufw allow ${SSH_PORT}/tcp && sudo ufw allow 22/tcp
+sudo ufw enable
+```
+
+<Warn>Maintenant, le redémarrage. À partir d'ici, sshd n'écoute que sur <V name="SSH_PORT" /> et `debian` ne peut plus ouvrir de nouvelle session. Garde ce terminal ouvert tant que le test ci-dessous n'a pas répondu `connected`.</Warn>
+
+```bash
+sudo systemctl restart ssh
+```
+
+Dans le terminal de ton portable, connecte-toi sur le nouveau port. ssh redemande de confirmer la clé d'hôte : c'est la même clé, rangée sous un nouveau nom (`[IP]:port`), donc réponds `yes`.
+
+<Check cmd="ssh -p ${SSH_PORT} ${USERNAME}@${SERVER_IP} echo connected" expect="connected" />
+
+<Details summary="Si la nouvelle connexion échoue">
+
+Ton premier terminal est toujours connecté : rien n'est perdu. Regarde, dans cet ordre :
+
+- `sudo sshd -T | grep '^port '` : doit donner <V name="SSH_PORT" />.
+- `sudo ss -tlnp | grep sshd` : sshd doit écouter sur <V name="SSH_PORT" />, en IPv4 (`0.0.0.0`) et en IPv6 (`[::]`).
+- `sudo ufw status` : <V name="SSH_PORT" />/tcp doit être en `ALLOW`.
+- `systemctl is-active ssh.socket` : s'il répond `active`, c'est l'unité socket qui tient le port, pas sshd ; lance `sudo systemctl daemon-reload && sudo systemctl restart ssh.socket`. Par défaut Debian utilise `ssh.service` (Ubuntu, le socket) : vérifie avec `systemctl is-enabled ssh.socket ssh.service`.
+- Le **Network Firewall** d'OVH (espace client → ton IP → Network Firewall), si tu l'as activé : il filtre avant que les paquets n'atteignent le VPS ; ajoute une règle pour <V name="SSH_PORT" />.
+- Pour revenir en arrière en dix secondes : `sudo rm /etc/ssh/sshd_config.d/00-hardening.conf && sudo systemctl restart ssh`. Tu es de nouveau sur le port 22, toujours ouvert.
+- Première session perdue elle aussi : connecte-toi sur la **console KVM** en <V name="USERNAME" /> avec ton mot de passe et lance les mêmes commandes.
+
+</Details>
+
+Le nouveau port marche : ferme le 22.
+
+```bash
+sudo ufw delete allow 22/tcp
+```
+
+<Deep>ufw accepte les paquets des connexions établies avant de regarder les règles par port : c'est pour ça que supprimer la règle du 22 ne coupe pas la session dans laquelle tu tapes. Sur Debian 13, ufw pilote la commande `iptables`, qui est la variante nftables (`iptables-nft`) : les règles finissent dans nftables, visibles avec `sudo nft list ruleset`. L'IPv6 est filtré avec les mêmes règles parce que `/etc/default/ufw` contient `IPV6=yes` par défaut ; chaque règle apparaît deux fois dans `ufw status`, dont une avec `(v6)`. Redémarrer `ssh.service` ne ferme pas les sessions ouvertes : l'unité de Debian utilise `KillMode=process`, qui n'arrête que le processus d'écoute.</Deep>
+
+### Le raccourci vps sur ton portable
+
+Sur ton portable, ajoute un alias d'hôte pour que les pages suivantes puissent utiliser `ssh vps`. Si `~/.ssh/config` contient déjà un bloc `Host vps`, modifie celui-là : ssh prend la première correspondance.
+
+```bash
+touch ~/.ssh/config && chmod 600 ~/.ssh/config
+printf '\nHost vps\n  HostName ${SERVER_IP}\n  Port ${SSH_PORT}\n  User ${USERNAME}\n' >> ~/.ssh/config
+ssh vps
+```
+
+## Retirer le compte debian
+
+<Warn>Ne fais ceci que quand les deux sont vrais : `ssh vps` te connecte, et `sudo true` dans cette session accepte ton mot de passe. Après cette étape, la console KVM n'accepte plus que <V name="USERNAME" /> avec ce mot de passe : vérifie qu'il est bien dans ton gestionnaire de mots de passe.</Warn>
+
+Ferme la session `debian` (`exit` dans le premier terminal). Dans la session `ssh vps` :
+
+<When flag="REMOVE_DEBIAN_USER">
+
+```bash
+sudo pkill -KILL -u debian
+sudo userdel -r debian
+sudo rm -f /etc/sudoers.d/90-cloud-init-users
+```
+
+</When>
+
+<When notFlag="REMOVE_DEBIAN_USER">
+
+```bash
+sudo usermod -L -e 1 debian
+sudo rm -f /etc/sudoers.d/90-cloud-init-users
+```
+
+<Guided>`-L` verrouille le mot de passe, `-e 1` fixe l'expiration du compte au 2 janvier 1970 : un compte expiré est refusé partout, clés comprises. Il n'est de toute façon pas dans `sshusers`. Pour annuler : `sudo usermod -U -e '' debian`.</Guided>
+
+</When>
+
+Depuis ton portable, vérifie que `debian` est refusé ; la réponse doit se terminer par `Permission denied (publickey).`
+
+```bash
+ssh -p ${SSH_PORT} -o BatchMode=yes debian@${SERVER_IP} true
+```
+
+<Deep>`userdel -r` supprime aussi le dossier personnel ; il peut signaler que la boîte mail `/var/mail/debian` est introuvable, sans conséquence. On l'utilise plutôt que `deluser --remove-home`, qui a besoin du paquet `perl` complet, absent d'une image minimale. Le fichier sudoers supprimé ici est celui que cloud-init a écrit pour donner à `debian` un sudo sans mot de passe ; sans lui, un `debian` resté ou recréé n'a pas sudo. cloud-init crée son utilisateur par défaut une fois par instance, donc un redémarrage ne le fait pas revenir. Les guides et le support d'OVH supposent que l'utilisateur `debian` existe : lis leurs commandes avec <V name="USERNAME" /> à la place. Si un jour tu perds à la fois SSH et le mot de passe, le **mode rescue** de l'espace client démarre un système à part avec ton disque monté, où tu peux corriger des fichiers ou réinitialiser le mot de passe.</Deep>
+
+<When flag="FAIL2BAN">
+
+## Bannir le brute force
+
+Avec les mots de passe refusés, deviner ne sert à rien, mais les robots frappent quand même. fail2ban lit le journal de SSH et bannit une adresse après trois échecs.
+
+```bash
+sudo apt install -y fail2ban python3-systemd
+sudo tee /etc/fail2ban/jail.d/sshd.local > /dev/null <<'EOF'
+[DEFAULT]
+bantime.increment = true
+
+[sshd]
+enabled = true
+port = ${SSH_PORT}
+backend = systemd
+maxretry = 3
+findtime = 10m
+bantime = 1h
+EOF
+sudo systemctl enable fail2ban && sudo systemctl restart fail2ban
+```
+
+<Check cmd="sudo fail2ban-client status sshd | head -1" expect="Status for the jail: sshd" />
+
+<Guided>Trois échecs en dix minutes depuis une même adresse valent un bannissement d'une heure ; `bantime.increment` allonge chaque nouveau bannissement de la même adresse. `backend = systemd` compte sur Debian 12 et 13 : il n'y a pas de `/var/log/auth.log` par défaut, le journal de SSH vit uniquement dans journald, et avec le réglage par défaut basé sur un fichier la jail peut refuser de démarrer.</Guided>
+
+<Deep>`python3-systemd` est la bibliothèque dont fail2ban se sert pour lire le journal. Pour le voir marcher, refais la connexion `debian` refusée de l'étape précédente, puis `sudo fail2ban-client status sshd` : `Total failed` augmente de un. Pour tester le filtre contre ce qui est déjà dans le journal : `sudo fail2ban-regex systemd-journal sshd`. Sur Debian 13, OpenSSH 10 journalise depuis des processus nommés `sshd-session` ; si `journalctl -u ssh` montre les lignes mais que le test n'en reconnaît aucune, le filtre du journal date d'avant ce changement (point à confirmer avec ce même test après une connexion refusée).</Deep>
+
+<Details summary="Si tu te bannis toi-même">
+
+Trois fautes de frappe depuis ta propre adresse et tu es dehors pour une heure. Pour ne jamais bannir une adresse fixe à la maison, ajoute `ignoreip = 127.0.0.1/8 ::1 TON.ADRESSE.IP` sous `[DEFAULT]` et redémarre fail2ban. Pour te débannir, depuis une autre connexion (partage de connexion du téléphone) ou la console KVM :
+
+```bash
+sudo fail2ban-client set sshd unbanip TON.ADRESSE.IP
+```
+
+</Details>
+
+</When>
+
+## Mises à jour de sécurité automatiques
+
+```bash
+sudo apt install -y unattended-upgrades apt-listchanges
+printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' | sudo tee /etc/apt/apt.conf.d/20auto-upgrades
+```
+
+<When flag="AUTO_REBOOT">
+
+Autorise un redémarrage à <V name="REBOOT_TIME" /> quand une mise à jour en a besoin :
+
+```bash
+sudo tee /etc/apt/apt.conf.d/52unattended-upgrades-local <<'EOF'
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "${REBOOT_TIME}";
+EOF
+```
+
+</When>
+
+<Check cmd="apt-config shell UU APT::Periodic::Unattended-Upgrade" expect="UU='1'" />
+
+<Guided>Chaque jour, apt rafraîchit la liste des paquets et installe ce que Debian publie pour ta version, les correctifs de sécurité en premier. <When flag="AUTO_REBOOT">Un nouveau noyau ne prend effet qu'après un redémarrage ; avec l'option activée, le serveur le fait à <V name="REBOOT_TIME" /> au lieu de faire tourner l'ancien pendant des semaines.</When><When notFlag="AUTO_REBOOT">Un nouveau noyau ne prend effet qu'après un redémarrage, que tu fais désormais à la main : `/var/run/reboot-required` existe quand il y en a un en attente.</When></Guided>
+
+<Deep>`20auto-upgrades` active la tâche quotidienne ; c'est le fichier qu'écrit `sudo dpkg-reconfigure -plow unattended-upgrades`. Ce qui est installé se règle dans `/etc/apt/apt.conf.d/50unattended-upgrades` : sur Debian, l'archive de sécurité et les versions intermédiaires de ta version stable. Les dépôts tiers (celui de Caddy, dans une page suivante) n'en font pas partie tant que tu n'ajoutes pas leur origine. La tâche part de `apt-daily-upgrade.timer`, vers 06:00 plus un délai aléatoire ; <When flag="AUTO_REBOOT">le redémarrage attend ensuite le prochain <V name="REBOOT_TIME" />. </When>Les journaux sont dans `/var/log/unattended-upgrades/` ; un essai à blanc montre ce qu'elle ferait : `sudo unattended-upgrade --dry-run --debug`. Les services qui utilisent encore une ancienne bibliothèque après une mise à jour continuent d'exécuter l'ancien code jusqu'à leur redémarrage ; `needrestart` (`sudo apt install needrestart`) les liste après chaque mise à jour, et `sudo needrestart -r l` à la demande.</Deep>
+
+## Vérifier l'IPv6
+
+La page suivante publie l'adresse IPv6 dans le DNS ; une adresse morte envoie les visiteurs IPv6 dans des délais d'attente. Sur le serveur, l'adresse globale doit être <V name="SERVER_IPV6" /> et doit atteindre internet :
+
+```bash
+ip -6 addr show scope global
+ping -6 -c 3 2001:4860:4860::8888
+```
+
+<Note>Sur les images Debian récentes, OVH configure l'IPv6 par défaut. Si l'adresse manque, suis le guide OVH « Configurer l'IPv6 sur un VPS » sur docs.ovhcloud.com : il ajoute un fichier netplan, `/etc/netplan/51-cloud-init-ipv6.yaml`.</Note>
+
+## Faire un snapshot de l'état propre
+
+<Warn>Le snapshot est une option payante : à partir d'environ 0,36 € TTC par mois et par VPS. Vérifie le prix actuel sur ovhcloud.com/fr/vps avant de la commander.</Warn>
+
+Dans l'espace client OVH, ouvre ton VPS : sur son onglet d'accueil, l'option **Snapshot** propose de la commander ; une fois active, prends un snapshot au même endroit. Sans l'option, tu as quand même la sauvegarde automatique incluse (un jour de rétention). Les libellés des menus bougent : le guide OVH « Utiliser les snapshots sur un VPS » sur docs.ovhcloud.com donne le chemin actuel.
+
+<Guided>C'est le serveur à son meilleur : à jour, verrouillé, rien d'autre d'installé. Si une page suivante tourne mal, restaurer cet état prend quelques minutes, là où le reconstruire demande de refaire toute cette page. Prends un nouveau snapshot avant tout changement risqué ; il n'y en a qu'un à la fois, et le nouveau remplace l'ancien.</Guided>
+
+## Terminé
+
+| Quoi | Avant | Après cette page |
+|---|---|---|
+| Qui se connecte | `debian`, sudo sans mot de passe | <V name="USERNAME" />, clé uniquement, sudo avec mot de passe |
+| Port SSH | 22 | <V name="SSH_PORT" /> |
+| Root, mots de passe | root coupé, mots de passe peut-être actifs (cloud-init) | refusés tous les deux par ton propre fichier |
+| Trafic entrant | tout | <V name="SSH_PORT" />/tcp seulement |
+| Brute force | essais illimités | <When flag="FAIL2BAN">3 essais, puis banni</When><When notFlag="FAIL2BAN">mots de passe refusés de toute façon</When> |
+| Mises à jour de sécurité | à la main | quotidiennes, automatiques<When flag="AUTO_REBOOT">, redémarrage à <V name="REBOOT_TIME" /></When> |
+
+Désormais, tu te connectes avec `ssh vps`. Page suivante : **Pointer le domaine vers le serveur (DNS Infomaniak)**. Elle publie <V name="SERVER_IP" /> et <V name="SERVER_IPV6" /> dans la zone DNS Infomaniak de <V name="DOMAIN" />, pour que le nom mène à cette machine avant que Caddy ne demande un certificat.

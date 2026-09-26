@@ -1,0 +1,95 @@
+# Inherits from ../series.yaml: SERVER_IP, SERVER_IPV6, USERNAME, SSH_PORT, DEPLOY_USER, DOMAIN, WEB_ROOT, ADMIN_EMAIL, LOCAL_DIR.
+
+title:
+  en: Secure the server in the first hour
+  fr: Sécuriser le serveur dans la première heure
+summary:
+  en: >-
+    From OVH's default `debian` login to your own admin account with a key and a sudo password,
+    SSH on its own port with passwords and root refused, a firewall, bans on brute force, and
+    security updates that install themselves. Every lock is tested before the old door closes.
+  fr: >-
+    Du compte `debian` livré par OVH à ton propre compte admin avec une clé et un mot de passe
+    sudo, SSH sur son propre port sans mot de passe ni root, un pare-feu, le bannissement du brute
+    force, et des mises à jour de sécurité qui s'installent seules. Chaque verrou est testé avant
+    de fermer l'ancienne porte.
+difficulty: intermediate
+tags: [ssh, ufw, fail2ban, unattended-upgrades, debian, ovh, security]
+authors: [thudal]
+created: 2026-09-26
+minutes: 30
+validated: Debian 13 (trixie) on OVHcloud VPS · same on Debian 12
+status: draft             # not yet run end to end by its author
+
+groups:
+  - id: upkeep
+    label: { en: Clock and updates, fr: Horloge et mises à jour }
+    desc: { en: Time zone and when the server may reboot on its own., fr: Fuseau horaire et heure à laquelle le serveur peut redémarrer seul. }
+
+vars:
+  - key: USER_PASSWORD
+    kind: secret
+    group: server
+    default: ""
+    label: { en: Sudo password, fr: Mot de passe sudo }
+    hint:
+      en: The password of your admin user, asked by sudo and by the OVH KVM console. Generate it and store it in your password manager.
+      fr: Le mot de passe de ton utilisateur admin, demandé par sudo et par la console KVM d'OVH. Génère-le et range-le dans ton gestionnaire de mots de passe.
+    impact:
+      en: Never used for SSH (keys only). Once the debian account is gone, it is the only way to use sudo and to log in on the KVM console. Letters and digits only save you from keyboard-layout surprises on the console.
+      fr: "Jamais utilisé pour SSH (clés uniquement). Une fois le compte debian retiré, c'est le seul moyen d'utiliser sudo et de te connecter sur la console KVM. Lettres et chiffres uniquement : ça t'évite les surprises de disposition de clavier sur la console."
+  - key: SERVER_NAME
+    kind: hostname
+    group: server
+    default: thudal
+    label: { en: Server name, fr: Nom du serveur }
+    hint:
+      en: The short host name of the VPS (no dots), shown in your prompt and in logs. Replaces OVH's vps-xxxxxxxx name.
+      fr: Le nom court du VPS (sans point), affiché dans ton invite et dans les journaux. Remplace le nom vps-xxxxxxxx d'OVH.
+    impact:
+      en: Cosmetic for the network, but it goes into /etc/hosts; if the two disagree, every sudo prints "unable to resolve host".
+      fr: Cosmétique pour le réseau, mais il va dans /etc/hosts ; si les deux divergent, chaque sudo affiche « unable to resolve host ».
+  - key: TIMEZONE
+    kind: text
+    group: upkeep
+    default: Europe/Paris
+    label: { en: Time zone, fr: Fuseau horaire }
+    hint:
+      en: An IANA zone name, as listed by timedatectl list-timezones.
+      fr: Un nom de zone IANA, tel que listé par timedatectl list-timezones.
+    impact:
+      en: Sets the clock shown in logs and the meaning of the automatic reboot time. A name that does not exist is refused by timedatectl.
+      fr: Règle l'heure affichée dans les journaux et le sens de l'heure de redémarrage automatique. Un nom inexistant est refusé par timedatectl.
+  - key: REBOOT_TIME
+    kind: text
+    group: upkeep
+    default: "04:30"
+    when: { flag: AUTO_REBOOT }
+    label: { en: Automatic reboot time, fr: Heure de redémarrage automatique }
+    hint:
+      en: HH:MM in the server's time zone. The server reboots at this time only when an installed update requires it.
+      fr: HH:MM dans le fuseau du serveur. Le serveur redémarre à cette heure uniquement quand une mise à jour installée l'exige.
+    impact:
+      en: The site is down for about a minute during the reboot. Pick the hour with the fewest visitors.
+      fr: Le site est coupé environ une minute pendant le redémarrage. Choisis l'heure où il y a le moins de visiteurs.
+
+choices:
+  - key: FAIL2BAN
+    type: boolean
+    label: { en: Ban brute-force attempts (fail2ban), fr: Bannir le brute force (fail2ban) }
+    hint: { en: Recommended on any server reachable from the internet., fr: Recommandé sur tout serveur joignable depuis internet. }
+    default: true
+  - key: AUTO_REBOOT
+    type: boolean
+    label: { en: Reboot automatically after security updates, fr: Redémarrer automatiquement après les mises à jour de sécurité }
+    hint:
+      en: When an update (a new kernel, usually) needs a reboot, the server reboots at the time you choose instead of waiting for you.
+      fr: Quand une mise à jour (un nouveau noyau, en général) exige un redémarrage, le serveur redémarre à l'heure choisie au lieu de t'attendre.
+    default: true
+  - key: REMOVE_DEBIAN_USER
+    type: boolean
+    label: { en: Delete OVH's default debian account, fr: Supprimer le compte debian livré par OVH }
+    hint:
+      en: On, the account and its home are deleted once yours works. Off, the account is locked and kept.
+      fr: Activé, le compte et son dossier sont supprimés une fois le tien fonctionnel. Désactivé, le compte est verrouillé et conservé.
+    default: true

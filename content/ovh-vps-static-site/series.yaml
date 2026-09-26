@@ -1,0 +1,133 @@
+title:
+  en: A static site on an OVH VPS
+  fr: Un site statique sur un VPS OVH
+summary:
+  en: >-
+    From a Next.js project on your laptop to a site served over HTTPS from your own Debian VPS at
+    OVH, with a domain managed at Infomaniak, atomic deploys, backups and monitoring. Eight pages,
+    in the order you do them.
+  fr: >-
+    D'un projet Next.js sur ton portable à un site servi en HTTPS depuis ton propre VPS Debian chez
+    OVH, avec un domaine géré chez Infomaniak, des déploiements atomiques, des sauvegardes et une
+    surveillance. Huit pages, dans l'ordre où tu les fais.
+order:
+  - prepare-the-laptop
+  - order-the-vps
+  - secure-the-server
+  - point-the-domain
+  - serve-with-caddy
+  - deploy-releases
+  - backups-and-monitoring
+  - launch-checklist
+
+groups:
+  - id: server
+    label: { en: Server, fr: Serveur }
+    desc: { en: The VPS and how you reach it., fr: Le VPS et comment tu l'atteins. }
+  - id: site
+    label: { en: Site, fr: Site }
+    desc: { en: The domain and where the files live on the server., fr: Le domaine et l'endroit où vivent les fichiers sur le serveur. }
+  - id: laptop
+    label: { en: Your laptop, fr: Ton portable }
+    desc: { en: Where the code is written and built., fr: Là où le code est écrit et construit. }
+
+vars:
+  - key: SERVER_IP
+    kind: ip
+    group: server
+    default: 203.0.113.10
+    label: { en: Server IPv4, fr: IPv4 du serveur }
+    hint:
+      en: The public IPv4 address of the VPS, shown in the OVH control panel and in the delivery email.
+      fr: L'adresse IPv4 publique du VPS, affichée dans l'espace client OVH et dans l'email de livraison.
+    impact:
+      en: Used by every ssh command, by the DNS A record and by the deploy script. A typo means timeouts everywhere.
+      fr: Utilisée par chaque commande ssh, par l'enregistrement DNS A et par le script de déploiement. Une faute donne des délais d'attente partout.
+  - key: SERVER_IPV6
+    kind: text
+    group: server
+    default: "2001:db8::10"
+    label: { en: Server IPv6, fr: IPv6 du serveur }
+    hint:
+      en: The public IPv6 address of the VPS, in the IP section of the OVH control panel. Without the /prefix.
+      fr: L'adresse IPv6 publique du VPS, dans la section IP de l'espace client OVH. Sans le /préfixe.
+    impact:
+      en: Goes into the DNS AAAA record. A wrong AAAA is worse than none — IPv6 visitors get timeouts and the certificate can fail.
+      fr: Va dans l'enregistrement DNS AAAA. Un AAAA faux est pire que pas d'AAAA — les visiteurs IPv6 tombent en délai d'attente et le certificat peut échouer.
+  - key: USERNAME
+    kind: user
+    group: server
+    default: ttt
+    label: { en: Your admin user, fr: Ton utilisateur admin }
+    hint:
+      en: Your everyday account on the server, with sudo. Lowercase, no spaces.
+      fr: Ton compte de tous les jours sur le serveur, avec sudo. Minuscules, sans espace.
+    impact:
+      en: After hardening, root and the provider's default account can no longer log in. This account is your only way in besides the OVH console.
+      fr: "Après durcissement, root et le compte par défaut de l'hébergeur ne peuvent plus se connecter : ce compte est ta seule porte, en dehors de la console OVH."
+  - key: SSH_PORT
+    kind: port
+    group: server
+    default: "2222"
+    label: { en: SSH port, fr: Port SSH }
+    hint:
+      en: The port SSH listens on after hardening. Anything but 22 removes most automated noise.
+      fr: Le port sur lequel SSH écoute après durcissement. Tout sauf 22 supprime l'essentiel du bruit automatisé.
+    impact:
+      en: Reused by the firewall, fail2ban, your ~/.ssh/config and the deploy script. Open it in the firewall before restarting SSH, or you lock yourself out.
+      fr: Réutilisé par le pare-feu, fail2ban, ton ~/.ssh/config et le script de déploiement. Ouvre-le dans le pare-feu avant de redémarrer SSH, sinon tu te verrouilles dehors.
+  - key: DEPLOY_USER
+    kind: user
+    group: server
+    default: deploy
+    label: { en: Deploy user, fr: Utilisateur de déploiement }
+    hint:
+      en: A second account with no sudo, used only to upload the site. It owns the web root and nothing else.
+      fr: Un second compte sans sudo, qui sert seulement à envoyer le site. Il possède la racine web et rien d'autre.
+    impact:
+      en: It logs in with its own key (~/.ssh/id_ed25519_deploy on your laptop), separate from your admin key. A leaked deploy key can change the site, not the server.
+      fr: "Il se connecte avec sa propre clé (~/.ssh/id_ed25519_deploy sur ton portable), distincte de ta clé admin : une clé de déploiement volée peut changer le site, pas le serveur."
+  - key: DOMAIN
+    kind: domain
+    group: site
+    default: thudal.com
+    label: { en: Domain, fr: Domaine }
+    hint:
+      en: The apex domain the site answers on, without www and without https://.
+      fr: Le domaine racine sur lequel répond le site, sans www et sans https://.
+    impact:
+      en: Used in DNS, in the Caddyfile (which requests the certificate for it) and in every check. www redirects to it.
+      fr: Utilisé dans le DNS, dans le Caddyfile (qui demande le certificat pour lui) et dans chaque vérification. www redirige vers lui.
+  - key: WEB_ROOT
+    kind: path
+    group: site
+    default: /var/www/thudal.com
+    label: { en: Web root, fr: Racine web }
+    hint:
+      en: The directory on the server that holds releases/ and the current symlink.
+      fr: Le répertoire du serveur qui contient releases/ et le lien symbolique current.
+    impact:
+      en: Caddy serves WEB_ROOT/current; the deploy script writes into WEB_ROOT/releases. Both must agree.
+      fr: Caddy sert WEB_ROOT/current ; le script de déploiement écrit dans WEB_ROOT/releases. Les deux doivent être d'accord.
+  - key: ADMIN_EMAIL
+    kind: email
+    group: site
+    default: you@example.com
+    label: { en: Admin email, fr: Email admin }
+    hint:
+      en: An address you read. Let's Encrypt, DMARC reports and the uptime monitor write to it.
+      fr: Une adresse que tu lis. Let's Encrypt, les rapports DMARC et la surveillance de disponibilité y écrivent.
+    impact:
+      en: If nobody reads it, you learn about an expiring certificate or a down site from your visitors.
+      fr: Si personne ne la lit, tu apprends l'expiration d'un certificat ou la panne du site par tes visiteurs.
+  - key: LOCAL_DIR
+    kind: path
+    group: laptop
+    default: ~/Desktop/THUDAL.COM/src
+    label: { en: Project folder, fr: Dossier du projet }
+    hint:
+      en: Where the Next.js project lives on your laptop (the folder with package.json). No spaces in the path.
+      fr: L'emplacement du projet Next.js sur ton portable (le dossier qui contient package.json). Pas d'espace dans le chemin.
+    impact:
+      en: Every local command starts with cd into it. The deploy script is written there.
+      fr: Chaque commande locale commence par un cd dedans. Le script de déploiement y est écrit.

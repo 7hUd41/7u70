@@ -205,6 +205,8 @@ Details that matter:
 - Inside `<Run>`, the script must work with the variables and the choices: branch it with `<When>` blocks around separate fences when the stack differs. It runs unattended, so `set -euo pipefail`, no prompts, no `sudo` password expectations that the intro does not state.
 - Do not put MDX components inside a fence, and do not put `\"` inside a component attribute (use `cmd={"…"}`).
 - Blank line before and after every component, and around fences inside components.
+- A component whose content spans several paragraphs or holds a list must be written as a block: the opening tag alone on its line, a blank line, the content, a blank line, the closing tag alone on its line. `<Guided>One line.</Guided>` is fine; `<Guided>Intro:\n\n1. item</Guided>` does not compile.
+- New pages carry `status: draft` in `tuto.yaml` until their author has run them end to end.
 
 ### Voice
 

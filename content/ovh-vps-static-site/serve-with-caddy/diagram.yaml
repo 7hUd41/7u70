@@ -1,0 +1,184 @@
+# Quick: the visitor, Caddy, the Caddyfile, the current link and Let's Encrypt.
+# Guided: the firewall in front and the placeholder release behind the link.
+# Deep: ports and protocols on Caddy, the systemd unit, the certificate store, the access log (masked or not).
+title: { en: "One web server, one certificate, one link", fr: "Un serveur web, un certificat, un lien" }
+caption:
+  en: "Visitors reach Caddy on 443 (and 80, which only redirects). Caddy gets and renews its certificate from Let's Encrypt on its own, and serves whatever release the current link points at."
+  fr: "Les visiteurs atteignent Caddy sur le 443 (et le 80, qui ne fait que rediriger). Caddy obtient et renouvelle son certificat auprès de Let's Encrypt tout seul, et sert la release sur laquelle pointe le lien current."
+
+groups:
+  - id: server
+    label: { en: "Your VPS", fr: "Ton VPS" }
+    desc:
+      en: "The Debian server secured on page 3. This page adds the web ports, Caddy and the web root."
+      fr: "Le serveur Debian sécurisé en page 3. Cette page ajoute les ports web, Caddy et la racine web."
+
+nodes:
+  - id: visitor
+    kind: user
+    label: { en: "Visitor", fr: "Visiteur" }
+    sub: "https://${DOMAIN}"
+    desc:
+      en: "Anyone opening the site. Whether they type www, http:// or neither, they end up on https://${DOMAIN}."
+      fr: "Quiconque ouvre le site. Qu'il tape www, http:// ou rien, il finit sur https://${DOMAIN}."
+    deep:
+      sub: "browser · DNS A/AAAA → ${SERVER_IP}"
+  - id: letsencrypt
+    kind: cloud
+    label: { en: "Let's Encrypt", fr: "Let's Encrypt" }
+    sub: "ACME"
+    desc:
+      en: "The free certificate authority. It checks that the server really answers for ${DOMAIN}, then signs a certificate. Caddy renews it well before expiry."
+      fr: "L'autorité de certification gratuite. Elle vérifie que le serveur répond vraiment pour ${DOMAIN}, puis signe un certificat. Caddy le renouvelle bien avant l'expiration."
+    deep:
+      sub: "ACME v2 · HTTP-01 on :80 / TLS-ALPN-01 on :443 · fallback ZeroSSL"
+  - id: firewall
+    kind: net
+    label: { en: "Firewall", fr: "Pare-feu" }
+    sub: "80 · 443 · 443/udp"
+    in: server
+    level: guided
+    desc:
+      en: "ufw now also lets in 80/tcp (ACME challenge and redirect), 443/tcp (HTTP/1.1 and HTTP/2) and 443/udp (HTTP/3)."
+      fr: "ufw laisse maintenant aussi passer 80/tcp (défi ACME et redirection), 443/tcp (HTTP/1.1 et HTTP/2) et 443/udp (HTTP/3)."
+    deep:
+      sub: "ufw · allow 80/tcp 443/tcp 443/udp · IPv4 + IPv6"
+  - id: caddy
+    kind: service
+    label: { en: "Caddy", fr: "Caddy" }
+    sub: "HTTPS · HTTP/3"
+    in: server
+    focus: true
+    desc:
+      en: "The web server. Terminates TLS, redirects www and plain HTTP, compresses, adds security and cache headers, and serves files from the web root."
+      fr: "Le serveur web. Termine le TLS, redirige www et le HTTP simple, compresse, ajoute les en-têtes de sécurité et de cache, et sert les fichiers de la racine web."
+    guided:
+      sub: "TLS · www → apex · headers · file_server"
+    deep:
+      sub: ":80 → 308 https · :443 TCP h1/h2 · :443 UDP h3 · user caddy"
+  - id: caddyfile
+    kind: file
+    label: { en: "Caddyfile", fr: "Caddyfile" }
+    sub: "/etc/caddy/Caddyfile"
+    in: server
+    desc:
+      en: "The whole configuration in one file: the email for ACME, the www redirect, the site block with headers, caching and logs."
+      fr: "Toute la configuration dans un fichier : l'email pour ACME, la redirection www, le bloc du site avec en-têtes, cache et logs."
+  - id: current
+    kind: file
+    label: { en: "current", fr: "current" }
+    sub: "${WEB_ROOT}/current"
+    in: server
+    desc:
+      en: "A symbolic link to the live release. Caddy only ever serves this path; moving the link is a deploy."
+      fr: "Un lien symbolique vers la release en ligne. Caddy ne sert jamais que ce chemin ; déplacer le lien, c'est déployer."
+    deep:
+      sub: "symlink → releases/placeholder · resolved per request"
+  - id: placeholder
+    kind: file
+    label: { en: "Placeholder release", fr: "Release d'attente" }
+    sub: "releases/placeholder/"
+    in: server
+    level: guided
+    desc:
+      en: "index.html and 404.html, release zero. Page 6 puts real releases next to it and moves the link."
+      fr: "index.html et 404.html, la release zéro. La page 6 pose les vraies releases à côté et déplace le lien."
+  - id: unit
+    kind: service
+    label: { en: "systemd unit", fr: "Unité systemd" }
+    sub: "caddy.service"
+    in: server
+    level: deep
+    desc:
+      en: "Starts Caddy at boot as the unprivileged user caddy; reload hands it a new Caddyfile without dropping connections."
+      fr: "Démarre Caddy au boot sous l'utilisateur non privilégié caddy ; reload lui passe un nouveau Caddyfile sans couper les connexions."
+    deep:
+      sub: "User=caddy · CAP_NET_BIND_SERVICE · ExecReload=caddy reload"
+  - id: certs
+    kind: store
+    label: { en: "Certificates", fr: "Certificats" }
+    sub: "/var/lib/caddy"
+    in: server
+    level: deep
+    desc:
+      en: "Certificates, private keys and the ACME account, under /var/lib/caddy/.local/share/caddy. Back it up on page 7."
+      fr: "Certificats, clés privées et compte ACME, sous /var/lib/caddy/.local/share/caddy. À sauvegarder en page 7."
+  - id: accesslog
+    kind: file
+    label: { en: "Access log", fr: "Log d'accès" }
+    sub: "/var/log/caddy/access.log"
+    in: server
+    level: deep
+    desc:
+      en: "One JSON line per request, rotated at 10 MiB, ten gzipped files kept."
+      fr: "Une ligne JSON par requête, rotation à 10 Mio, dix fichiers gzip gardés."
+
+edges:
+  - from: visitor
+    to: caddy
+    label: "HTTPS"
+    max: quick
+    desc: { en: "The visitor's browser talks HTTPS to Caddy, over HTTP/2 or HTTP/3.", fr: "Le navigateur du visiteur parle HTTPS avec Caddy, en HTTP/2 ou HTTP/3." }
+  - from: visitor
+    to: firewall
+    label: "HTTPS · 443"
+    level: guided
+    deep: { label: "TCP 80 · TCP 443 (h1/h2) · UDP 443 (h3/QUIC)" }
+    desc: { en: "Web traffic enters through the three ports opened on this page.", fr: "Le trafic web entre par les trois ports ouverts sur cette page." }
+  - from: firewall
+    to: caddy
+    level: guided
+    desc: { en: "Only the web ports and your SSH port get through.", fr: "Seuls les ports web et ton port SSH passent." }
+  - from: caddy
+    to: visitor
+    label: "www → 301 → apex"
+    dashed: true
+    deep: { label: "www → 301 · http → 308 · Location: https://${DOMAIN}/" }
+    desc: { en: "www.${DOMAIN} and plain HTTP answer with a redirect to https://${DOMAIN}, path kept.", fr: "www.${DOMAIN} et le HTTP simple répondent par une redirection vers https://${DOMAIN}, chemin conservé." }
+  - from: caddy
+    to: current
+    label: "serves"
+    deep: { label: "file_server · root * ${WEB_ROOT}/current" }
+    desc: { en: "Every request is served from the current link, with dir/index.html for /dir/ and 404.html for missing files.", fr: "Chaque requête est servie depuis le lien current, avec dir/index.html pour /dir/ et 404.html pour les fichiers manquants." }
+  - from: current
+    to: placeholder
+    label: "symlink"
+    level: guided
+    desc: { en: "For now the link points at the placeholder; the next page swaps it to a real release.", fr: "Pour l'instant le lien pointe sur la page d'attente ; la page suivante le bascule vers une vraie release." }
+  - from: caddyfile
+    to: caddy
+    label: "loads"
+    dashed: true
+    desc: { en: "Read at start and on reload. Validate it first: a broken file makes the reload fail and the old config keeps serving.", fr: "Lu au démarrage et au rechargement. Valide-le d'abord : un fichier cassé fait échouer le rechargement et l'ancienne config continue de servir." }
+  - from: caddy
+    to: letsencrypt
+    label: "ACME"
+    dashed: true
+    deep: { label: "ACME order · HTTP-01 / TLS-ALPN-01 · renew at 2/3 of lifetime" }
+    desc: { en: "Caddy asks for a certificate for ${DOMAIN} and www.${DOMAIN}, proves control of the name, and renews on its own.", fr: "Caddy demande un certificat pour ${DOMAIN} et www.${DOMAIN}, prouve qu'il contrôle le nom, et renouvelle tout seul." }
+  - from: unit
+    to: caddy
+    label: "runs"
+    dashed: true
+    level: deep
+    desc: { en: "systemd starts Caddy as user caddy and restarts it at boot.", fr: "systemd lance Caddy sous l'utilisateur caddy et le redémarre au boot." }
+  - from: caddy
+    to: certs
+    label: "stores"
+    dashed: true
+    level: deep
+    desc: { en: "Certificates and keys are written here and reused across restarts.", fr: "Certificats et clés sont écrits ici et réutilisés d'un redémarrage à l'autre." }
+  - from: caddy
+    to: accesslog
+    label: "IPs masked /16 · /32"
+    dashed: true
+    level: deep
+    when: { flag: ANON_LOGS }
+    desc: { en: "Visitor addresses are truncated before being written: IPv4 to /16, IPv6 to /32.", fr: "Les adresses des visiteurs sont tronquées avant d'être écrites : IPv4 en /16, IPv6 en /32." }
+  - from: caddy
+    to: accesslog
+    label: "full IPs"
+    dashed: true
+    level: deep
+    when: { notFlag: ANON_LOGS }
+    desc: { en: "Each line keeps the visitor's complete IP address.", fr: "Chaque ligne garde l'adresse IP complète du visiteur." }

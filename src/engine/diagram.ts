@@ -231,11 +231,29 @@ function layoutOnce(fullSpec: DiagramSpec, choices: Choices, level: Level, opts:
   // Solid arrows are structural (left to right); dashed ones are secondary and
   // only place a node that nothing solid reaches. Group members without any
   // arrow join their group's first column.
-  const layerOf = layers(nodes, edges.filter((e) => !e.dashed));
-  const hasSolidPred = new Set(edges.filter((e) => !e.dashed).map((e) => e.to));
+  // Structural arrows: solid ones, in declaration order, minus any that would
+  // close a cycle (a reply going back, e.g. a redirect to the visitor). Those
+  // are drawn but do not place anything, so the first-declared direction wins.
+  const structural: { from: string; to: string }[] = [];
+  const reaches = (a: string, b: string): boolean => {
+    const seen = new Set<string>([a]);
+    const stack = [a];
+    while (stack.length) {
+      const x = stack.pop()!;
+      if (x === b) return true;
+      for (const e of structural) if (e.from === x && !seen.has(e.to)) { seen.add(e.to); stack.push(e.to); }
+    }
+    return false;
+  };
+  for (const e of edges) if (!e.dashed && !reaches(e.to, e.from)) structural.push(e);
+  const layerOf = layers(nodes, structural);
+  const hasSolidPred = new Set(structural.map((e) => e.to));
   const byIdSpec = new Map(nodes.map((n) => [n.id, n]));
+  const hasSolidSucc = new Set(structural.map((e) => e.from));
   for (const n of nodes) {
-    if (hasSolidPred.has(n.id)) continue;
+    // A node that starts solid arrows is a source: a dashed arrow coming back
+    // to it (a redirect, a reply) must not push it to the right.
+    if (hasSolidPred.has(n.id) || hasSolidSucc.has(n.id)) continue;
     const dashedFrom = edges.filter((e) => e.dashed && e.to === n.id).map((e) => e.from);
     if (dashedFrom.length === 0) continue;
     const far = Math.max(...dashedFrom.map((id) => layerOf.get(id) ?? 0));

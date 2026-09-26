@@ -1,0 +1,178 @@
+# Quick: your laptop, the public testers, the live site, the search engines.
+# Guided: the two files crawlers read, served by the site.
+# Deep: DNS and the IPv6 path, HTTP/3 on UDP 443, and the HSTS preload list when chosen.
+title: { en: "The site, seen from the outside", fr: "Le site, vu de l'extérieur" }
+caption:
+  en: "Your laptop and a few public testers check https://${DOMAIN} the way a visitor reaches it: redirects, certificate, headers, IPv6, speed. Search engines read robots.txt and sitemap.xml from the same server."
+  fr: "Ton portable et quelques testeurs publics vérifient https://${DOMAIN} comme un visiteur l'atteint : redirections, certificat, en-têtes, IPv6, vitesse. Les moteurs de recherche lisent robots.txt et sitemap.xml sur le même serveur."
+
+groups:
+  - id: vps
+    label: { en: "Your VPS at OVH", fr: "Ton VPS chez OVH" }
+    desc:
+      en: "The server set up by pages 3 to 7. Nothing here changes on this page, except the Caddyfile header if you go for HSTS preload."
+      fr: "Le serveur mis en place par les pages 3 à 7. Rien n'y change sur cette page, sauf l'en-tête du Caddyfile si tu optes pour le préchargement HSTS."
+
+nodes:
+  - id: laptop
+    kind: client
+    label: { en: "Your laptop", fr: "Ton portable" }
+    sub: "curl · dig · openssl"
+    desc:
+      en: "Runs the launch script: builds, deploys, then checks status codes, redirects, certificate, headers and DNS, printing PASS or FAIL per line."
+      fr: "Lance le script de lancement : construit, déploie, puis vérifie codes de statut, redirections, certificat, en-têtes et DNS, avec PASS ou FAIL par ligne."
+    deep:
+      sub: "${LOCAL_DIR} · npm run build · deploy.sh · curl / dig / openssl"
+  - id: testers
+    kind: cloud
+    label: { en: "Public testers", fr: "Testeurs publics" }
+    sub: "SSL Labs · securityheaders · Lighthouse"
+    desc:
+      en: "Services that test the site from their own servers: TLS grade, security headers, performance. They see what a stranger sees, without your laptop's caches."
+      fr: "Des services qui testent le site depuis leurs propres serveurs : note TLS, en-têtes de sécurité, performance. Ils voient ce que voit un inconnu, sans les caches de ton portable."
+    deep:
+      sub: "SSL Labs · securityheaders / HTTP Observatory · PageSpeed · http3check · ipv6-test"
+  - id: dns
+    kind: net
+    label: { en: "DNS at Infomaniak", fr: "DNS chez Infomaniak" }
+    sub: "A · AAAA · TXT"
+    level: deep
+    desc:
+      en: "The zone from page 4. The checks read A and AAAA to find the server, TXT for DMARC and SPF, and Google's verification record."
+      fr: "La zone de la page 4. Les vérifications lisent A et AAAA pour trouver le serveur, TXT pour DMARC et SPF, et l'enregistrement de validation de Google."
+    deep:
+      sub: "A ${SERVER_IP} · AAAA ${SERVER_IPV6} · TXT _dmarc"
+  - id: site
+    kind: server
+    label: { en: "https://${DOMAIN}", fr: "https://${DOMAIN}" }
+    sub: "Caddy · static files"
+    in: vps
+    focus: true
+    desc:
+      en: "The live site: Caddy serving the current release. Everything on this page is checked against it from outside."
+      fr: "Le site en ligne : Caddy qui sert la release courante. Tout ce que vérifie cette page est testé contre lui, depuis l'extérieur."
+    guided:
+      sub: "Caddy · 308 redirects · 404.html · HSTS"
+    deep:
+      sub: "Caddy · TCP 80 → 308 · TCP 443 (h2) · UDP 443 (h3) · ${WEB_ROOT}/current"
+  - id: robots
+    kind: file
+    label: { en: "robots.txt", fr: "robots.txt" }
+    sub: "from app/robots.ts"
+    in: vps
+    level: guided
+    desc:
+      en: "Tells polite crawlers what they may fetch and where the sitemap is. A request, not access control."
+      fr: "Dit aux robots polis ce qu'ils peuvent récupérer et où est le sitemap. Une demande, pas un contrôle d'accès."
+  - id: sitemap
+    kind: file
+    label: { en: "sitemap.xml", fr: "sitemap.xml" }
+    sub: "from app/sitemap.ts"
+    in: vps
+    level: guided
+    desc:
+      en: "The list of canonical URLs, with trailing slashes. Private /contact/ and /chess/ codes are left out."
+      fr: "La liste des URL canoniques, avec barre finale. Les codes privés de /contact/ et /chess/ en sont exclus."
+  - id: engines
+    kind: cloud
+    label: { en: "Search engines", fr: "Moteurs de recherche" }
+    sub: "Google · Bing"
+    desc:
+      en: "Crawl the site following robots.txt. With indexing on, Search Console and Bing Webmaster Tools receive the sitemap."
+      fr: "Parcourent le site en suivant robots.txt. Avec l'indexation activée, Search Console et Bing Webmaster Tools reçoivent le sitemap."
+    guided:
+      sub: "Search Console · Bing Webmaster Tools"
+  - id: preload
+    kind: store
+    label: { en: "HSTS preload list", fr: "Liste de préchargement HSTS" }
+    sub: "hstspreload.org"
+    level: deep
+    when: { flag: HSTS_PRELOAD }
+    desc:
+      en: "A list compiled into Chromium and reused by other browsers: listed domains are HTTPS-only from the first visit. Getting off it takes months."
+      fr: "Une liste compilée dans Chromium et reprise par les autres navigateurs : les domaines inscrits sont HTTPS seulement dès la première visite. En sortir prend des mois."
+
+edges:
+  - from: laptop
+    to: testers
+    label: "open"
+    desc:
+      en: "You open each tester with your domain in the URL; they run from their own servers."
+      fr: "Tu ouvres chaque testeur avec ton domaine dans l'URL ; ils tournent depuis leurs propres serveurs."
+  - from: testers
+    to: site
+    label: "scan"
+    deep: { label: "TLS handshake · headers · page load · h3 probe" }
+    desc:
+      en: "The testers connect as a stranger would: full TLS handshake, headers, a real page load on a throttled phone profile."
+      fr: "Les testeurs se connectent comme un inconnu : poignée de main TLS complète, en-têtes, vrai chargement de page avec un profil de téléphone bridé."
+  - from: laptop
+    to: site
+    label: "curl · openssl"
+    guided: { label: "http → 308 · www → 308 · 404 · cert" }
+    deep: { label: "TCP 80/443 · IPv4 + IPv6 (curl -6) · SNI ${DOMAIN}" }
+    desc:
+      en: "The launch script's checks: status codes, redirect targets, HSTS header, certificate issuer."
+      fr: "Les vérifications du script de lancement : codes de statut, cibles des redirections, en-tête HSTS, émetteur du certificat."
+  - from: laptop
+    to: dns
+    label: "dig"
+    dashed: true
+    level: deep
+    desc:
+      en: "dig asks for A, AAAA and TXT records; the AAAA must be ${SERVER_IPV6}."
+      fr: "dig demande les enregistrements A, AAAA et TXT ; l'AAAA doit valoir ${SERVER_IPV6}."
+  - from: dns
+    to: site
+    label: "IPv6 path"
+    dashed: true
+    level: deep
+    desc:
+      en: "IPv6 visitors reach the server through the AAAA record. A wrong AAAA means timeouts for them only, which is why it is tested from outside."
+      fr: "Les visiteurs IPv6 atteignent le serveur par l'enregistrement AAAA. Un AAAA faux, c'est des délais d'attente pour eux seuls : d'où le test depuis l'extérieur."
+  - from: engines
+    to: site
+    label: "crawl"
+    max: quick
+    desc:
+      en: "Crawlers fetch robots.txt first, then the sitemap, then the pages."
+      fr: "Les robots récupèrent d'abord robots.txt, puis le sitemap, puis les pages."
+  - from: engines
+    to: robots
+    label: "reads first"
+    level: guided
+    desc:
+      en: "Every polite crawler fetches /robots.txt before anything else and follows its rules."
+      fr: "Tout robot poli récupère /robots.txt avant le reste et suit ses règles."
+  - from: engines
+    to: sitemap
+    label: "reads"
+    level: guided
+    desc:
+      en: "The sitemap tells crawlers which URLs exist, so pages with few links get found too."
+      fr: "Le sitemap dit aux robots quelles URL existent, pour que les pages peu liées soient trouvées aussi."
+  - from: robots
+    to: site
+    label: "served by"
+    dashed: true
+    level: guided
+    desc:
+      en: "Both files are plain files in out/, served by Caddy like any page."
+      fr: "Les deux fichiers sont des fichiers ordinaires dans out/, servis par Caddy comme n'importe quelle page."
+  - from: sitemap
+    to: site
+    label: "served by"
+    dashed: true
+    level: guided
+    desc:
+      en: "Generated at build time from app/sitemap.ts, deployed with the rest of the release."
+      fr: "Généré au build à partir de app/sitemap.ts, déployé avec le reste de la release."
+  - from: site
+    to: preload
+    label: "submitted"
+    dashed: true
+    level: deep
+    when: { flag: HSTS_PRELOAD }
+    desc:
+      en: "Once the header carries includeSubDomains and preload, you submit the domain on hstspreload.org; browsers pick it up in later releases."
+      fr: "Une fois que l'en-tête porte includeSubDomains et preload, tu inscris le domaine sur hstspreload.org ; les navigateurs le prennent dans leurs versions suivantes."

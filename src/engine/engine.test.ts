@@ -371,6 +371,17 @@ describe("diagram layout", () => {
     expect(n("dns").y).toBeGreaterThan(n("you").y);
   });
 
+  it("keeps the first-declared direction when solid arrows form a cycle", () => {
+    const d = DiagramSpec.parse({
+      nodes: ["visitor", "caddy", "site"].map((id) => ({ id, label: { en: id, fr: id } })),
+      edges: [{ from: "visitor", to: "caddy" }, { from: "caddy", to: "visitor" }, { from: "caddy", to: "site" }, { from: "site", to: "visitor", dashed: true }],
+    });
+    const l = layoutDiagram(d, {});
+    const layer = (id: string) => l.nodes.find((n) => n.id === id)!.layer;
+    expect([layer("visitor"), layer("caddy"), layer("site")]).toEqual([0, 1, 2]);
+    expect(l.edges).toHaveLength(4);
+  });
+
   it("rejects an edge to an unknown node", () => {
     expect(() => DiagramSpec.parse({ nodes: [{ id: "a", label: { en: "A", fr: "A" } }], edges: [{ from: "a", to: "zz" }] })).toThrow(/unknown node/);
   });
