@@ -19,6 +19,7 @@ export const seriesUrl = (series: string) => `/${series}`;
 /** The series' section on the catalogue, in the reader's language. */
 export const seriesInCatalogueUrl = (locale: Locale, series: string) => `/${locale}#${series}`;
 export const pageUrl = (series: string, page: string, locale: Locale) => `/${series}/${page}/${locale}`;
+export const sourceUrl = (series: string, page: string, locale: Locale) => `/${series}/${page}/${locale}/source.md`;
 export const validationsUrl = (series: string, page: string, locale: Locale) => `/${series}/${page}/${locale}/validations`;
 
 /** Where the reader last read; the bare article URL lands there. */

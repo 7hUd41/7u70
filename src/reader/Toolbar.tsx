@@ -5,9 +5,10 @@
    engine assemble the file. */
 
 import { useState } from "react";
-import { Check, Copy, FileDown } from "lucide-react";
+import { Check, Copy, Download, FileCode, FileDown } from "lucide-react";
 import { buildInstallScript, fill, joinCommands, type ShellBlock } from "@/engine";
 import { useReader } from "./store";
+import { sourceUrl } from "@/urls";
 import { PrintButton } from "./Print";
 import { CarryButton } from "./Carry";
 import { headingText } from "./Stuck";
@@ -37,7 +38,17 @@ function download(content: string, name: string) {
 }
 
 export function Toolbar({ title, slug }: { title: string; slug: string }) {
-  const { level, vars, t } = useReader();
+  const { level, vars, t, id, locale } = useReader();
+  const [sourceCopied, setSourceCopied] = useState(false);
+  const src = sourceUrl(id.split("/")[0], slug, locale);
+  const copySource = async () => {
+    try {
+      const text = await (await fetch(src)).text();
+      await navigator.clipboard.writeText(text);
+      setSourceCopied(true);
+      setTimeout(() => setSourceCopied(false), 1600);
+    } catch {}
+  };
   const [copied, setCopied] = useState(false);
   const run = level === "run";
 
@@ -90,6 +101,15 @@ export function Toolbar({ title, slug }: { title: string; slug: string }) {
       </button>
       <PrintButton />
       <CarryButton />
+      <span className="ml-auto inline-flex print:hidden">
+        <button type="button" onClick={copySource} title={t.toolbar.sourceTitle} className={btn + " rounded-r-none border-line bg-paper text-ink-3 hover:text-ink"}>
+          {sourceCopied ? <Check className="h-3.5 w-3.5 text-ok" /> : <FileCode className="h-3.5 w-3.5" />}
+          {sourceCopied ? t.toolbar.sourceCopied : t.toolbar.source}
+        </button>
+        <a href={src} download={`${slug}-${locale}.md`} title={t.toolbar.sourceDownload} aria-label={t.toolbar.sourceDownload} className={btn + " rounded-l-none border-l-0 border-line bg-paper text-ink-3 hover:text-ink"}>
+          <Download className="h-3.5 w-3.5" />
+        </a>
+      </span>
     </div>
   );
 }

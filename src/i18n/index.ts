@@ -31,6 +31,10 @@ const en = {
     download: "Download install.sh",
     downloadRun: "Download the script",
     copyRun: "Copy the script",
+    source: "Source .md",
+    sourceTitle: "Copy this page's source files (and the authoring brief) as Markdown, to paste into a conversation with a model",
+    sourceCopied: "Source copied",
+    sourceDownload: "Download the source as .md",
   },
   carry: {
     button: "Share / carry",
@@ -214,6 +218,10 @@ const fr: Dict = {
     download: "Télécharger install.sh",
     downloadRun: "Télécharger le script",
     copyRun: "Copier le script",
+    source: "Source .md",
+    sourceTitle: "Copier les fichiers source de cette page (et le guide de rédaction) en Markdown, à coller dans une conversation avec un modèle",
+    sourceCopied: "Source copiée",
+    sourceDownload: "Télécharger la source en .md",
   },
   carry: {
     button: "Partager / emporter",
