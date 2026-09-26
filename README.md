@@ -59,6 +59,8 @@ URLs: languages live at the article level, since a page is written in one or sev
 
 ### Writing a page
 
+The full, self-contained brief is in [AUTHORING.md](AUTHORING.md) — hand it to a person or a model with a subject and get the page files back.
+
 `tuto.yaml` declares what the reader can change on this page; `series.yaml` declares what the whole series shares (hostnames, install paths, the OS…). A page inherits the series' declarations and may add its own, never redefine one. Prose may only use what is declared; the test suite enforces it. Groups and variables can carry a `when` so they disappear when a choice makes them irrelevant.
 
 ```yaml
